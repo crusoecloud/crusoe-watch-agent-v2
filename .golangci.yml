@@ -1,0 +1,117 @@
+# see https://golangci-lint.run/usage/configuration/
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+  gci:
+    sections:
+      - standard
+      - default
+      - prefix(gitlab.com/crusoeenergy)
+  goimports:
+    local-prefixes: gitlab.com/crusoeenergy
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+    disabled-checks:
+      - commentedOutCode
+  whitespace:
+    multi-if: true
+    multi-func: false
+  gosec:
+    global:
+      audit: enabled
+  gomodguard:
+    allowed:
+      replace:
+        - gitlab.com/crusoeenergy/island/feature-flags.git
+
+linters:
+  disable-all: true
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - cyclop
+    - decorder
+    - dogsled
+    - dupl
+    - durationcheck
+    - errchkjson
+    - errcheck
+    - errorlint
+    - exhaustive
+    - forbidigo
+    - forcetypeassert
+    - funlen
+    - gci
+    - gochecknoinits
+    - gochecknoglobals
+    - gocognit
+    - goconst
+    - gocyclo
+    - godot
+    - err113
+    - gofmt
+    - gofumpt
+    - goheader
+    - goimports
+    - mnd
+    - gomodguard
+    - goprintffuncname
+    - gosec
+    - gosimple
+    - grouper
+    - ineffassign
+    - lll
+    - maintidx
+    - makezero
+    - misspell
+    - nakedret
+    - nestif
+    - nilerr
+    - nilnil
+    - nlreturn
+    - noctx
+    - nolintlint
+    - nonamedreturns
+    - nosprintfhostport
+    - paralleltest
+    - prealloc
+    - predeclared
+    - promlinter
+    - revive
+    - staticcheck
+    - stylecheck
+    - tagliatelle
+    - tenv
+    - testpackage
+    - thelper
+    - tparallel
+    - typecheck
+    - unconvert
+    - unparam
+    - unused
+    - varnamelen
+    - whitespace
+    - wrapcheck
+
+issues:
+  exclude-rules:
+    - linters:
+        - lll
+      source: "^//go:generate "
+
+run:
+  tests: false
+
+service:
+  golangci-lint-version: 1.63.4

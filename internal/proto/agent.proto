@@ -1,0 +1,143 @@
+syntax = "proto3";
+
+package agent;
+
+option go_package = "gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/proto/gen;gen";
+
+import "google/protobuf/timestamp.proto";
+
+// AgentService is the control plane API exposed by cwa-coordinator.
+service AgentService {
+  // Register is called once on first startup to establish the agent's identity.
+  // The coordinator creates the agent record and returns the assigned agent_id.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // HeartbeatStream is a bidirectional stream kept open for the agent's lifetime.
+  // cwa-manager sends a HeartbeatRequest every 30 seconds.
+  // cwa-coordinator sends HeartbeatResponse with pending commands.
+  rpc HeartbeatStream(stream HeartbeatRequest) returns (stream HeartbeatResponse);
+}
+
+// ==================== Registration ====================
+
+message RegisterRequest {
+  string vm_id = 1;
+  string project_id = 2;
+  InstallType install_type = 3;
+  string current_version = 4;
+  repeated string capability_list = 5;
+}
+
+message RegisterResponse {
+  string agent_id = 1;
+}
+
+// ==================== Heartbeat ====================
+
+// HeartbeatRequest is the consolidated health payload sent every 30 seconds.
+message HeartbeatRequest {
+  string agent_id = 1;
+  string current_version = 2;
+  InstallType install_type = 3;
+  repeated string capability_list = 4;
+  AgentStatus agent_status = 5;
+  ComponentsHealth components = 6;
+  UpgradeResult last_upgrade_result = 7;
+  repeated CommandResult command_results = 8;
+}
+
+// HeartbeatResponse carries pending commands from the control plane.
+message HeartbeatResponse {
+  repeated Command commands = 1;
+}
+
+// ==================== Enums ====================
+
+enum InstallType {
+  INSTALL_TYPE_UNSPECIFIED = 0;
+  INSTALL_TYPE_SYSTEMD = 1;
+  INSTALL_TYPE_DOCKER = 2;
+  INSTALL_TYPE_KUBERNETES = 3;
+}
+
+enum AgentStatus {
+  AGENT_STATUS_UNSPECIFIED = 0;
+  AGENT_STATUS_HEALTHY = 1;
+  AGENT_STATUS_DEGRADED = 2;
+  AGENT_STATUS_UPGRADE_IN_PROGRESS = 3;
+}
+
+enum ComponentStatus {
+  COMPONENT_STATUS_UNSPECIFIED = 0;
+  COMPONENT_STATUS_HEALTHY = 1;
+  COMPONENT_STATUS_UNHEALTHY = 2;
+  COMPONENT_STATUS_UNKNOWN = 3;
+}
+
+// ==================== Component Health ====================
+
+message ComponentsHealth {
+  CwaManagerHealth cwa_manager = 1;
+  VectorHealth vector = 2;
+  CwaUpdaterHealth cwa_updater = 3;
+}
+
+message CwaManagerHealth {
+  ComponentStatus status = 1;
+  string version = 2;
+}
+
+message VectorHealth {
+  ComponentStatus status = 1;
+  string version = 2;
+  google.protobuf.Timestamp last_scrape_success = 3;
+  int64 error_count = 4;
+}
+
+message CwaUpdaterHealth {
+  ComponentStatus status = 1;
+  string version = 2;
+  google.protobuf.Timestamp last_seen = 3;
+}
+
+// ==================== Upgrade Result ====================
+
+message UpgradeResult {
+  UpgradeStatus status = 1;
+  string from_version = 2;
+  string to_version = 3;
+  string reason = 4;
+  google.protobuf.Timestamp timestamp = 5;
+}
+
+enum UpgradeStatus {
+  UPGRADE_STATUS_UNSPECIFIED = 0;
+  UPGRADE_STATUS_SUCCEEDED = 1;
+  UPGRADE_STATUS_ROLLED_BACK = 2;
+  UPGRADE_STATUS_FAILED = 3;
+}
+
+// ==================== Commands ====================
+
+// Command is a pending command dispatched by the control plane.
+message Command {
+  string execution_id = 1;
+  string command = 2;
+  map<string, string> parameters = 3;
+}
+
+// CommandResult reports the outcome of a previously dispatched command.
+message CommandResult {
+  string execution_id = 1;
+  string command = 2;
+  CommandResultStatus status = 3;
+  string reason = 4;
+  google.protobuf.Timestamp completed_at = 5;
+}
+
+enum CommandResultStatus {
+  COMMAND_RESULT_STATUS_UNSPECIFIED = 0;
+  COMMAND_RESULT_STATUS_SUCCEEDED = 1;
+  COMMAND_RESULT_STATUS_FAILED = 2;
+  COMMAND_RESULT_STATUS_INTERRUPTED = 3;
+}

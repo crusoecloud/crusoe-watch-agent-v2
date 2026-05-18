@@ -1,0 +1,39 @@
+include:
+  - project: 'crusoeenergy/tools'
+    file: '/templates/go.gitlab-ci.yml'
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+  - template: Security/SAST-IaC.latest.gitlab-ci.yml
+  - template: Security/Dependency-Scanning.gitlab-ci.yml
+
+variables:
+  TAG_PREFIX: ""
+  CI_IMAGE: "registry.gitlab.com/crusoeenergy/tools/go-ci-1.26"
+
+.code-changes: &code-changes
+  changes:
+    - .gitlab-ci.yml
+    - Makefile
+    - cmd/**/*
+    - internal/**/*
+    - go.*
+
+.private-repo-script: &private-repo-script
+  before_script:
+    - go env -w "GOPRIVATE=${CI_SERVER_HOST}"
+    - echo -e "machine ${CI_SERVER_HOST} login gitlab-ci-token password ${CI_JOB_TOKEN}" > ~/.netrc
+
+.cache-setup: &cache-setup
+  - mkdir -p .cache
+  - export GOPATH="$CI_PROJECT_DIR/.cache"
+  - export PATH=$PATH:$GOPATH/bin
+
+code_intelligence:
+  rules:
+    - when: never
+
+pages:
+  extends: .pages
+  image: ${CI_IMAGE}
+  rules:
+    - when: never
