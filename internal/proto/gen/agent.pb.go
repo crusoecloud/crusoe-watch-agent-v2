@@ -283,14 +283,12 @@ func (CommandResultStatus) EnumDescriptor() ([]byte, []int) {
 }
 
 type RegisterRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	VmId           string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
-	ProjectId      string                 `protobuf:"bytes,2,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
-	InstallType    InstallType            `protobuf:"varint,3,opt,name=install_type,json=installType,proto3,enum=agent.InstallType" json:"install_type,omitempty"`
-	CurrentVersion string                 `protobuf:"bytes,4,opt,name=current_version,json=currentVersion,proto3" json:"current_version,omitempty"`
-	CapabilityList []string               `protobuf:"bytes,5,rep,name=capability_list,json=capabilityList,proto3" json:"capability_list,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
+	InstallType   InstallType            `protobuf:"varint,2,opt,name=install_type,json=installType,proto3,enum=agent.InstallType" json:"install_type,omitempty"`
+	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterRequest) Reset() {
@@ -330,13 +328,6 @@ func (x *RegisterRequest) GetVmId() string {
 	return ""
 }
 
-func (x *RegisterRequest) GetProjectId() string {
-	if x != nil {
-		return x.ProjectId
-	}
-	return ""
-}
-
 func (x *RegisterRequest) GetInstallType() InstallType {
 	if x != nil {
 		return x.InstallType
@@ -344,18 +335,11 @@ func (x *RegisterRequest) GetInstallType() InstallType {
 	return InstallType_INSTALL_TYPE_UNSPECIFIED
 }
 
-func (x *RegisterRequest) GetCurrentVersion() string {
+func (x *RegisterRequest) GetVersion() string {
 	if x != nil {
-		return x.CurrentVersion
+		return x.Version
 	}
 	return ""
-}
-
-func (x *RegisterRequest) GetCapabilityList() []string {
-	if x != nil {
-		return x.CapabilityList
-	}
-	return nil
 }
 
 type RegisterResponse struct {
@@ -406,13 +390,12 @@ func (x *RegisterResponse) GetAgentId() string {
 type HeartbeatRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	AgentId           string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	CurrentVersion    string                 `protobuf:"bytes,2,opt,name=current_version,json=currentVersion,proto3" json:"current_version,omitempty"`
-	InstallType       InstallType            `protobuf:"varint,3,opt,name=install_type,json=installType,proto3,enum=agent.InstallType" json:"install_type,omitempty"`
-	CapabilityList    []string               `protobuf:"bytes,4,rep,name=capability_list,json=capabilityList,proto3" json:"capability_list,omitempty"`
-	AgentStatus       AgentStatus            `protobuf:"varint,5,opt,name=agent_status,json=agentStatus,proto3,enum=agent.AgentStatus" json:"agent_status,omitempty"`
-	Components        *ComponentsHealth      `protobuf:"bytes,6,opt,name=components,proto3" json:"components,omitempty"`
-	LastUpgradeResult *UpgradeResult         `protobuf:"bytes,7,opt,name=last_upgrade_result,json=lastUpgradeResult,proto3" json:"last_upgrade_result,omitempty"`
-	CommandResults    []*CommandResult       `protobuf:"bytes,8,rep,name=command_results,json=commandResults,proto3" json:"command_results,omitempty"`
+	InstallType       InstallType            `protobuf:"varint,2,opt,name=install_type,json=installType,proto3,enum=agent.InstallType" json:"install_type,omitempty"`
+	CapabilityList    []string               `protobuf:"bytes,3,rep,name=capability_list,json=capabilityList,proto3" json:"capability_list,omitempty"`
+	AgentStatus       AgentStatus            `protobuf:"varint,4,opt,name=agent_status,json=agentStatus,proto3,enum=agent.AgentStatus" json:"agent_status,omitempty"`
+	Components        *ComponentsHealth      `protobuf:"bytes,5,opt,name=components,proto3" json:"components,omitempty"`
+	LastUpgradeResult *UpgradeResult         `protobuf:"bytes,6,opt,name=last_upgrade_result,json=lastUpgradeResult,proto3" json:"last_upgrade_result,omitempty"`
+	CommandResults    []*CommandResult       `protobuf:"bytes,7,rep,name=command_results,json=commandResults,proto3" json:"command_results,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -450,13 +433,6 @@ func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
 func (x *HeartbeatRequest) GetAgentId() string {
 	if x != nil {
 		return x.AgentId
-	}
-	return ""
-}
-
-func (x *HeartbeatRequest) GetCurrentVersion() string {
-	if x != nil {
-		return x.CurrentVersion
 	}
 	return ""
 }
@@ -1006,27 +982,23 @@ var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
 	"\n" +
-	"\vagent.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\"\xce\x01\n" +
+	"\vagent.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\"w\n" +
 	"\x0fRegisterRequest\x12\x13\n" +
-	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x1d\n" +
-	"\n" +
-	"project_id\x18\x02 \x01(\tR\tprojectId\x125\n" +
-	"\finstall_type\x18\x03 \x01(\x0e2\x12.agent.InstallTypeR\vinstallType\x12'\n" +
-	"\x0fcurrent_version\x18\x04 \x01(\tR\x0ecurrentVersion\x12'\n" +
-	"\x0fcapability_list\x18\x05 \x03(\tR\x0ecapabilityList\"-\n" +
+	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x125\n" +
+	"\finstall_type\x18\x02 \x01(\x0e2\x12.agent.InstallTypeR\vinstallType\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\"-\n" +
 	"\x10RegisterResponse\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\xab\x03\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\x82\x03\n" +
 	"\x10HeartbeatRequest\x12\x19\n" +
-	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12'\n" +
-	"\x0fcurrent_version\x18\x02 \x01(\tR\x0ecurrentVersion\x125\n" +
-	"\finstall_type\x18\x03 \x01(\x0e2\x12.agent.InstallTypeR\vinstallType\x12'\n" +
-	"\x0fcapability_list\x18\x04 \x03(\tR\x0ecapabilityList\x125\n" +
-	"\fagent_status\x18\x05 \x01(\x0e2\x12.agent.AgentStatusR\vagentStatus\x127\n" +
+	"\bagent_id\x18\x01 \x01(\tR\aagentId\x125\n" +
+	"\finstall_type\x18\x02 \x01(\x0e2\x12.agent.InstallTypeR\vinstallType\x12'\n" +
+	"\x0fcapability_list\x18\x03 \x03(\tR\x0ecapabilityList\x125\n" +
+	"\fagent_status\x18\x04 \x01(\x0e2\x12.agent.AgentStatusR\vagentStatus\x127\n" +
 	"\n" +
-	"components\x18\x06 \x01(\v2\x17.agent.ComponentsHealthR\n" +
+	"components\x18\x05 \x01(\v2\x17.agent.ComponentsHealthR\n" +
 	"components\x12D\n" +
-	"\x13last_upgrade_result\x18\a \x01(\v2\x14.agent.UpgradeResultR\x11lastUpgradeResult\x12=\n" +
-	"\x0fcommand_results\x18\b \x03(\v2\x14.agent.CommandResultR\x0ecommandResults\"?\n" +
+	"\x13last_upgrade_result\x18\x06 \x01(\v2\x14.agent.UpgradeResultR\x11lastUpgradeResult\x12=\n" +
+	"\x0fcommand_results\x18\a \x03(\v2\x14.agent.CommandResultR\x0ecommandResults\"?\n" +
 	"\x11HeartbeatResponse\x12*\n" +
 	"\bcommands\x18\x01 \x03(\v2\x0e.agent.CommandR\bcommands\"\xb3\x01\n" +
 	"\x10ComponentsHealth\x128\n" +

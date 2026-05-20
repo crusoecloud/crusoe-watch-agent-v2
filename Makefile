@@ -23,6 +23,7 @@ build-mock-coordinator:
 .PHONY: cross
 cross:
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ${BUILDDIR}/cwa-manager ${GO_LDFLAGS} ./cmd/cwa-manager
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ${BUILDDIR}/mock-coordinator ./cmd/mock-coordinator
 
 .PHONY: test
 test:

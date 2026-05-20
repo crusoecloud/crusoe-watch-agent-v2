@@ -22,10 +22,8 @@ service AgentService {
 
 message RegisterRequest {
   string vm_id = 1;
-  string project_id = 2;
-  InstallType install_type = 3;
-  string current_version = 4;
-  repeated string capability_list = 5;
+  InstallType install_type = 2;
+  string version = 3;
 }
 
 message RegisterResponse {
@@ -37,13 +35,12 @@ message RegisterResponse {
 // HeartbeatRequest is the consolidated health payload sent every 30 seconds.
 message HeartbeatRequest {
   string agent_id = 1;
-  string current_version = 2;
-  InstallType install_type = 3;
-  repeated string capability_list = 4;
-  AgentStatus agent_status = 5;
-  ComponentsHealth components = 6;
-  UpgradeResult last_upgrade_result = 7;
-  repeated CommandResult command_results = 8;
+  InstallType install_type = 2;
+  repeated string capability_list = 3;
+  AgentStatus agent_status = 4;
+  ComponentsHealth components = 5;
+  UpgradeResult last_upgrade_result = 6;
+  repeated CommandResult command_results = 7;
 }
 
 // HeartbeatResponse carries pending commands from the control plane.
