@@ -26,7 +26,7 @@ const (
 	agentIDPath = "/etc/crusoe/.agent-id"
 
 	// Install mode file written by the VM installer script.
-	installModeFile = "/etc/crusoe/secrets/.install-mode"
+	installModeFile = "/etc/crusoe/cwa/.install-mode"
 
 	// Environment variables.
 	envK8sServiceHost = "KUBERNETES_SERVICE_HOST"

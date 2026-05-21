@@ -38,7 +38,6 @@ func main() {
 
 func run() error {
 	coordAddr := flag.String("coordinator", defaultCoordinatorAddr, "cwa-coordinator gRPC address")
-	// TODO: Read GPU type and CME from installer config file instead of flags.
 	gpuFlag := flag.String("gpu", "none", "GPU type for Vector config: none, nvidia, amd")
 	enableCME := flag.Bool("cme", false, "include Crusoe Metrics Exporter in Vector config")
 	dumpVectorCfg := flag.Bool("dump-vector-config", false, "print generated Vector config to stdout and exit")
