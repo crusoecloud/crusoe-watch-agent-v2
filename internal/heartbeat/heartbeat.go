@@ -48,9 +48,10 @@ func NewLoop(id *identity.Identity, hc *health.Collector, conn grpc.ClientConnIn
 // Register calls the Register RPC to obtain an agent_id.
 func (l *Loop) Register(ctx context.Context) (string, error) {
 	resp, err := l.client.Register(ctx, &pb.RegisterRequest{
-		VmId:        l.identity.VMID,
-		InstallType: l.identity.InstallType,
-		Version:     version.Version,
+		VmId:           l.identity.VMID,
+		InstallType:    l.identity.InstallType,
+		Version:        version.Version,
+		CapabilityList: []string{"heartbeat"}, // TODO: dynamic CapabilityList
 	})
 	if err != nil {
 		return "", fmt.Errorf("register RPC: %w", err)
@@ -62,12 +63,16 @@ func (l *Loop) Register(ctx context.Context) (string, error) {
 // Run opens the HeartbeatStream and sends heartbeats every 30 seconds.
 // It blocks until ctx is cancelled or the stream errors out.
 func (l *Loop) Run(ctx context.Context) error {
-	stream, err := l.client.HeartbeatStream(ctx)
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	defer streamCancel()
+
+	stream, err := l.client.HeartbeatStream(streamCtx)
 	if err != nil {
 		return fmt.Errorf("opening heartbeat stream: %w", err)
 	}
 
 	// Receive goroutine: reads commands from coordinator.
+	// streamCancel ensures this goroutine exits when Run returns.
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -114,12 +119,13 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.AgentService_Heartbe
 	components := l.health.Collect(ctx)
 
 	req := &pb.HeartbeatRequest{
-		AgentId:        l.identity.AgentID,
-		InstallType:    l.identity.InstallType,
-		CapabilityList: []string{"heartbeat"}, // TODO: dynamic CapabilityList
-		AgentStatus:    deriveAgentStatus(components),
-		Components:     components,
-		CommandResults: results,
+		AgentId:           l.identity.AgentID,
+		InstallType:       l.identity.InstallType,
+		CapabilityList:    []string{"heartbeat"}, // TODO: dynamic CapabilityList
+		AgentStatus:       deriveAgentStatus(components),
+		Components:        components,
+		LastUpgradeResult: nil, // TODO: Populate from cwa-updater persistence store on startup.
+		CommandResults:    results,
 	}
 
 	if err := stream.Send(req); err != nil {

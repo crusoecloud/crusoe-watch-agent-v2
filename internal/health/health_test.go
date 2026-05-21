@@ -114,7 +114,7 @@ func TestCollectVector_ConnectionError(t *testing.T) {
 	h := c.collectVector(context.Background())
 
 	assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_UNKNOWN, h.GetStatus())
-	assert.Equal(t, int64(0), h.GetErrorCount())
+	assert.Equal(t, int64(-1), h.GetErrorCount())
 	assert.Nil(t, h.GetLastScrapeSuccess())
 }
 
@@ -155,7 +155,7 @@ func TestCollectVector_HealthUpMetricsDown(t *testing.T) {
 	h := c.collectVector(context.Background())
 
 	assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_HEALTHY, h.GetStatus())
-	assert.Equal(t, int64(0), h.GetErrorCount(), "error count should be 0 when metrics unreachable")
+	assert.Equal(t, int64(-1), h.GetErrorCount(), "error count should be -1 when metrics unreachable")
 	assert.Nil(t, h.GetLastScrapeSuccess(), "last_scrape_success should be nil when metrics unreachable")
 	assert.Equal(t, version.Version, h.GetVersion(), "version should always be set")
 }
@@ -263,7 +263,7 @@ func TestQueryVectorErrorCount_NonOKStatus(t *testing.T) {
 	}
 
 	count, ok := c.queryVectorErrorCount(context.Background())
-	assert.True(t, ok, "HTTP status is not checked, body is just empty")
+	assert.False(t, ok, "non-OK HTTP status should fail the scrape")
 	assert.Equal(t, int64(0), count)
 }
 

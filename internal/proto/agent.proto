@@ -24,6 +24,7 @@ message RegisterRequest {
   string vm_id = 1;
   InstallType install_type = 2;
   string version = 3;
+  repeated string capability_list = 4;
 }
 
 message RegisterResponse {

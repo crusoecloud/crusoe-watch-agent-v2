@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	pb "gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/proto/gen"
@@ -71,7 +72,7 @@ func (r *Resolver) Resolve(ctx context.Context) (*Identity, error) {
 
 // PersistAgentID writes the agent_id to disk so it survives restarts.
 func (r *Resolver) PersistAgentID(agentID string) error {
-	dir := agentIDPath[:strings.LastIndex(agentIDPath, "/")]
+	dir := filepath.Dir(agentIDPath)
 
 	//nolint:mnd // 0o750 restricts access to owner and group
 	if err := os.MkdirAll(dir, 0o750); err != nil {

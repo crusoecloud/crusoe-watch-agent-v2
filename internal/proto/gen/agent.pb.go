@@ -283,12 +283,13 @@ func (CommandResultStatus) EnumDescriptor() ([]byte, []int) {
 }
 
 type RegisterRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	VmId          string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
-	InstallType   InstallType            `protobuf:"varint,2,opt,name=install_type,json=installType,proto3,enum=agent.InstallType" json:"install_type,omitempty"`
-	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	VmId           string                 `protobuf:"bytes,1,opt,name=vm_id,json=vmId,proto3" json:"vm_id,omitempty"`
+	InstallType    InstallType            `protobuf:"varint,2,opt,name=install_type,json=installType,proto3,enum=agent.InstallType" json:"install_type,omitempty"`
+	Version        string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	CapabilityList []string               `protobuf:"bytes,4,rep,name=capability_list,json=capabilityList,proto3" json:"capability_list,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RegisterRequest) Reset() {
@@ -340,6 +341,13 @@ func (x *RegisterRequest) GetVersion() string {
 		return x.Version
 	}
 	return ""
+}
+
+func (x *RegisterRequest) GetCapabilityList() []string {
+	if x != nil {
+		return x.CapabilityList
+	}
+	return nil
 }
 
 type RegisterResponse struct {
@@ -982,11 +990,12 @@ var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
 	"\n" +
-	"\vagent.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\"w\n" +
+	"\vagent.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa0\x01\n" +
 	"\x0fRegisterRequest\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x125\n" +
 	"\finstall_type\x18\x02 \x01(\x0e2\x12.agent.InstallTypeR\vinstallType\x12\x18\n" +
-	"\aversion\x18\x03 \x01(\tR\aversion\"-\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\x12'\n" +
+	"\x0fcapability_list\x18\x04 \x03(\tR\x0ecapabilityList\"-\n" +
 	"\x10RegisterResponse\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\"\x82\x03\n" +
 	"\x10HeartbeatRequest\x12\x19\n" +

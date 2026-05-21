@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -17,8 +18,11 @@ import (
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/health"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/heartbeat"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/identity"
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
 )
+
+var errUnknownGPUType = errors.New("unknown GPU type (use none, nvidia, amd)")
 
 const (
 	defaultCoordinatorAddr = "localhost:50051"
@@ -34,8 +38,36 @@ func main() {
 
 func run() error {
 	coordAddr := flag.String("coordinator", defaultCoordinatorAddr, "cwa-coordinator gRPC address")
+	// TODO: Read GPU type and CME from installer config file instead of flags.
+	gpuFlag := flag.String("gpu", "none", "GPU type for Vector config: none, nvidia, amd")
+	enableCME := flag.Bool("cme", false, "include Crusoe Metrics Exporter in Vector config")
+	dumpVectorCfg := flag.Bool("dump-vector-config", false, "print generated Vector config to stdout and exit")
 	flag.Parse()
 
+	gpuType, err := parseGPUType(*gpuFlag)
+	if err != nil {
+		return err
+	}
+
+	vmCfg := vector.VMConfig{GPUType: gpuType, EnableCME: *enableCME}
+
+	if *dumpVectorCfg {
+		out, genErr := vector.GenerateVM(vmCfg)
+		if genErr != nil {
+			return fmt.Errorf("generating vector config: %w", genErr)
+		}
+
+		if _, writeErr := os.Stdout.Write(out); writeErr != nil {
+			return fmt.Errorf("writing vector config to stdout: %w", writeErr)
+		}
+
+		return nil
+	}
+
+	return runAgent(*coordAddr)
+}
+
+func runAgent(coordAddr string) error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	logger.Info("cwa-manager starting", "version", version.Version)
 
@@ -54,7 +86,12 @@ func run() error {
 		"agent_id", ident.AgentID,
 	)
 
-	conn, err := grpc.NewClient(*coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// TODO: In K8s mode, call writeVectorConfig from pod/ConfigMap watchers
+	// to dynamically update Vector's config. In VM mode, the installer writes
+	// the initial config via --dump-vector-config.
+
+	// TODO: Use TLS with JWT credentials once IMDS fetch is implemented.
+	conn, err := grpc.NewClient(coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return fmt.Errorf("connecting to coordinator: %w", err)
 	}
@@ -68,29 +105,48 @@ func run() error {
 	hc := health.NewCollector(logger, ident.InstallType)
 	loop := heartbeat.NewLoop(ident, hc, conn, logger)
 
-	for ctx.Err() == nil {
-		if err := registerIfNeeded(ctx, ident, loop, resolver, logger); err != nil {
-			if ctx.Err() != nil {
-				break
-			}
-
-			logger.Error("registration failed, retrying", "error", err, "retry_in", retryDelay)
-			time.Sleep(retryDelay)
-
-			continue
-		}
-
-		logger.Info("starting heartbeat loop", "coordinator", *coordAddr)
-
-		if err := loop.Run(ctx); err != nil && ctx.Err() == nil {
-			logger.Error("heartbeat stream failed, reconnecting", "error", err, "retry_in", retryDelay)
-			time.Sleep(retryDelay)
-		}
-	}
+	heartbeatLoop(ctx, coordAddr, ident, loop, resolver, logger)
 
 	logger.Info("cwa-manager shutdown complete")
 
 	return nil
+}
+
+func heartbeatLoop(
+	ctx context.Context,
+	coordAddr string,
+	ident *identity.Identity,
+	loop *heartbeat.Loop,
+	resolver *identity.Resolver,
+	logger *slog.Logger,
+) {
+	for ctx.Err() == nil {
+		if err := registerIfNeeded(ctx, ident, loop, resolver, logger); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+
+			logger.Error("registration failed, retrying", "error", err, "retry_in", retryDelay)
+
+			select {
+			case <-ctx.Done():
+			case <-time.After(retryDelay):
+			}
+
+			continue
+		}
+
+		logger.Info("starting heartbeat loop", "coordinator", coordAddr)
+
+		if err := loop.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Error("heartbeat stream failed, reconnecting", "error", err, "retry_in", retryDelay)
+
+			select {
+			case <-ctx.Done():
+			case <-time.After(retryDelay):
+			}
+		}
+	}
 }
 
 func registerIfNeeded(
@@ -119,4 +175,17 @@ func registerIfNeeded(
 	}
 
 	return nil
+}
+
+func parseGPUType(gpu string) (vector.GPUType, error) {
+	switch gpu {
+	case "none":
+		return vector.GPUNone, nil
+	case "nvidia":
+		return vector.GPUNvidia, nil
+	case "amd":
+		return vector.GPUAMD, nil
+	default:
+		return vector.GPUNone, fmt.Errorf("%w: %q", errUnknownGPUType, gpu)
+	}
 }

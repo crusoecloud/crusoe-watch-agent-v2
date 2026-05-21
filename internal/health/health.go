@@ -126,6 +126,8 @@ func (c *Collector) collectVector(ctx context.Context) *pb.VectorHealth {
 	if ok {
 		health.ErrorCount = errorCount
 		health.LastScrapeSuccess = timestamppb.Now()
+	} else {
+		health.ErrorCount = -1
 	}
 
 	return health
@@ -176,6 +178,12 @@ func (c *Collector) queryVectorErrorCount(ctx context.Context) (int64, bool) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		c.logger.Debug("vector metrics endpoint returned non-OK status", "status_code", resp.StatusCode)
+
+		return 0, false
+	}
+
 	var total float64
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -193,6 +201,12 @@ func (c *Collector) queryVectorErrorCount(ctx context.Context) (int64, bool) {
 				total += val
 			}
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		c.logger.Debug("error reading vector metrics response", "error", err)
+
+		return 0, false
 	}
 
 	return int64(total), true
