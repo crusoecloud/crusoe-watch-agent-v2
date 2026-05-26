@@ -85,9 +85,14 @@ func TestGenerateVM_AMDGPU(t *testing.T) {
 	assert.Contains(t, endpoints, "http://localhost:${AMD_EXPORTER_PORT}/metrics")
 
 	xf := transforms(cfg)
+	assert.Contains(t, xf, "amd_allowed_filter")
+	filter := xf["amd_allowed_filter"].(map[string]any)
+	assert.Equal(t, []any{"amd_metrics"}, filter["inputs"].([]any))
+
 	labelInputs := xf["add_update_labels"].(map[string]any)["inputs"].([]any)
 	assert.Contains(t, labelInputs, "host_metrics")
-	assert.Contains(t, labelInputs, "amd_metrics")
+	assert.Contains(t, labelInputs, "amd_allowed_filter")
+	assert.NotContains(t, labelInputs, "amd_metrics")
 }
 
 func TestGenerateVM_CME(t *testing.T) {

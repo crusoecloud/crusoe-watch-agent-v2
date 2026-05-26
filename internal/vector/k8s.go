@@ -1,0 +1,642 @@
+// Package vector generates Vector configuration YAML for K8s.
+package vector
+
+import (
+	"fmt"
+	"net"
+	"regexp"
+	"strconv"
+
+	"gopkg.in/yaml.v3"
+)
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+// PodType classifies a discovered Kubernetes pod for Vector config generation.
+type PodType string
+
+const (
+	PodTypeDCGM   PodType = "dcgm_exporter"
+	PodTypeAMD    PodType = "amd_exporter"
+	PodTypeKSM    PodType = "kube_state_metrics"
+	PodTypeSlurm  PodType = "slurm_metrics"
+	PodTypeCME    PodType = "crusoe_metrics_exporter"
+	PodTypeCustom PodType = "custom_metrics"
+)
+
+// ClassifiedPod holds a discovered pod's identity and scrape metadata.
+type ClassifiedPod struct {
+	Name string
+	IP   string
+	Type PodType
+	// Custom metrics fields
+	Port           int    // annotation crusoe.ai/port or default
+	Path           string // annotation crusoe.ai/path or default
+	AppID          string // annotation crusoe.ai/app_id
+	DeploymentName string // inferred from pod name
+}
+
+// NodeLabels holds Crusoe-specific labels read from the K8s node at startup.
+type NodeLabels struct {
+	VMID         string
+	NodepoolID   string
+	InstanceType string
+	PodID        string
+	ProjectID    string
+	Hostname     string
+}
+
+// ExporterConfig holds runtime parameters for a single exporter type.
+type ExporterConfig struct {
+	Enabled        bool
+	Port           int
+	Paths          []string
+	ScrapeInterval int // seconds
+}
+
+// BuildEndpoints returns full scrape URLs for a pod IP.
+func (e ExporterConfig) BuildEndpoints(podIP string) []string {
+	eps := make([]string, len(e.Paths))
+	for i, path := range e.Paths {
+		eps[i] = "http://" + net.JoinHostPort(podIP, strconv.Itoa(e.Port)) + path
+	}
+
+	return eps
+}
+
+// ProxyConfig holds optional HTTP proxy settings for sinks.
+type ProxyConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	HTTP    string `yaml:"http,omitempty"`
+	HTTPS   string `yaml:"https,omitempty"`
+	NoProxy string `yaml:"noProxy,omitempty"`
+}
+
+func (p ProxyConfig) toMap() map[string]any {
+	result := map[string]any{"enabled": p.Enabled}
+	if p.HTTP != "" {
+		result["http"] = p.HTTP
+	}
+	if p.HTTPS != "" {
+		result["https"] = p.HTTPS
+	}
+	if p.NoProxy != "" {
+		result["no_proxy"] = p.NoProxy
+	}
+
+	return result
+}
+
+// K8sConfig holds all runtime configuration for K8s Vector config generation.
+type K8sConfig struct {
+	DCGM  ExporterConfig
+	AMD   ExporterConfig // AMD uses Paths[0] for single path
+	KSM   ExporterConfig
+	Slurm ExporterConfig
+	CME   ExporterConfig
+
+	CustomMetricsEnabled       bool
+	CustomMetricsDefaultPort   int
+	CustomMetricsDefaultPath   string
+	CustomMetricsDefaultScrape int // default scrape interval for custom metrics
+	LogsEnabled                bool
+
+	SinkEndpoint string // base URL, e.g. "https://cms-monitoring.crusoecloud.com"
+	Proxy        ProxyConfig
+
+	NodeLabels NodeLabels
+}
+
+// Derived endpoint helpers.
+func (c K8sConfig) infraEndpoint() string   { return c.SinkEndpoint + "/ingest" }
+func (c K8sConfig) clusterEndpoint() string { return c.SinkEndpoint + "/cluster" }
+func (c K8sConfig) customEndpoint() string  { return c.SinkEndpoint + "/custom" }
+func (c K8sConfig) logsEndpoint() string    { return c.SinkEndpoint + "/logs/ingest" }
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const (
+	scrapeTimeoutPct       = 0.7
+	scrapeIntervalMinK8s   = 5
+	defaultCustomScrapeInt = 30
+	k8sScrapeIntervalSecs  = 60
+
+	dcgmSourceName           = "dcgm_exporter_scrape"
+	amdSourceName            = "amd_exporter_scrape"
+	nodeMetricsTransformName = "enrich_node_metrics"
+	amdFilterTransformName   = "amd_allowed_filter"
+)
+
+var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9_]`)
+
+// SanitizeName replaces invalid Vector component name characters with underscores.
+func SanitizeName(name string) string {
+	return sanitizeRe.ReplaceAllString(name, "_")
+}
+
+// ---------------------------------------------------------------------------
+// Top-level generator
+// ---------------------------------------------------------------------------
+
+// GenerateK8sBase returns the static K8s base config: data_dir, api, host_metrics,
+// internal_metrics pipeline, node metrics pipeline, and the log pipeline.
+// This is written to /etc/vector-base/vector.yaml at startup.
+func GenerateK8sBase(cfg K8sConfig) map[string]any {
+	baseCfg := defaultBaseConfig("/vector-data-dir")
+	sources := ensureMap(baseCfg, "sources")
+	transforms := ensureMap(baseCfg, "transforms")
+	sinks := ensureMap(baseCfg, "sinks")
+
+	buildStaticConfig(sources, transforms, sinks, cfg)
+	applyLogs(sources, transforms, sinks, cfg)
+
+	return baseCfg
+}
+
+// ApplyK8s overlays dynamic pod-dependent Vector configuration onto baseCfg.
+// Adds DCGM, AMD, KSM, Slurm, CME, and custom metrics pipelines based on
+// discovered pods and ConfigMap rules.
+func ApplyK8s(baseCfg map[string]any, pods []ClassifiedPod, cmData map[string]string, cfg K8sConfig) {
+	sources := ensureMap(baseCfg, "sources")
+	transforms := ensureMap(baseCfg, "transforms")
+	sinks := ensureMap(baseCfg, "sinks")
+
+	buildDynamicConfig(sources, transforms, sinks, pods, cmData, cfg)
+}
+
+// GenerateK8s builds the complete K8s Vector config and returns YAML bytes.
+// It creates a base config, applies the dynamic overlay, and marshals to YAML.
+func GenerateK8s(pods []ClassifiedPod, cmData map[string]string, cfg K8sConfig) ([]byte, error) {
+	baseCfg := GenerateK8sBase(cfg)
+	ApplyK8s(baseCfg, pods, cmData, cfg)
+
+	out, err := yaml.Marshal(baseCfg)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling k8s vector config: %w", err)
+	}
+
+	return out, nil
+}
+
+func buildStaticConfig(sources, transforms, sinks map[string]any, cfg K8sConfig) {
+	// Host metrics pipeline
+	sources["host_metrics"] = map[string]any{
+		"type":       "host_metrics",
+		"collectors": []string{"cpu", "disk", "host", "memory", "network", "process"},
+		"network": map[string]any{
+			"devices": map[string]any{
+				"excludes": []string{"lo*"},
+				"includes": []string{"ens*"},
+			},
+		},
+		"process": map[string]any{
+			"processes": map[string]any{
+				"includes": []string{"vector"},
+			},
+		},
+		"scrape_interval_secs": k8sScrapeIntervalSecs,
+	}
+	transforms[nodeMetricsTransformName] = map[string]any{
+		"type":   "remap",
+		"inputs": []string{"host_metrics"},
+		"source": buildNodeMetricsTransformVRL(cfg.NodeLabels),
+	}
+
+	// Internal metrics pipeline
+	sources["internal_metrics"] = map[string]any{
+		"type":                 "internal_metrics",
+		"scrape_interval_secs": k8sScrapeIntervalSecs,
+	}
+	transforms["filter_internal_metrics"] = map[string]any{
+		"type":      "filter",
+		"inputs":    []string{"internal_metrics"},
+		"condition": vrlFilterInternalMetrics,
+	}
+	transforms["add_internal_labels"] = map[string]any{
+		"type":   "remap",
+		"inputs": []string{"filter_internal_metrics"},
+		"source": vrlAddInternalLabelsK8s,
+	}
+	sinks["internal_metrics_exporter"] = map[string]any{
+		"type":    "prometheus_exporter",
+		"inputs":  []string{"internal_metrics"},
+		"address": "127.0.0.1:9598",
+	}
+
+	// Node metrics sink
+	nodeMetricsSink := buildPromRemoteWriteSink(
+		cfg.infraEndpoint(), "cri:vm/${VM_ID}", cfg.Proxy, true,
+	)
+	nodeMetricsSink["inputs"] = []string{nodeMetricsTransformName, "add_internal_labels"}
+	sinks["cms_gateway_node_metrics"] = nodeMetricsSink
+}
+
+type partitionedPods struct {
+	dcgmIP  string
+	amdIP   string
+	ksmIP   string
+	slurmIP string
+	cmeIP   string
+	custom  []ClassifiedPod
+}
+
+func partitionPods(pods []ClassifiedPod) partitionedPods {
+	var result partitionedPods
+	for _, pod := range pods {
+		switch pod.Type {
+		case PodTypeDCGM:
+			result.dcgmIP = pod.IP
+		case PodTypeAMD:
+			result.amdIP = pod.IP
+		case PodTypeKSM:
+			result.ksmIP = pod.IP
+		case PodTypeSlurm:
+			result.slurmIP = pod.IP
+		case PodTypeCME:
+			result.cmeIP = pod.IP
+		case PodTypeCustom:
+			result.custom = append(result.custom, pod)
+		}
+	}
+
+	return result
+}
+
+func buildDynamicConfig(
+	sources, transforms, sinks map[string]any,
+	pods []ClassifiedPod,
+	cmData map[string]string,
+	cfg K8sConfig,
+) {
+	podsByType := partitionPods(pods)
+
+	applyDCGM(sources, transforms, podsByType.dcgmIP, cfg)
+	applyAMD(sources, transforms, podsByType.amdIP, cfg)
+
+	applyClusterExporter(sources, transforms, sinks, podsByType.ksmIP, clusterExporterSpec{
+		runtime:       cfg.KSM,
+		sourceName:    "kube_state_metrics_scrape",
+		transformName: "enrich_kube_state_metrics",
+		sinkName:      "kube_state_metrics_sink",
+		transformVRL:  vrlEnrichKSM,
+		sinkConfig: buildPromRemoteWriteSink(
+			cfg.clusterEndpoint(), "cri:cmk/${CRUSOE_CLUSTER_ID}", cfg.Proxy, false,
+		),
+	})
+	applyClusterExporter(sources, transforms, sinks, podsByType.slurmIP, clusterExporterSpec{
+		runtime:       cfg.Slurm,
+		sourceName:    "slurm_metrics_scrape",
+		transformName: "enrich_slurm_metrics",
+		sinkName:      "slurm_metrics_sink",
+		transformVRL:  vrlEnrichSlurm,
+		sinkConfig: buildPromRemoteWriteSink(
+			cfg.clusterEndpoint(), "cri:cmk/${CRUSOE_CLUSTER_ID}", cfg.Proxy, true,
+		),
+	})
+	applyClusterExporter(sources, transforms, sinks, podsByType.cmeIP, clusterExporterSpec{
+		runtime:       cfg.CME,
+		sourceName:    "crusoe_metrics_exporter_scrape",
+		transformName: "enrich_crusoe_metrics_exporter",
+		sinkName:      "crusoe_metrics_exporter_sink",
+		transformVRL:  buildCMETransformVRL(cfg.NodeLabels),
+		sinkConfig: buildPromRemoteWriteSink(
+			cfg.infraEndpoint(), "cri:vm/${VM_ID}", cfg.Proxy, true,
+		),
+	})
+
+	applyCustomMetrics(sources, transforms, sinks, podsByType.custom, cmData, cfg)
+}
+
+// ---------------------------------------------------------------------------
+// DCGM exporter
+// ---------------------------------------------------------------------------
+
+func applyDCGM(sources, transforms map[string]any, podIP string, cfg K8sConfig) {
+	if podIP == "" || !cfg.DCGM.Enabled {
+		return
+	}
+	endpoint := cfg.DCGM.BuildEndpoints(podIP)[0]
+	sources[dcgmSourceName] = map[string]any{
+		"type":                 "prometheus_scrape",
+		"endpoints":            []string{endpoint},
+		"scrape_interval_secs": cfg.DCGM.ScrapeInterval,
+		"scrape_timeout_secs":  int(float64(cfg.DCGM.ScrapeInterval) * scrapeTimeoutPct),
+	}
+	wireIntoTransform(transforms, nodeMetricsTransformName, dcgmSourceName)
+}
+
+// ---------------------------------------------------------------------------
+// AMD exporter
+// ---------------------------------------------------------------------------
+
+func applyAMD(sources, transforms map[string]any, podIP string, cfg K8sConfig) {
+	if podIP == "" || !cfg.AMD.Enabled {
+		return
+	}
+	endpoint := cfg.AMD.BuildEndpoints(podIP)[0]
+	sources[amdSourceName] = map[string]any{
+		"type":                 "prometheus_scrape",
+		"endpoints":            []string{endpoint},
+		"scrape_interval_secs": cfg.AMD.ScrapeInterval,
+		"scrape_timeout_secs":  int(float64(cfg.AMD.ScrapeInterval) * scrapeTimeoutPct),
+	}
+	transforms[amdFilterTransformName] = map[string]any{
+		"type":   "filter",
+		"inputs": []string{amdSourceName},
+		"condition": map[string]any{
+			"type":   "vrl",
+			"source": vrlAmdAllowlistFilter,
+		},
+	}
+	wireIntoTransform(transforms, nodeMetricsTransformName, amdFilterTransformName)
+}
+
+// ---------------------------------------------------------------------------
+// Cluster-scoped exporters (KSM, Slurm, CME)
+// ---------------------------------------------------------------------------
+
+type clusterExporterSpec struct {
+	runtime       ExporterConfig
+	sourceName    string
+	transformName string
+	sinkName      string
+	transformVRL  string
+	sinkConfig    map[string]any
+}
+
+func applyClusterExporter(sources, transforms, sinks map[string]any, podIP string, spec clusterExporterSpec) {
+	if podIP == "" || !spec.runtime.Enabled {
+		return
+	}
+	sources[spec.sourceName] = map[string]any{
+		"type":                 "prometheus_scrape",
+		"endpoints":            spec.runtime.BuildEndpoints(podIP),
+		"scrape_interval_secs": spec.runtime.ScrapeInterval,
+		"scrape_timeout_secs":  int(float64(spec.runtime.ScrapeInterval) * scrapeTimeoutPct),
+	}
+	transforms[spec.transformName] = map[string]any{
+		"type":   "remap",
+		"inputs": []string{spec.sourceName},
+		"source": spec.transformVRL,
+	}
+	sink := copyMap(spec.sinkConfig)
+	sink["inputs"] = []string{spec.transformName}
+	sinks[spec.sinkName] = sink
+}
+
+// ---------------------------------------------------------------------------
+// Custom metrics
+// ---------------------------------------------------------------------------
+
+func applyCustomMetrics(
+	sources, transforms, sinks map[string]any,
+	pods []ClassifiedPod,
+	cmData map[string]string,
+	cfg K8sConfig,
+) {
+	if !cfg.CustomMetricsEnabled || len(pods) == 0 {
+		return
+	}
+
+	baseSinkConfig := buildPromRemoteWriteSink(
+		cfg.customEndpoint(), "cri:custom_metrics/${CRUSOE_CLUSTER_ID}", cfg.Proxy, true,
+	)
+
+	for _, pod := range pods {
+		applyCustomMetricsPod(sources, transforms, sinks, pod, cmData, cfg, baseSinkConfig)
+	}
+}
+
+func applyCustomMetricsPod(
+	sources, transforms, sinks map[string]any,
+	pod ClassifiedPod,
+	cmData map[string]string,
+	cfg K8sConfig,
+	baseSinkConfig map[string]any,
+) {
+	sanitized := SanitizeName(pod.Name)
+	sourceName := sanitized + "_scrape"
+	transformName := sanitized + "_transform"
+	sinkName := sanitized + "_sink"
+
+	deploymentCfg := getDeploymentMetricsConfig(pod.DeploymentName, cmData)
+	scrapeInterval := resolveCustomScrapeInterval(deploymentCfg, cfg)
+
+	endpoint := "http://" + net.JoinHostPort(pod.IP, strconv.Itoa(pod.Port)) + pod.Path
+	sources[sourceName] = map[string]any{
+		"type":                 "prometheus_scrape",
+		"endpoints":            []string{endpoint},
+		"scrape_interval_secs": scrapeInterval,
+		"scrape_timeout_secs":  int(float64(scrapeInterval) * scrapeTimeoutPct),
+	}
+
+	transformVRL := buildCustomMetricsTransformVRL(deploymentCfg, pod, cfg.NodeLabels)
+	transforms[transformName] = map[string]any{
+		"type":          "remap",
+		"inputs":        []string{sourceName},
+		"drop_on_abort": true,
+		"source":        transformVRL,
+	}
+
+	sink := copyMap(baseSinkConfig)
+	sink["inputs"] = []string{transformName}
+	if pod.AppID != "" {
+		sink["endpoint"] = cfg.customEndpoint() + "/" + pod.AppID
+	}
+	sinks[sinkName] = sink
+}
+
+func resolveCustomScrapeInterval(deploymentCfg map[string]any, cfg K8sConfig) int {
+	scrapeInterval := defaultCustomScrapeInt
+	if cfg.CustomMetricsDefaultScrape > 0 {
+		scrapeInterval = cfg.CustomMetricsDefaultScrape
+	}
+	if val, exists := deploymentCfg["scrape_interval_secs"]; exists {
+		if intVal, isNum := toInt(val); isNum {
+			if intVal < scrapeIntervalMinK8s {
+				intVal = scrapeIntervalMinK8s
+			}
+			scrapeInterval = intVal
+		}
+	}
+
+	return scrapeInterval
+}
+
+// getDeploymentMetricsConfig resolves per-deployment custom metrics rules from
+// the crusoe-custom-metrics-config ConfigMap data.
+func getDeploymentMetricsConfig(deploymentName string, cmData map[string]string) map[string]any {
+	if deploymentName == "" {
+		return nil
+	}
+	configYAML, found := cmData["custom-metrics-config.yaml"]
+	if !found || configYAML == "" {
+		return nil
+	}
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(configYAML), &parsed); err != nil {
+		return nil
+	}
+	depCfg, isMap := parsed[deploymentName].(map[string]any)
+	if !isMap {
+		return nil
+	}
+
+	return depCfg
+}
+
+// ---------------------------------------------------------------------------
+// Logs pipeline
+// ---------------------------------------------------------------------------
+
+func applyLogs(sources, transforms, sinks map[string]any, cfg K8sConfig) {
+	if !cfg.LogsEnabled {
+		return
+	}
+
+	sources["journald_logs"] = map[string]any{
+		"type":              "journald",
+		"journal_directory": "/var/log/journal",
+		"since_now":         true,
+	}
+	sources["vector_internal_logs"] = map[string]any{
+		"type": "internal_logs",
+	}
+
+	transforms["filter_journald_noise"] = map[string]any{
+		"type":   "filter",
+		"inputs": []string{"journald_logs"},
+		"condition": map[string]any{
+			"type":   "vrl",
+			"source": vrlFilterJournaldNoise,
+		},
+	}
+	transforms["parse_journald_logs"] = map[string]any{
+		"type":   "remap",
+		"inputs": []string{"filter_journald_noise"},
+		"source": vrlParseJournaldLogsK8s,
+	}
+	transforms["parse_internal_logs"] = map[string]any{
+		"type":   "remap",
+		"inputs": []string{"vector_internal_logs"},
+		"source": vrlParseInternalLogsK8s,
+	}
+	transforms["enrich_logs"] = map[string]any{
+		"type":   "remap",
+		"inputs": []string{"parse_journald_logs", "parse_internal_logs"},
+		"source": vrlEnrichLogsK8s,
+	}
+
+	sinkConfig := map[string]any{
+		"type":        "http",
+		"inputs":      []string{"enrich_logs"},
+		"uri":         cfg.logsEndpoint(),
+		"framing":     map[string]any{"method": "newline_delimited"},
+		"compression": "snappy",
+		"healthcheck": map[string]any{"enabled": false},
+		"request": map[string]any{
+			"headers":      map[string]any{"X-Crusoe-Vm-Id": "${VM_ID:-unknown}"},
+			"timeout_secs": requestTimeoutSecs,
+		},
+		"auth":     map[string]any{"strategy": "bearer", "token": "${CRUSOE_MONITORING_TOKEN}"},
+		"encoding": map[string]any{"codec": "json"},
+		"batch":    map[string]any{"max_bytes": logBatchMaxBytes},
+		"tls":      tlsConfig(),
+	}
+	if cfg.Proxy.Enabled {
+		sinkConfig["proxy"] = cfg.Proxy.toMap()
+	}
+	sinks["crusoe_ingest"] = sinkConfig
+}
+
+// ---------------------------------------------------------------------------
+// Sink builders
+// ---------------------------------------------------------------------------
+
+func buildPromRemoteWriteSink(endpoint, tenantID string, proxy ProxyConfig, withProxy bool) map[string]any {
+	cfg := map[string]any{
+		"type":        "prometheus_remote_write",
+		"endpoint":    endpoint,
+		"tenant_id":   tenantID,
+		"auth":        map[string]any{"strategy": "bearer", "token": "${CRUSOE_MONITORING_TOKEN}"},
+		"healthcheck": map[string]any{"enabled": false},
+		"compression": "snappy",
+		"request":     map[string]any{"concurrency": "adaptive", "timeout_secs": requestTimeoutSecs},
+		"batch":       map[string]any{"max_bytes": metricBatchMaxBytes, "aggregate": false},
+		"buffer":      diskBufferConfig(),
+		"tls":         tlsConfig(),
+	}
+	if withProxy && proxy.Enabled {
+		cfg["proxy"] = proxy.toMap()
+	}
+
+	return cfg
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+func copyMap(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for key, val := range src {
+		dst[key] = val
+	}
+
+	return dst
+}
+
+func wireIntoTransform(transforms map[string]any, transformName, inputName string) {
+	transform, exists := transforms[transformName].(map[string]any)
+	if !exists {
+		return
+	}
+	var inputs []string
+	if existing, ok := transform["inputs"].([]string); ok {
+		inputs = existing
+	}
+	for _, name := range inputs {
+		if name == inputName {
+			return
+		}
+	}
+	transform["inputs"] = append(inputs, inputName)
+}
+
+func toStringSlice(val any) ([]string, bool) {
+	if val == nil {
+		return nil, false
+	}
+	switch slice := val.(type) {
+	case []string:
+		return slice, true
+	case []any:
+		out := make([]string, 0, len(slice))
+		for _, item := range slice {
+			if str, isStr := item.(string); isStr {
+				out = append(out, str)
+			}
+		}
+
+		return out, len(out) > 0
+	default:
+		return nil, false
+	}
+}
+
+func toInt(val any) (int, bool) {
+	switch num := val.(type) {
+	case int:
+		return num, true
+	case int64:
+		return int(num), true
+	case float64:
+		return int(num), true
+	default:
+		return 0, false
+	}
+}

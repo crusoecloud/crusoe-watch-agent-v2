@@ -7,9 +7,10 @@ package vector
 // Log pipeline
 // ---------------------------------------------------------------------------
 
-// vrlParseJournaldLogs maps syslog PRIORITY to a level name, extracts
-// structured fields from known logfmt emitters, and cleans up raw fields.
-const vrlParseJournaldLogs = `
+// vrlParseJournaldBody is the shared journald log parser body used by both
+// VM and K8s modes. It maps syslog PRIORITY to a level name and extracts
+// structured fields from known logfmt emitters.
+const vrlParseJournaldBody = `
 .log_source = "journald"
 
 # Map syslog PRIORITY (0–7) to canonical level names.
@@ -73,7 +74,10 @@ if includes(logfmt_emitters, syslog_id) && match(msg, r'^\S+=') {
         }
     }
 }
+`
 
+// vrlParseJournaldLogs is the VM version: shared body + cleanup.
+const vrlParseJournaldLogs = vrlParseJournaldBody + `
 del(.message)
 del(.timestamp)
 `
@@ -86,12 +90,10 @@ if exists(.metadata.level) {
 }
 `
 
-// vrlEnrichLogs adds agent metadata, normalizes timestamps, and maps
-// log levels to a canonical 8-level enum (mirrors GCP Cloud Logging).
-const vrlEnrichLogs = `
-.agent = "crusoe-watch-agent"
-.agent_version = "${AGENT_VERSION}"
-.host = get_hostname!()
+// vrlEnrichLogsBody is the shared log enrichment body: deletes source_type,
+// normalizes timestamps and messages, and maps log levels to a canonical enum.
+// Mode-specific headers (agent metadata) are prepended by vrlEnrichLogs / vrlEnrichLogsK8s.
+const vrlEnrichLogsBody = `
 del(.source_type)
 
 # Timestamp fallback: __REALTIME_TIMESTAMP (journald) → .timestamp (internal)
@@ -130,6 +132,13 @@ if exists(.level) {
     }
 }
 `
+
+// vrlEnrichLogs is the VM version: agent metadata + shared body.
+const vrlEnrichLogs = `
+.agent = "crusoe-watch-agent"
+.agent_version = "${AGENT_VERSION}"
+.host = get_hostname!()
+` + vrlEnrichLogsBody
 
 // ---------------------------------------------------------------------------
 // Metrics pipeline

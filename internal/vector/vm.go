@@ -31,22 +31,74 @@ type VMConfig struct {
 	EnableCME bool // Include Crusoe Metrics Exporter source/sink
 }
 
-// vectorConfig is the top-level Vector configuration structure.
-// Field order is preserved in YAML output via struct ordering.
-// GenerateVM returns Vector configuration YAML for VM mode.
-func GenerateVM(cfg VMConfig) ([]byte, error) {
-	vecCfg := map[string]any{
-		"data_dir": "/var/lib/vector",
-		"api": map[string]any{
-			"enabled": true,
-			"address": "127.0.0.1:8686",
-		},
-		"sources":    vmSources(cfg),
-		"transforms": vmTransforms(cfg),
-		"sinks":      vmSinks(cfg),
+// GenerateVMBase returns the static VM base config: data_dir, api, all sources
+// except GPU/CME, all log and metrics transforms, and all standard sinks.
+// This is written to /etc/vector-base/vector.yaml at startup.
+func GenerateVMBase() map[string]any {
+	baseCfg := defaultBaseConfig("/var/lib/vector")
+	sources := ensureMap(baseCfg, "sources")
+	transforms := ensureMap(baseCfg, "transforms")
+	sinks := ensureMap(baseCfg, "sinks")
+
+	// Sources
+	sources["host_metrics"] = hostMetricsSource()
+	sources["internal_metrics"] = internalMetricsSource()
+	sources["journald_logs"] = journaldSource()
+	sources["vector_internal_logs"] = map[string]any{"type": "internal_logs"}
+
+	// Log transforms
+	transforms["parse_journald_logs"] = remapTransform([]string{"journald_logs"}, vrlParseJournaldLogs)
+	transforms["parse_internal_logs"] = remapTransform([]string{"vector_internal_logs"}, vrlParseInternalLogs)
+	transforms["enrich_logs"] = remapTransform([]string{"parse_journald_logs", "parse_internal_logs"}, vrlEnrichLogs)
+
+	// Metrics transforms (add_update_labels starts with host_metrics only; ApplyVM wires GPU)
+	transforms["add_update_labels"] = remapTransform([]string{"host_metrics"}, vrlAddUpdateLabels)
+	transforms["filter_internal_metrics"] = filterTransform([]string{"internal_metrics"}, vrlFilterInternalMetrics)
+	transforms["add_internal_labels"] = remapTransform([]string{"filter_internal_metrics"}, vrlAddInternalLabels)
+
+	// Sinks
+	sinks["crusoe_ingest"] = logsSink()
+	sinks["cms_gateway"] = metricsRemoteWriteSink([]string{"add_update_labels", "add_internal_labels"})
+	sinks["internal_metrics_exporter"] = internalMetricsExporterSink()
+
+	return baseCfg
+}
+
+// ApplyVM overlays dynamic VM-specific configuration onto baseCfg.
+// Adds GPU source (wired into add_update_labels) and CME pipeline if enabled.
+func ApplyVM(baseCfg map[string]any, cfg VMConfig) {
+	sources := ensureMap(baseCfg, "sources")
+	transforms := ensureMap(baseCfg, "transforms")
+	sinks := ensureMap(baseCfg, "sinks")
+
+	switch cfg.GPUType {
+	case GPUNvidia:
+		sources["dcgm_metrics"] = prometheusScrapeSource("http://localhost:9400/metrics")
+		wireIntoTransform(transforms, "add_update_labels", "dcgm_metrics")
+	case GPUAMD:
+		sources["amd_metrics"] = prometheusScrapeSource("http://localhost:${AMD_EXPORTER_PORT}/metrics")
+		transforms["amd_allowed_filter"] = filterTransform([]string{"amd_metrics"}, vrlAmdAllowlistFilter)
+		wireIntoTransform(transforms, "add_update_labels", "amd_allowed_filter")
+	case GPUNone:
+		// no GPU source
 	}
 
-	out, err := yaml.Marshal(vecCfg)
+	if cfg.EnableCME {
+		sources["crusoe_infra_metrics"] = prometheusScrapeSource("http://localhost:9500/metrics")
+		transforms["enrich_crusoe_infra_metrics"] = remapTransform(
+			[]string{"crusoe_infra_metrics"}, vrlEnrichCMEMetrics,
+		)
+		sinks["cms_gateway_cme"] = metricsRemoteWriteSink([]string{"enrich_crusoe_infra_metrics"})
+	}
+}
+
+// GenerateVM returns complete Vector configuration YAML for VM mode.
+// It creates a base config, applies the VM overlay, and marshals to YAML.
+func GenerateVM(cfg VMConfig) ([]byte, error) {
+	baseCfg := GenerateVMBase()
+	ApplyVM(baseCfg, cfg)
+
+	out, err := yaml.Marshal(baseCfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling vector config: %w", err)
 	}
@@ -55,30 +107,6 @@ func GenerateVM(cfg VMConfig) ([]byte, error) {
 }
 
 // ---------- sources ----------
-
-func vmSources(cfg VMConfig) map[string]any {
-	sources := map[string]any{
-		"host_metrics":         hostMetricsSource(),
-		"internal_metrics":     internalMetricsSource(),
-		"journald_logs":        journaldSource(),
-		"vector_internal_logs": map[string]any{"type": "internal_logs"},
-	}
-
-	switch cfg.GPUType {
-	case GPUNvidia:
-		sources["dcgm_metrics"] = prometheusScrapeSource("http://localhost:9400/metrics")
-	case GPUAMD:
-		sources["amd_metrics"] = prometheusScrapeSource("http://localhost:${AMD_EXPORTER_PORT}/metrics")
-	case GPUNone:
-		// no GPU source
-	}
-
-	if cfg.EnableCME {
-		sources["crusoe_infra_metrics"] = prometheusScrapeSource("http://localhost:9500/metrics")
-	}
-
-	return sources
-}
 
 func hostMetricsSource() map[string]any {
 	return map[string]any{
@@ -127,40 +155,7 @@ func prometheusScrapeSource(endpoint string) map[string]any {
 	}
 }
 
-// ---------- transforms ----------
-
-func vmTransforms(cfg VMConfig) map[string]any {
-	metricsLabelInputs := []string{"host_metrics"}
-
-	switch cfg.GPUType {
-	case GPUNvidia:
-		metricsLabelInputs = append(metricsLabelInputs, "dcgm_metrics")
-	case GPUAMD:
-		metricsLabelInputs = append(metricsLabelInputs, "amd_metrics")
-	case GPUNone:
-		// host_metrics only
-	}
-
-	transforms := map[string]any{
-		// Log pipeline
-		"parse_journald_logs": remapTransform([]string{"journald_logs"}, vrlParseJournaldLogs),
-		"parse_internal_logs": remapTransform([]string{"vector_internal_logs"}, vrlParseInternalLogs),
-		"enrich_logs":         remapTransform([]string{"parse_journald_logs", "parse_internal_logs"}, vrlEnrichLogs),
-
-		// Metrics pipeline
-		"add_update_labels":       remapTransform(metricsLabelInputs, vrlAddUpdateLabels),
-		"filter_internal_metrics": filterTransform([]string{"internal_metrics"}, vrlFilterInternalMetrics),
-		"add_internal_labels":     remapTransform([]string{"filter_internal_metrics"}, vrlAddInternalLabels),
-	}
-
-	if cfg.EnableCME {
-		transforms["enrich_crusoe_infra_metrics"] = remapTransform(
-			[]string{"crusoe_infra_metrics"}, vrlEnrichCMEMetrics,
-		)
-	}
-
-	return transforms
-}
+// ---------- transform helpers ----------
 
 func remapTransform(inputs []string, source string) map[string]any {
 	return map[string]any{
@@ -178,21 +173,7 @@ func filterTransform(inputs []string, condition string) map[string]any {
 	}
 }
 
-// ---------- sinks ----------
-
-func vmSinks(cfg VMConfig) map[string]any {
-	sinks := map[string]any{
-		"crusoe_ingest":             logsSink(),
-		"cms_gateway":               metricsRemoteWriteSink([]string{"add_update_labels", "add_internal_labels"}),
-		"internal_metrics_exporter": internalMetricsExporterSink(),
-	}
-
-	if cfg.EnableCME {
-		sinks["cms_gateway_cme"] = metricsRemoteWriteSink([]string{"enrich_crusoe_infra_metrics"})
-	}
-
-	return sinks
-}
+// ---------- sink helpers ----------
 
 func logsSink() map[string]any {
 	return map[string]any{
@@ -256,4 +237,31 @@ func tlsConfig() map[string]any {
 		"verify_hostname":    true,
 		"alpn_protocols":     []string{"h2", "http/1.1"},
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers (used by both VM and K8s)
+// ---------------------------------------------------------------------------
+
+// defaultBaseConfig returns a minimal base config with data_dir and api block.
+// Used by Generate* functions when no base config file is provided.
+func defaultBaseConfig(dataDir string) map[string]any {
+	return map[string]any{
+		"data_dir": dataDir,
+		"api": map[string]any{
+			"enabled": true,
+			"address": "127.0.0.1:8686",
+		},
+	}
+}
+
+// ensureMap returns the map at baseCfg[key], creating it if absent.
+func ensureMap(baseCfg map[string]any, key string) map[string]any {
+	if m, ok := baseCfg[key].(map[string]any); ok {
+		return m
+	}
+	m := map[string]any{}
+	baseCfg[key] = m
+
+	return m
 }
