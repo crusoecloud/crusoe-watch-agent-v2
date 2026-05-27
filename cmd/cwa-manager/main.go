@@ -18,6 +18,7 @@ import (
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/health"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/heartbeat"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/identity"
+	pb "gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/proto/gen"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
 )
@@ -85,9 +86,10 @@ func runAgent(coordAddr string) error {
 		"agent_id", ident.AgentID,
 	)
 
-	// TODO: In K8s mode, call writeVectorConfig from pod/ConfigMap watchers
-	// to dynamically update Vector's config. In VM mode, the installer writes
-	// the initial config via --dump-vector-config.
+	// In K8s mode, start the Vector config watcher (pod + ConfigMap informers).
+	if ident.InstallType == pb.InstallType_INSTALL_TYPE_KUBERNETES {
+		startK8sWatcher(ctx, logger)
+	}
 
 	// TODO: Use TLS with JWT credentials once IMDS fetch is implemented.
 	conn, err := grpc.NewClient(coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))

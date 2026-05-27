@@ -194,6 +194,8 @@ func buildCustomMetricsEnrichVRL(pod ClassifiedPod, labels NodeLabels) []string 
 			`.tags.crusoe_resource = "custom_internal"`,
 			`.tags.cluster_id = "${CRUSOE_CLUSTER_ID}"`,
 			fmt.Sprintf(".tags.app_id = %q", pod.AppID),
+			fmt.Sprintf(".tags.pod_ip = %q", pod.IP),
+			fmt.Sprintf(".tags.pod_name = %q", pod.Name),
 		}
 	}
 
