@@ -1,0 +1,6 @@
+apiVersion: v2
+name: crusoe-watch-agent
+description: Helm chart for cwa-manager (crusoe-watch-agent v2)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -1,0 +1,14 @@
+{{- if .Values.customMetrics.enabled }}
+{{- if not (lookup "v1" "ConfigMap" "crusoe-monitoring" "crusoe-custom-metrics-config") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crusoe-custom-metrics-config
+  namespace: crusoe-monitoring
+  labels:
+    {{- include "cwa.labels" . | nindent 4 }}
+data:
+  custom-metrics-config.yaml: |
+    default_scrape_interval_sec: {{ .Values.customMetrics.defaultScrape }}
+{{- end }}
+{{- end }}

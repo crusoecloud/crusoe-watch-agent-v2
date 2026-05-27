@@ -1,0 +1,176 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "cwa.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cwa.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "cwa.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cwa.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "cwa.serviceAccountName" . }}
+      automountServiceAccountToken: true
+      hostNetwork: true
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+
+      containers:
+        # --- Vector ---
+        - name: vector
+          image: "{{ .Values.vector.image }}:{{ .Values.vector.tag }}"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              export VM_ID=$(cat /host/sys/class/dmi/id/product_uuid 2>/dev/null || echo "unknown")
+              # Wait for cwa-manager to write the initial config.
+              echo "Waiting for Vector config..."
+              while [ ! -f /etc/vector/vector.yaml ]; do sleep 1; done
+              echo "Config found, starting Vector."
+              exec /usr/bin/vector \
+                --config /etc/vector/vector.yaml \
+                --watch-config \
+                --watch-config-method poll \
+                --watch-config-poll-interval-seconds 30
+          env:
+            - name: CRUSOE_MONITORING_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cwa.monitoringSecretName" . }}
+                  key: CRUSOE_MONITORING_TOKEN
+            - name: AGENT_VERSION
+              value: {{ .Chart.AppVersion | quote }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+          volumeMounts:
+            - name: vector-config
+              mountPath: /etc/vector
+            - name: vector-data
+              mountPath: /vector-data-dir
+            - name: var-log
+              mountPath: /var/log
+              readOnly: true
+            - name: var-lib
+              mountPath: /var/lib
+              readOnly: true
+            - name: host-proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: host-sys
+              mountPath: /host/sys
+              readOnly: true
+            - name: journal-logs
+              mountPath: /var/log/journal
+              readOnly: true
+          resources:
+            {{- toYaml .Values.resources.vector | nindent 12 }}
+          securityContext:
+            privileged: true
+
+        # --- cwa-manager ---
+        - name: cwa-manager
+          image: "{{ .Values.cwaManager.image }}:{{ .Values.cwaManager.tag }}"
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: CMS_ENDPOINT
+              value: {{ .Values.cmsEndpoint | quote }}
+            - name: VECTOR_CONFIG_PATH
+              value: /etc/vector/vector.yaml
+            - name: DCGM_ENABLED
+              value: {{ .Values.dcgm.enabled | quote }}
+            - name: DCGM_PORT
+              value: {{ .Values.dcgm.port | quote }}
+            - name: DCGM_SCRAPE_INTERVAL
+              value: {{ .Values.dcgm.scrapeInterval | quote }}
+            - name: AMD_ENABLED
+              value: {{ .Values.amd.enabled | quote }}
+            - name: AMD_PORT
+              value: {{ .Values.amd.port | quote }}
+            - name: AMD_SCRAPE_INTERVAL
+              value: {{ .Values.amd.scrapeInterval | quote }}
+            - name: KSM_ENABLED
+              value: {{ .Values.ksm.enabled | quote }}
+            - name: KSM_PORT
+              value: {{ .Values.ksm.port | quote }}
+            - name: KSM_SCRAPE_INTERVAL
+              value: {{ .Values.ksm.scrapeInterval | quote }}
+            - name: SLURM_ENABLED
+              value: {{ .Values.slurm.enabled | quote }}
+            - name: SLURM_PORT
+              value: {{ .Values.slurm.port | quote }}
+            - name: SLURM_SCRAPE_INTERVAL
+              value: {{ .Values.slurm.scrapeInterval | quote }}
+            - name: CME_ENABLED
+              value: {{ .Values.cme.enabled | quote }}
+            - name: CME_PORT
+              value: {{ .Values.cme.port | quote }}
+            - name: CME_SCRAPE_INTERVAL
+              value: {{ .Values.cme.scrapeInterval | quote }}
+            - name: CUSTOM_METRICS_ENABLED
+              value: {{ .Values.customMetrics.enabled | quote }}
+            - name: CUSTOM_METRICS_DEFAULT_PORT
+              value: {{ .Values.customMetrics.defaultPort | quote }}
+            - name: CUSTOM_METRICS_DEFAULT_PATH
+              value: {{ .Values.customMetrics.defaultPath | quote }}
+            - name: CUSTOM_METRICS_DEFAULT_SCRAPE
+              value: {{ .Values.customMetrics.defaultScrape | quote }}
+            - name: LOGS_ENABLED
+              value: {{ .Values.logs.enabled | quote }}
+            {{- if .Values.proxy.enabled }}
+            - name: HTTP_PROXY
+              value: {{ .Values.proxy.http | quote }}
+            - name: HTTPS_PROXY
+              value: {{ .Values.proxy.https | quote }}
+            - name: NO_PROXY
+              value: {{ .Values.proxy.noProxy | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: vector-config
+              mountPath: /etc/vector
+            - name: host-sys
+              mountPath: /host/sys
+              readOnly: true
+          resources:
+            {{- toYaml .Values.resources.cwaManager | nindent 12 }}
+
+      volumes:
+        - name: vector-config
+          emptyDir: {}
+        - name: vector-data
+          hostPath:
+            path: /var/lib/vector
+            type: DirectoryOrCreate
+        - name: var-log
+          hostPath:
+            path: /var/log
+            type: Directory
+        - name: var-lib
+          hostPath:
+            path: /var/lib
+            type: Directory
+        - name: host-proc
+          hostPath:
+            path: /proc
+            type: Directory
+        - name: host-sys
+          hostPath:
+            path: /sys
+            type: Directory
+        - name: journal-logs
+          hostPath:
+            path: /var/log/journal
+            type: DirectoryOrCreate

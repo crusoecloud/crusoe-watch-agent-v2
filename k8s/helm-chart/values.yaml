@@ -1,0 +1,87 @@
+namespace: crusoe-system
+
+# Image pull secrets for private registries.
+imagePullSecrets: []
+# - name: gitlab-registry
+
+# CMS monitoring backend URL.
+cmsEndpoint: "https://cms-monitoring.crusoecloud.com"
+
+# Pre-existing secret containing CRUSOE_CLUSTER_ID and CRUSOE_PROJECT_ID.
+# Loaded via envFrom into the Vector container.
+existingSecret: crusoe-secrets
+
+# Monitoring token for CMS authentication (Bearer token).
+monitoringToken: ""  # required
+
+# Container images.
+vector:
+  image: timberio/vector
+  tag: "0.55.0-debian"
+
+cwaManager:
+  image: ghcr.io/crusoecloud/crusoe-watch-agent/cwa-manager
+  tag: latest
+
+# Resource requests/limits.
+resources:
+  vector:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  cwaManager:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Exporter toggles — override cwa-manager defaults via env vars.
+dcgm:
+  enabled: true
+  port: 9400
+  scrapeInterval: 30
+
+amd:
+  enabled: true
+  port: 5000
+  scrapeInterval: 60
+
+ksm:
+  enabled: true
+  port: 8080
+  scrapeInterval: 60
+
+slurm:
+  enabled: false
+  port: 6817
+  scrapeInterval: 60
+
+cme:
+  enabled: true
+  port: 9500
+  scrapeInterval: 60
+
+customMetrics:
+  enabled: true
+  defaultPort: 9100
+  defaultPath: "/metrics"
+  defaultScrape: 30
+
+logs:
+  enabled: true
+
+# Proxy settings (optional).
+proxy:
+  enabled: false
+  http: ""
+  https: ""
+  noProxy: ""
+
+# Tolerations — default runs on all nodes.
+tolerations:
+  - operator: Exists

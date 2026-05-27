@@ -1,0 +1,66 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "cwa.fullname" . }}
+  labels:
+    {{- include "cwa.labels" . | nindent 4 }}
+rules:
+  # cwa-manager needs to list/watch pods for dynamic Vector config.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch"]
+  # cwa-manager reads node labels (instance type, nodepool, vm_id, etc).
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "cwa.fullname" . }}
+  labels:
+    {{- include "cwa.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "cwa.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cwa.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: crusoe-monitoring
+  labels:
+    {{- include "cwa.labels" . | nindent 4 }}
+---
+# Role for reading custom-metrics ConfigMap in crusoe-monitoring namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "cwa.fullname" . }}-configmap-reader
+  namespace: crusoe-monitoring
+  labels:
+    {{- include "cwa.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "cwa.fullname" . }}-configmap-reader
+  namespace: crusoe-monitoring
+  labels:
+    {{- include "cwa.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "cwa.fullname" . }}-configmap-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cwa.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}
