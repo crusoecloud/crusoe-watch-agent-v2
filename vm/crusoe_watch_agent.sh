@@ -15,6 +15,7 @@ SECRETS_DIR="/etc/crusoe/secrets"
 ENV_FILE="${CONFIG_DIR}/.env"
 VECTOR_CONFIG="/etc/vector/vector.yaml"
 INSTALL_MODE_FILE="${CONFIG_DIR}/.install-mode"
+VECTOR_VERSION="0.55.0"
 
 # --- Configurable via flags ---
 GPU_TYPE=""
@@ -62,7 +63,7 @@ install_vector() {
     fi
     status "Installing Vector..."
     bash -c "$(curl -fsSL https://setup.vector.dev)"
-    apt-get install -y vector
+    apt-get install -y "vector=${VECTOR_VERSION}-1"
     # Disable the default Vector service — we manage our own unit.
     systemctl disable --now vector.service 2>/dev/null || true
 }
