@@ -7,12 +7,18 @@ imagePullSecrets: []
 # CMS monitoring backend URL.
 cmsEndpoint: "https://cms-monitoring.crusoecloud.com"
 
-# Pre-existing secret containing CRUSOE_CLUSTER_ID and CRUSOE_PROJECT_ID.
-# Loaded via envFrom into the Vector container.
+# Pre-existing secret containing CRUSOE_CLUSTER_ID, CRUSOE_PROJECT_ID,
+# and Crusoe API credentials (CRUSOE_ACCESS_KEY, CRUSOE_ACCESS_KEY_SECRET).
+# Loaded via envFrom into the Vector and token-creation Job containers.
 existingSecret: crusoe-secrets
 
-# Monitoring token for CMS authentication (Bearer token).
-monitoringToken: ""  # required
+# Token-creation Job — uses Crusoe CLI to create a monitoring token
+# and stores it in a Kubernetes secret.
+# TODO: manual IMDS endpoint to obtain a short-lived JWT; no manual monitoring token creation required
+tokenJob:
+  image: ghcr.io/crusoecloud/crusoe-watch-agent/token-job
+  tag: v0.2.12
+  ttlSecondsAfterFinished: 300
 
 # Container images.
 vector:
