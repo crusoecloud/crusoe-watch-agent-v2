@@ -44,9 +44,6 @@ del(.message)
 del(.timestamp)
 `
 
-// vrlParseInternalLogsK8s tags Vector's own logs. Same as VM mode.
-const vrlParseInternalLogsK8s = vrlParseInternalLogs
-
 // vrlEnrichLogsK8s is the K8s version: agent metadata + cluster ID + shared body.
 const vrlEnrichLogsK8s = `
 .agent = "crusoe-watch-agent"

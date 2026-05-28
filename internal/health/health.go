@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -55,22 +56,19 @@ func cryptoRandIntn(n int) int {
 	return int(val.Int64())
 }
 
+func getEnvOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+
+	return def
+}
+
 // NewCollector creates a health Collector.
 func NewCollector(logger *slog.Logger, installType pb.InstallType) *Collector {
-	vectorPort := os.Getenv("VECTOR_API_PORT")
-	if vectorPort == "" {
-		vectorPort = defaultVectorAPIPort
-	}
-
-	vectorMetricsPort := os.Getenv("VECTOR_METRICS_PORT")
-	if vectorMetricsPort == "" {
-		vectorMetricsPort = defaultVectorMetricsPort
-	}
-
-	updaterPort := os.Getenv("CWA_UPDATER_PORT")
-	if updaterPort == "" {
-		updaterPort = defaultCwaUpdaterPort
-	}
+	vectorPort := getEnvOrDefault("VECTOR_API_PORT", defaultVectorAPIPort)
+	vectorMetricsPort := getEnvOrDefault("VECTOR_METRICS_PORT", defaultVectorMetricsPort)
+	updaterPort := getEnvOrDefault("CWA_UPDATER_PORT", defaultCwaUpdaterPort)
 
 	return &Collector{
 		client:            &http.Client{Timeout: httpTimeout},
@@ -133,16 +131,24 @@ func (c *Collector) collectVector(ctx context.Context) *pb.VectorHealth {
 	return health
 }
 
-// checkVectorHealth calls Vector's /health endpoint to determine status.
-func (c *Collector) checkVectorHealth(ctx context.Context) pb.ComponentStatus {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.vectorHealthURL, nil)
+// httpGet performs a GET request and returns the response.
+func (c *Collector) httpGet(ctx context.Context, url string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		c.logger.Debug("vector health request creation failed", "error", err)
-
-		return pb.ComponentStatus_COMPONENT_STATUS_UNKNOWN
+		return nil, fmt.Errorf("creating request: %w", err)
 	}
 
 	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("executing request: %w", err)
+	}
+
+	return resp, nil
+}
+
+// checkVectorHealth calls Vector's /health endpoint to determine status.
+func (c *Collector) checkVectorHealth(ctx context.Context) pb.ComponentStatus {
+	resp, err := c.httpGet(ctx, c.vectorHealthURL)
 	if err != nil {
 		c.logger.Debug("vector health check failed", "error", err)
 
@@ -163,14 +169,7 @@ func (c *Collector) checkVectorHealth(ctx context.Context) pb.ComponentStatus {
 // component_errors_total metric and returns the sum across all components.
 // The bool return indicates whether the scrape succeeded.
 func (c *Collector) queryVectorErrorCount(ctx context.Context) (int64, bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.vectorMetricsURL, nil)
-	if err != nil {
-		c.logger.Debug("vector metrics request creation failed", "error", err)
-
-		return 0, false
-	}
-
-	resp, err := c.client.Do(req)
+	resp, err := c.httpGet(ctx, c.vectorMetricsURL)
 	if err != nil {
 		c.logger.Debug("vector metrics request failed", "error", err)
 
@@ -213,16 +212,7 @@ func (c *Collector) queryVectorErrorCount(ctx context.Context) (int64, bool) {
 }
 
 func (c *Collector) collectCwaUpdater(ctx context.Context) *pb.CwaUpdaterHealth {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.updaterHealthURL, nil)
-	if err != nil {
-		c.logger.Debug("cwa-updater health request creation failed", "error", err)
-
-		return &pb.CwaUpdaterHealth{
-			Status: pb.ComponentStatus_COMPONENT_STATUS_UNKNOWN,
-		}
-	}
-
-	resp, err := c.client.Do(req)
+	resp, err := c.httpGet(ctx, c.updaterHealthURL)
 	if err != nil {
 		c.logger.Debug("cwa-updater health check failed", "error", err)
 

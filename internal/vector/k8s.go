@@ -1,4 +1,4 @@
-// Package vector generates Vector configuration YAML for K8s.
+// K8s-specific Vector config generation.
 package vector
 
 import (
@@ -123,7 +123,6 @@ const (
 	scrapeTimeoutPct       = 0.7
 	scrapeIntervalMinK8s   = 5
 	defaultCustomScrapeInt = 30
-	k8sScrapeIntervalSecs  = 60
 
 	dcgmSourceName           = "dcgm_exporter_scrape"
 	amdSourceName            = "amd_exporter_scrape"
@@ -184,48 +183,16 @@ func GenerateK8s(pods []ClassifiedPod, cmData map[string]string, cfg K8sConfig) 
 
 func buildStaticConfig(sources, transforms, sinks map[string]any, cfg K8sConfig) {
 	// Host metrics pipeline
-	sources["host_metrics"] = map[string]any{
-		"type":       "host_metrics",
-		"collectors": []string{"cpu", "disk", "host", "memory", "network", "process"},
-		"network": map[string]any{
-			"devices": map[string]any{
-				"excludes": []string{"lo*"},
-				"includes": []string{"ens*"},
-			},
-		},
-		"process": map[string]any{
-			"processes": map[string]any{
-				"includes": []string{"vector"},
-			},
-		},
-		"scrape_interval_secs": k8sScrapeIntervalSecs,
-	}
-	transforms[nodeMetricsTransformName] = map[string]any{
-		"type":   "remap",
-		"inputs": []string{"host_metrics"},
-		"source": buildNodeMetricsTransformVRL(cfg.NodeLabels),
-	}
+	sources["host_metrics"] = hostMetricsSource()
+	transforms[nodeMetricsTransformName] = remapTransform(
+		[]string{"host_metrics"}, buildNodeMetricsTransformVRL(cfg.NodeLabels),
+	)
 
 	// Internal metrics pipeline
-	sources["internal_metrics"] = map[string]any{
-		"type":                 "internal_metrics",
-		"scrape_interval_secs": k8sScrapeIntervalSecs,
-	}
-	transforms["filter_internal_metrics"] = map[string]any{
-		"type":      "filter",
-		"inputs":    []string{"internal_metrics"},
-		"condition": vrlFilterInternalMetrics,
-	}
-	transforms["add_internal_labels"] = map[string]any{
-		"type":   "remap",
-		"inputs": []string{"filter_internal_metrics"},
-		"source": vrlAddInternalLabelsK8s,
-	}
-	sinks["internal_metrics_exporter"] = map[string]any{
-		"type":    "prometheus_exporter",
-		"inputs":  []string{"internal_metrics"},
-		"address": "127.0.0.1:9598",
-	}
+	sources["internal_metrics"] = internalMetricsSource()
+	transforms["filter_internal_metrics"] = filterTransform([]string{"internal_metrics"}, vrlFilterInternalMetrics)
+	transforms["add_internal_labels"] = remapTransform([]string{"filter_internal_metrics"}, vrlAddInternalLabelsK8s)
+	sinks["internal_metrics_exporter"] = internalMetricsExporterSink()
 
 	// Node metrics sink
 	nodeMetricsSink := buildPromRemoteWriteSink(
@@ -344,14 +311,7 @@ func applyAMD(sources, transforms map[string]any, podIP string, cfg K8sConfig) {
 		"scrape_interval_secs": cfg.AMD.ScrapeInterval,
 		"scrape_timeout_secs":  int(float64(cfg.AMD.ScrapeInterval) * scrapeTimeoutPct),
 	}
-	transforms[amdFilterTransformName] = map[string]any{
-		"type":   "filter",
-		"inputs": []string{amdSourceName},
-		"condition": map[string]any{
-			"type":   "vrl",
-			"source": vrlAmdAllowlistFilter,
-		},
-	}
+	transforms[amdFilterTransformName] = filterTransform([]string{amdSourceName}, vrlAmdAllowlistFilter)
 	wireIntoTransform(transforms, nodeMetricsTransformName, amdFilterTransformName)
 }
 
@@ -507,29 +467,10 @@ func applyLogs(sources, transforms, sinks map[string]any, cfg K8sConfig) {
 		"type": "internal_logs",
 	}
 
-	transforms["filter_journald_noise"] = map[string]any{
-		"type":   "filter",
-		"inputs": []string{"journald_logs"},
-		"condition": map[string]any{
-			"type":   "vrl",
-			"source": vrlFilterJournaldNoise,
-		},
-	}
-	transforms["parse_journald_logs"] = map[string]any{
-		"type":   "remap",
-		"inputs": []string{"filter_journald_noise"},
-		"source": vrlParseJournaldLogsK8s,
-	}
-	transforms["parse_internal_logs"] = map[string]any{
-		"type":   "remap",
-		"inputs": []string{"vector_internal_logs"},
-		"source": vrlParseInternalLogsK8s,
-	}
-	transforms["enrich_logs"] = map[string]any{
-		"type":   "remap",
-		"inputs": []string{"parse_journald_logs", "parse_internal_logs"},
-		"source": vrlEnrichLogsK8s,
-	}
+	transforms["filter_journald_noise"] = filterTransform([]string{"journald_logs"}, vrlFilterJournaldNoise)
+	transforms["parse_journald_logs"] = remapTransform([]string{"filter_journald_noise"}, vrlParseJournaldLogsK8s)
+	transforms["parse_internal_logs"] = remapTransform([]string{"vector_internal_logs"}, vrlParseInternalLogs)
+	transforms["enrich_logs"] = remapTransform([]string{"parse_journald_logs", "parse_internal_logs"}, vrlEnrichLogsK8s)
 
 	sinkConfig := map[string]any{
 		"type":        "http",
@@ -578,7 +519,7 @@ func buildPromRemoteWriteSink(endpoint, tenantID string, proxy ProxyConfig, with
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// K8s-only helpers
 // ---------------------------------------------------------------------------
 
 func copyMap(src map[string]any) map[string]any {
@@ -588,23 +529,6 @@ func copyMap(src map[string]any) map[string]any {
 	}
 
 	return dst
-}
-
-func wireIntoTransform(transforms map[string]any, transformName, inputName string) {
-	transform, exists := transforms[transformName].(map[string]any)
-	if !exists {
-		return
-	}
-	var inputs []string
-	if existing, ok := transform["inputs"].([]string); ok {
-		inputs = existing
-	}
-	for _, name := range inputs {
-		if name == inputName {
-			return
-		}
-	}
-	transform["inputs"] = append(inputs, inputName)
 }
 
 func toStringSlice(val any) ([]string, bool) {

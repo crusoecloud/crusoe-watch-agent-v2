@@ -81,7 +81,17 @@ func (w *Watcher) Run(ctx context.Context) error {
 	w.logger.Info("watcher starting", "node", w.cfg.NodeName)
 
 	// Preserve existing config on disk as baseline so Vector can start before we reach the K8s API.
+	// If no config exists yet, write a fallback with static components.
 	hasExisting := w.loadExistingConfigHash()
+	if !hasExisting {
+		if err := w.writeBaseConfig(); err != nil {
+			return fmt.Errorf("writing fallback vector config: %w", err)
+		}
+
+		w.logger.Info("fallback vector config written", "path", w.cfg.ConfigPath)
+	} else {
+		w.logger.Info("using existing vector config as baseline", "path", w.cfg.ConfigPath)
+	}
 
 	// Read node labels to populate K8sConfig.
 	nodeLabels, err := ReadNodeLabels(ctx, w.client, w.cfg.NodeName)
@@ -94,17 +104,6 @@ func (w *Watcher) Run(ctx context.Context) error {
 		"vm_id", nodeLabels.VMID,
 		"nodepool_id", nodeLabels.NodepoolID,
 	)
-
-	// Only write base config if no previous config exists on disk.
-	if !hasExisting {
-		if err := w.writeBaseConfig(); err != nil {
-			return fmt.Errorf("writing base vector config: %w", err)
-		}
-
-		w.logger.Info("base vector config written", "path", w.cfg.ConfigPath)
-	} else {
-		w.logger.Info("using existing vector config as baseline", "path", w.cfg.ConfigPath)
-	}
 
 	// Create and start informers.
 	w.setupInformers()
