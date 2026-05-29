@@ -37,11 +37,14 @@ func GenerateVMBase() map[string]any {
 	sources["internal_metrics"] = internalMetricsSource()
 	sources["journald_logs"] = journaldSource()
 	sources["vector_internal_logs"] = map[string]any{"type": "internal_logs"}
+	sources["cwa_manager_logs"] = cwaManagerLogsSource()
 
 	// Log transforms
 	transforms["parse_journald_logs"] = remapTransform([]string{"journald_logs"}, vrlParseJournaldLogs)
 	transforms["parse_internal_logs"] = remapTransform([]string{"vector_internal_logs"}, vrlParseInternalLogs)
-	transforms["enrich_logs"] = remapTransform([]string{"parse_journald_logs", "parse_internal_logs"}, vrlEnrichLogs)
+	transforms["parse_cwa_manager_logs"] = remapTransform([]string{"cwa_manager_logs"}, vrlParseCwaManagerLogs)
+	transforms["enrich_logs"] = remapTransform(
+		[]string{"parse_journald_logs", "parse_internal_logs", "parse_cwa_manager_logs"}, vrlEnrichLogs)
 
 	// Metrics transforms (add_update_labels starts with host_metrics only; ApplyVM wires GPU)
 	transforms["add_update_labels"] = remapTransform([]string{"host_metrics"}, vrlAddUpdateLabels)
@@ -110,6 +113,18 @@ func journaldSource() map[string]any {
 		"exclude_units": []string{
 			"crusoe-watch-agent.service",
 			"crusoe-watch-agent-native.service",
+			"cwa-manager.service",
+		},
+	}
+}
+
+func cwaManagerLogsSource() map[string]any {
+	return map[string]any{
+		"type":              "journald",
+		"journal_directory": "/var/log/journal",
+		"since_now":         true,
+		"include_units": []string{
+			"cwa-manager.service",
 		},
 	}
 }

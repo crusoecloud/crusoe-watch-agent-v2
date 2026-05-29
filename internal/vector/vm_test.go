@@ -41,6 +41,7 @@ func TestGenerateVM_CPUOnly(t *testing.T) {
 	assert.Contains(t, src, "internal_metrics")
 	assert.Contains(t, src, "journald_logs")
 	assert.Contains(t, src, "vector_internal_logs")
+	assert.Contains(t, src, "cwa_manager_logs")
 	assert.NotContains(t, src, "dcgm_metrics")
 	assert.NotContains(t, src, "amd_metrics")
 	assert.NotContains(t, src, "crusoe_infra_metrics")
@@ -142,6 +143,7 @@ func TestGenerateVM_CommonTransformsPresent(t *testing.T) {
 	for _, name := range []string{
 		"parse_journald_logs",
 		"parse_internal_logs",
+		"parse_cwa_manager_logs",
 		"enrich_logs",
 		"add_update_labels",
 		"filter_internal_metrics",
@@ -206,6 +208,26 @@ func TestGenerateVM_JournaldExcludesAgentUnits(t *testing.T) {
 	units := journald["exclude_units"].([]any)
 	assert.Contains(t, units, "crusoe-watch-agent.service")
 	assert.Contains(t, units, "crusoe-watch-agent-native.service")
+	assert.Contains(t, units, "cwa-manager.service")
+}
+
+func TestGenerateVM_CwaManagerLogs(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{GPUType: GPUNone})
+	src := sources(cfg)
+
+	// Dedicated cwa-manager journald source exists.
+	cwaLogs := src["cwa_manager_logs"].(map[string]any)
+	assert.Equal(t, "journald", cwaLogs["type"])
+	includeUnits := cwaLogs["include_units"].([]any)
+	assert.Contains(t, includeUnits, "cwa-manager.service")
+
+	// Transform is wired into enrich_logs.
+	xf := transforms(cfg)
+	parseCwa := xf["parse_cwa_manager_logs"].(map[string]any)
+	assert.Equal(t, []any{"cwa_manager_logs"}, parseCwa["inputs"].([]any))
+
+	enrichInputs := xf["enrich_logs"].(map[string]any)["inputs"].([]any)
+	assert.Contains(t, enrichInputs, "parse_cwa_manager_logs")
 }
 
 func TestGenerateVM_HostMetricsCollectors(t *testing.T) {

@@ -313,17 +313,24 @@ func TestApplyLogs(t *testing.T) {
 	sources := getSources(cfg)
 	assert.Contains(t, sources, "journald_logs")
 	assert.Contains(t, sources, "vector_internal_logs")
+	assert.Contains(t, sources, "cwa_manager_logs")
+
+	// cwa-manager logs read from container log files.
+	cwaLogs := sources["cwa_manager_logs"].(map[string]any)
+	assert.Equal(t, "file", cwaLogs["type"])
 
 	transforms := getTransforms(cfg)
 	assert.Contains(t, transforms, "filter_journald_noise")
 	assert.Contains(t, transforms, "parse_journald_logs")
 	assert.Contains(t, transforms, "parse_internal_logs")
+	assert.Contains(t, transforms, "parse_cwa_manager_logs")
 	assert.Contains(t, transforms, "enrich_logs")
 
-	// Enrich logs converges two parsers (journald + internal).
+	// Enrich logs converges three parsers (journald + internal + cwa-manager).
 	enrich := transforms["enrich_logs"].(map[string]any)
 	inputs := enrich["inputs"].([]any)
-	assert.Len(t, inputs, 2)
+	assert.Len(t, inputs, 3)
+	assert.Contains(t, inputs, "parse_cwa_manager_logs")
 
 	sinks := getSinks(cfg)
 	assert.Contains(t, sinks, "crusoe_ingest")

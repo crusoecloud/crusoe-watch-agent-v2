@@ -44,6 +44,25 @@ del(.message)
 del(.timestamp)
 `
 
+// vrlParseCwaManagerLogsK8s is the K8s version: unwraps CRI log format, then
+// applies the shared logfmt parser body.
+const vrlParseCwaManagerLogsK8s = `
+.log_source = "cwa-manager"
+
+msg = string(.message) ?? ""
+log_line = msg
+
+# Unwrap CRI log format: <timestamp> <stream> <tag> <log_line>
+parsed_cri = parse_regex(msg, r'^(?P<cri_time>\S+) (?P<stream>\S+) \S+ (?P<log>.*)$') ?? null
+if parsed_cri != null {
+    cri_time, ts_err = parse_timestamp(string!(parsed_cri.cri_time), format: "%+")
+    if ts_err == null {
+        ._time = cri_time
+    }
+    log_line = string!(parsed_cri.log)
+}
+` + vrlParseCwaManagerBody
+
 // vrlEnrichLogsK8s is the K8s version: agent metadata + cluster ID + shared body.
 const vrlEnrichLogsK8s = `
 .agent = "crusoe-watch-agent"
