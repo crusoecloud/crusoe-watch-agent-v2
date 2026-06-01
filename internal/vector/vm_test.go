@@ -66,7 +66,7 @@ func TestGenerateVM_NvidiaGPU(t *testing.T) {
 	assert.Equal(t, "prometheus_scrape", dcgm["type"])
 
 	endpoints := dcgm["endpoints"].([]any)
-	assert.Contains(t, endpoints, "http://localhost:9400/metrics")
+	assert.Contains(t, endpoints, "http://localhost:${DCGM_EXPORTER_PORT:-9400}/metrics")
 
 	xf := transforms(cfg)
 	labelInputs := xf["add_update_labels"].(map[string]any)["inputs"].([]any)
@@ -83,7 +83,7 @@ func TestGenerateVM_AMDGPU(t *testing.T) {
 
 	amd := src["amd_metrics"].(map[string]any)
 	endpoints := amd["endpoints"].([]any)
-	assert.Contains(t, endpoints, "http://localhost:${AMD_EXPORTER_PORT}/metrics")
+	assert.Contains(t, endpoints, "http://localhost:${AMD_EXPORTER_PORT:-5000}/metrics")
 
 	xf := transforms(cfg)
 	assert.Contains(t, xf, "amd_allowed_filter")

@@ -1,0 +1,21 @@
+services:
+  crusoe-metrics-exporter:
+    image: ghcr.io/crusoecloud/crusoe-metrics-exporter/crusoe-metrics-exporter:${CRUSOE_METRICS_EXPORTER_IMAGE_VERSION}
+    container_name: crusoe-metrics-exporter
+    pid: "host"
+    hostname: crusoe-metrics-exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    env_file:
+      - /etc/crusoe/crusoe_watch_agent/.env
+      - /etc/crusoe/secrets/.monitoring-token
+    environment:
+      - PORT=${CRUSOE_METRICS_EXPORTER_PORT:-9500}
+      - DISKSTATS_PATH=/proc/diskstats
+      - MOUNTSTATS_PATH=/proc/self/mountstats
+      - OBJSTORE_ENDPOINT_FQDN=${OBJSTORE_ENDPOINT_FQDN:-}
+    ports:
+      - "${CRUSOE_METRICS_EXPORTER_PORT:-9500}:${CRUSOE_METRICS_EXPORTER_PORT:-9500}"
+    privileged: true
+    restart: always

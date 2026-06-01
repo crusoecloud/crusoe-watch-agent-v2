@@ -13,7 +13,7 @@ type GPUType int
 
 const (
 	GPUNone   GPUType = iota // CPU-only VM
-	GPUNvidia                // NVIDIA GPU — scrapes DCGM exporter on port 9400
+	GPUNvidia                // NVIDIA GPU — scrapes DCGM exporter on ${DCGM_EXPORTER_PORT}
 	GPUAMD                   // AMD GPU — scrapes AMD exporter on ${AMD_EXPORTER_PORT}
 )
 
@@ -68,10 +68,10 @@ func ApplyVM(baseCfg map[string]any, cfg VMConfig) {
 
 	switch cfg.GPUType {
 	case GPUNvidia:
-		sources["dcgm_metrics"] = prometheusScrapeSource("http://localhost:9400/metrics")
+		sources["dcgm_metrics"] = prometheusScrapeSource("http://localhost:${DCGM_EXPORTER_PORT:-9400}/metrics")
 		wireIntoTransform(transforms, "add_update_labels", "dcgm_metrics")
 	case GPUAMD:
-		sources["amd_metrics"] = prometheusScrapeSource("http://localhost:${AMD_EXPORTER_PORT}/metrics")
+		sources["amd_metrics"] = prometheusScrapeSource("http://localhost:${AMD_EXPORTER_PORT:-5000}/metrics")
 		transforms["amd_allowed_filter"] = filterTransform([]string{"amd_metrics"}, vrlAmdAllowlistFilter)
 		wireIntoTransform(transforms, "add_update_labels", "amd_allowed_filter")
 	case GPUNone:
@@ -79,7 +79,8 @@ func ApplyVM(baseCfg map[string]any, cfg VMConfig) {
 	}
 
 	if cfg.EnableCME {
-		sources["crusoe_infra_metrics"] = prometheusScrapeSource("http://localhost:9500/metrics")
+		sources["crusoe_infra_metrics"] = prometheusScrapeSource(
+			"http://localhost:${CRUSOE_METRICS_EXPORTER_PORT:-9500}/metrics")
 		transforms["enrich_crusoe_infra_metrics"] = remapTransform(
 			[]string{"crusoe_infra_metrics"}, vrlEnrichCMEMetrics,
 		)

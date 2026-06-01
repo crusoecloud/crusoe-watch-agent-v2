@@ -1,0 +1,16 @@
+[Unit]
+Description=AMD GPU Metrics Exporter
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/crusoe/crusoe_watch_agent/.env
+WorkingDirectory=/etc/crusoe/crusoe_watch_agent
+ExecStart=/usr/bin/docker compose -f /etc/crusoe/crusoe_watch_agent/docker-compose-amd-exporter.yaml up
+ExecStop=/usr/bin/docker compose -f /etc/crusoe/crusoe_watch_agent/docker-compose-amd-exporter.yaml down
+TimeoutStartSec=0
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+[Unit]
+Description=NVIDIA DCGM Exporter for GPU metrics
+After=network-online.target docker.service nvidia-dcgm.service
+Wants=network-online.target nvidia-dcgm.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/crusoe/crusoe_watch_agent/.env
+WorkingDirectory=/etc/crusoe/crusoe_watch_agent
+ExecStart=@@EXEC_START@@
+ExecStop=@@EXEC_STOP@@
+TimeoutStartSec=0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

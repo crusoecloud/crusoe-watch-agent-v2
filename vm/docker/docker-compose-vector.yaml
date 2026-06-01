@@ -1,0 +1,21 @@
+services:
+  crusoe-vector:
+    image: timberio/vector:${VECTOR_IMAGE_VERSION}
+    container_name: crusoe-vector
+    hostname: crusoe-vector
+    volumes:
+      - /etc/vector:/etc/vector:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /var/lib/vector:/var/lib/vector
+    env_file:
+      - /etc/crusoe/crusoe_watch_agent/.env
+      - /etc/crusoe/secrets/.monitoring-token
+    environment:
+      - PROCFS_ROOT=/host/proc
+      - SYSFS_ROOT=/host/sys
+    privileged: true
+    entrypoint: /bin/sh -c "sleep 5 && /usr/bin/vector --config /etc/vector/vector.yaml --watch-config"
+    network_mode: host
+    restart: always

@@ -1,0 +1,18 @@
+[Unit]
+Description=CWA Manager - Crusoe Watch Agent management process
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/crusoe/crusoe_watch_agent/.env
+EnvironmentFile=/etc/crusoe/secrets/.monitoring-token
+WorkingDirectory=/etc/crusoe/crusoe_watch_agent
+ExecStart=@@EXEC_START@@
+ExecStop=@@EXEC_STOP@@
+TimeoutStartSec=0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

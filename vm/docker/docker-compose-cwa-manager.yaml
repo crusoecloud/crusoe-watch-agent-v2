@@ -1,0 +1,13 @@
+services:
+  cwa-manager:
+    image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/cwa-manager:${AGENT_VERSION}
+    container_name: cwa-manager
+    hostname: cwa-manager
+    volumes:
+      - /sys/class/dmi/id:/sys/class/dmi/id:ro
+      - /etc/crusoe:/etc/crusoe
+    env_file:
+      - /etc/crusoe/crusoe_watch_agent/.env
+      - /etc/crusoe/secrets/.monitoring-token
+    network_mode: host
+    restart: always
