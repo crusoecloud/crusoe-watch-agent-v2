@@ -18,9 +18,9 @@ import (
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/health"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/heartbeat"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/identity"
-	pb "gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/proto/gen"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
+	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
 var errUnknownGPUType = errors.New("unknown GPU type (use none, nvidia, amd)")
@@ -87,7 +87,7 @@ func runAgent(coordAddr string) error {
 	)
 
 	// In K8s mode, start the Vector config watcher (pod + ConfigMap informers).
-	if ident.InstallType == pb.InstallType_INSTALL_TYPE_KUBERNETES {
+	if ident.InstallType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
 		startK8sWatcher(ctx, logger)
 	}
 

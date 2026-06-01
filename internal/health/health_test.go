@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	pb "gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/proto/gen"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
+	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
 func newTestCollector(vectorHealthURL, vectorMetricsURL, updaterURL string, isK8s bool) *Collector {
@@ -33,7 +33,7 @@ func TestNewCollector_EnvOverrides(t *testing.T) {
 	t.Setenv("VECTOR_METRICS_PORT", "2222")
 	t.Setenv("CWA_UPDATER_PORT", "3333")
 
-	c := NewCollector(slog.Default(), pb.InstallType_INSTALL_TYPE_DOCKER)
+	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER)
 
 	assert.Equal(t, "http://localhost:1111/health", c.vectorHealthURL)
 	assert.Equal(t, "http://localhost:2222/metrics", c.vectorMetricsURL)
@@ -42,7 +42,7 @@ func TestNewCollector_EnvOverrides(t *testing.T) {
 }
 
 func TestNewCollector_K8sDetection(t *testing.T) {
-	c := NewCollector(slog.Default(), pb.InstallType_INSTALL_TYPE_KUBERNETES)
+	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES)
 	assert.True(t, c.isK8s)
 }
 
@@ -51,7 +51,7 @@ func TestNewCollector_Defaults(t *testing.T) {
 	t.Setenv("VECTOR_METRICS_PORT", "")
 	t.Setenv("CWA_UPDATER_PORT", "")
 
-	c := NewCollector(slog.Default(), pb.InstallType_INSTALL_TYPE_DOCKER)
+	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER)
 
 	assert.Equal(t, "http://localhost:8686/health", c.vectorHealthURL)
 	assert.Equal(t, "http://localhost:9598/metrics", c.vectorMetricsURL)
@@ -62,7 +62,7 @@ func TestCollectCwaManager(t *testing.T) {
 	c := newTestCollector("", "", "", false)
 	h := c.collectCwaManager()
 
-	assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_HEALTHY, h.GetStatus())
+	assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY, h.GetStatus())
 	assert.Equal(t, version.Version, h.GetVersion())
 }
 
@@ -84,7 +84,7 @@ func TestCollectVector(t *testing.T) {
 		c := newTestCollector(healthSrv.URL, metricsSrv.URL, "", false)
 		h := c.collectVector(context.Background())
 
-		assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_HEALTHY, h.GetStatus())
+		assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY, h.GetStatus())
 		assert.Equal(t, version.Version, h.GetVersion())
 		assert.Equal(t, int64(5), h.GetErrorCount())
 		require.NotNil(t, h.GetLastScrapeSuccess())
@@ -104,7 +104,7 @@ func TestCollectVector(t *testing.T) {
 		c := newTestCollector(healthSrv.URL, metricsSrv.URL, "", false)
 		h := c.collectVector(context.Background())
 
-		assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_UNHEALTHY, h.GetStatus())
+		assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNHEALTHY, h.GetStatus())
 		assert.Equal(t, int64(7), h.GetErrorCount())
 	})
 }
@@ -113,7 +113,7 @@ func TestCollectVector_ConnectionError(t *testing.T) {
 	c := newTestCollector("http://localhost:1", "http://localhost:1", "", false)
 	h := c.collectVector(context.Background())
 
-	assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_UNKNOWN, h.GetStatus())
+	assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNKNOWN, h.GetStatus())
 	assert.Equal(t, int64(-1), h.GetErrorCount())
 	assert.Nil(t, h.GetLastScrapeSuccess())
 }
@@ -126,7 +126,7 @@ func TestCheckVectorHealth(t *testing.T) {
 		defer srv.Close()
 
 		c := newTestCollector(srv.URL, "", "", false)
-		assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_HEALTHY, c.checkVectorHealth(context.Background()))
+		assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY, c.checkVectorHealth(context.Background()))
 	})
 
 	t.Run("unhealthy on 503", func(t *testing.T) {
@@ -136,12 +136,12 @@ func TestCheckVectorHealth(t *testing.T) {
 		defer srv.Close()
 
 		c := newTestCollector(srv.URL, "", "", false)
-		assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_UNHEALTHY, c.checkVectorHealth(context.Background()))
+		assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNHEALTHY, c.checkVectorHealth(context.Background()))
 	})
 
 	t.Run("unknown on connection error", func(t *testing.T) {
 		c := newTestCollector("http://localhost:1", "", "", false)
-		assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_UNKNOWN, c.checkVectorHealth(context.Background()))
+		assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNKNOWN, c.checkVectorHealth(context.Background()))
 	})
 }
 
@@ -154,7 +154,7 @@ func TestCollectVector_HealthUpMetricsDown(t *testing.T) {
 	c := newTestCollector(healthSrv.URL, "http://localhost:1", "", false)
 	h := c.collectVector(context.Background())
 
-	assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_HEALTHY, h.GetStatus())
+	assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY, h.GetStatus())
 	assert.Equal(t, int64(-1), h.GetErrorCount(), "error count should be -1 when metrics unreachable")
 	assert.Nil(t, h.GetLastScrapeSuccess(), "last_scrape_success should be nil when metrics unreachable")
 	assert.Equal(t, version.Version, h.GetVersion(), "version should always be set")
@@ -277,7 +277,7 @@ func TestCollectCwaUpdater_InvalidJSON(t *testing.T) {
 	c := newTestCollector("", "", srv.URL, false)
 	h := c.collectCwaUpdater(context.Background())
 
-	assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_HEALTHY, h.GetStatus())
+	assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY, h.GetStatus())
 	assert.Empty(t, h.GetVersion(), "version should be empty when JSON decode fails")
 	require.NotNil(t, h.GetLastSeen())
 }
@@ -286,7 +286,7 @@ func TestCollectCwaUpdater(t *testing.T) {
 	tests := []struct {
 		name           string
 		handler        http.HandlerFunc
-		expectedStatus pb.ComponentStatus
+		expectedStatus pb.CwaComponentStatus
 		checkVersion   string
 		checkLastSeen  bool
 	}{
@@ -296,7 +296,7 @@ func TestCollectCwaUpdater(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(updaterHealthResponse{Version: "1.2.3"})
 			},
-			expectedStatus: pb.ComponentStatus_COMPONENT_STATUS_HEALTHY,
+			expectedStatus: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY,
 			checkVersion:   "1.2.3",
 			checkLastSeen:  true,
 		},
@@ -305,7 +305,7 @@ func TestCollectCwaUpdater(t *testing.T) {
 			handler: func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
 			},
-			expectedStatus: pb.ComponentStatus_COMPONENT_STATUS_UNHEALTHY,
+			expectedStatus: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNHEALTHY,
 			checkLastSeen:  true,
 		},
 	}
@@ -335,7 +335,7 @@ func TestCollectCwaUpdater_ConnectionError(t *testing.T) {
 	c := newTestCollector("", "", "http://localhost:1", false)
 	h := c.collectCwaUpdater(context.Background())
 
-	assert.Equal(t, pb.ComponentStatus_COMPONENT_STATUS_UNKNOWN, h.GetStatus())
+	assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNKNOWN, h.GetStatus())
 }
 
 func TestCollectCwaUpdaterThrottled_VMPollsEveryTick(t *testing.T) {

@@ -15,8 +15,8 @@ import (
 
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/health"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/identity"
-	pb "gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/proto/gen"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
+	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
 const (
@@ -27,12 +27,12 @@ const (
 type Loop struct {
 	identity *identity.Identity
 	health   *health.Collector
-	client   pb.AgentServiceClient
+	client   pb.CwaAgentClient
 	logger   *slog.Logger
 	mu       sync.Mutex
 	// pendingResults holds command results that are re-sent on every heartbeat
 	// until the coordinator stops echoing the corresponding command.
-	pendingResults map[string]*pb.CommandResult
+	pendingResults map[string]*pb.CwaCommandResult
 }
 
 // NewLoop creates a heartbeat Loop.
@@ -40,14 +40,14 @@ func NewLoop(id *identity.Identity, hc *health.Collector, conn grpc.ClientConnIn
 	return &Loop{
 		identity: id,
 		health:   hc,
-		client:   pb.NewAgentServiceClient(conn),
+		client:   pb.NewCwaAgentClient(conn),
 		logger:   logger,
 	}
 }
 
-// Register calls the Register RPC to obtain an agent_id.
+// Register calls the RegisterCwaAgent RPC to obtain an agent_id.
 func (l *Loop) Register(ctx context.Context) (string, error) {
-	resp, err := l.client.Register(ctx, &pb.RegisterRequest{
+	resp, err := l.client.RegisterCwaAgent(ctx, &pb.RegisterCwaAgentRequest{
 		VmId:           l.identity.VMID,
 		InstallType:    l.identity.InstallType,
 		Version:        version.Version,
@@ -60,13 +60,13 @@ func (l *Loop) Register(ctx context.Context) (string, error) {
 	return resp.GetAgentId(), nil
 }
 
-// Run opens the HeartbeatStream and sends heartbeats every 30 seconds.
+// Run opens the heartbeat stream and sends heartbeats every 30 seconds.
 // It blocks until ctx is cancelled or the stream errors out.
 func (l *Loop) Run(ctx context.Context) error {
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	defer streamCancel()
 
-	stream, err := l.client.HeartbeatStream(streamCtx)
+	stream, err := l.client.CwaAgentHeartbeat(streamCtx)
 	if err != nil {
 		return fmt.Errorf("opening heartbeat stream: %w", err)
 	}
@@ -108,9 +108,9 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 }
 
-func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.AgentService_HeartbeatStreamClient) error {
+func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHeartbeatClient) error {
 	l.mu.Lock()
-	results := make([]*pb.CommandResult, 0, len(l.pendingResults))
+	results := make([]*pb.CwaCommandResult, 0, len(l.pendingResults))
 	for _, r := range l.pendingResults {
 		results = append(results, r)
 	}
@@ -118,7 +118,7 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.AgentService_Heartbe
 
 	components := l.health.Collect(ctx)
 
-	req := &pb.HeartbeatRequest{
+	req := &pb.CwaAgentHeartbeatRequest{
 		AgentId:           l.identity.AgentID,
 		InstallType:       l.identity.InstallType,
 		CapabilityList:    []string{"heartbeat"}, // TODO: dynamic CapabilityList
@@ -137,7 +137,7 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.AgentService_Heartbe
 	return nil
 }
 
-func (l *Loop) receiveLoop(stream pb.AgentService_HeartbeatStreamClient) error {
+func (l *Loop) receiveLoop(stream pb.CwaAgent_CwaAgentHeartbeatClient) error {
 	for {
 		resp, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -184,33 +184,33 @@ func (l *Loop) receiveLoop(stream pb.AgentService_HeartbeatStreamClient) error {
 	}
 }
 
-// TODO: Set AGENT_STATUS_UPGRADE_IN_PROGRESS when upgrade dispatch is implemented.
-func deriveAgentStatus(c *pb.ComponentsHealth) pb.AgentStatus {
-	healthy := pb.ComponentStatus_COMPONENT_STATUS_HEALTHY
+// TODO: Set CWA_AGENT_STATUS_UPGRADE_IN_PROGRESS when upgrade dispatch is implemented.
+func deriveAgentStatus(c *pb.CwaComponentsHealth) pb.CwaAgentStatus {
+	healthy := pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY
 
 	if c.GetCwaManager().GetStatus() == healthy &&
 		c.GetVector().GetStatus() == healthy &&
 		c.GetCwaUpdater().GetStatus() == healthy {
 
-		return pb.AgentStatus_AGENT_STATUS_HEALTHY
+		return pb.CwaAgentStatus_CWA_AGENT_STATUS_HEALTHY
 	}
 
-	return pb.AgentStatus_AGENT_STATUS_DEGRADED
+	return pb.CwaAgentStatus_CWA_AGENT_STATUS_DEGRADED
 }
 
-func (l *Loop) handleCommand(cmd *pb.Command) {
+func (l *Loop) handleCommand(cmd *pb.CwaCommand) {
 	// TODO: Real command dispatch with per-command timeouts (instant: 30s, long-running: 10min).
 	// TODO: Persistence store — write {execution_id, status: "in_progress"} before execution, scan on startup.
-	result := &pb.CommandResult{
+	result := &pb.CwaCommandResult{
 		ExecutionId: cmd.GetExecutionId(),
 		Command:     cmd.GetCommand(),
-		Status:      pb.CommandResultStatus_COMMAND_RESULT_STATUS_SUCCEEDED,
+		Status:      pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_SUCCEEDED,
 		Reason:      "acknowledged (no-op)",
 	}
 
 	l.mu.Lock()
 	if l.pendingResults == nil {
-		l.pendingResults = make(map[string]*pb.CommandResult)
+		l.pendingResults = make(map[string]*pb.CwaCommandResult)
 	}
 	l.pendingResults[cmd.GetExecutionId()] = result
 	l.mu.Unlock()

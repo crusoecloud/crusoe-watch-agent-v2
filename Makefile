@@ -54,15 +54,6 @@ lint-ci:
 	@golangci-lint version
 	@golangci-lint run -v ./... --out-format code-climate > golangci-lint.json
 
-.PHONY: proto-gen
-proto-gen:
-	@mkdir -p internal/proto/gen
-	@protoc \
-		--go_out=internal/proto/gen --go_opt=paths=source_relative \
-		--go-grpc_out=internal/proto/gen --go-grpc_opt=paths=source_relative \
-		-I internal/proto \
-		internal/proto/*.proto
-
 .PHONY: lint
 lint:
 	@golangci-lint run ./...

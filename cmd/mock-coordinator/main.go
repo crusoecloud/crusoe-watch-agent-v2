@@ -16,17 +16,20 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 
-	pb "gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/proto/gen"
+	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
 const defaultPort = "50051"
 
 type coordinator struct {
-	pb.UnimplementedAgentServiceServer
+	pb.UnimplementedCwaAgentServer
 	logger *slog.Logger
 }
 
-func (c *coordinator) Register(_ context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
+func (c *coordinator) RegisterCwaAgent(
+	_ context.Context,
+	req *pb.RegisterCwaAgentRequest,
+) (*pb.RegisterCwaAgentResponse, error) {
 	agentID := uuid.New().String()
 	c.logger.Info("agent registered",
 		"agent_id", agentID,
@@ -35,10 +38,10 @@ func (c *coordinator) Register(_ context.Context, req *pb.RegisterRequest) (*pb.
 		"version", req.GetVersion(),
 	)
 
-	return &pb.RegisterResponse{AgentId: agentID}, nil
+	return &pb.RegisterCwaAgentResponse{AgentId: agentID}, nil
 }
 
-func (c *coordinator) HeartbeatStream(stream pb.AgentService_HeartbeatStreamServer) error {
+func (c *coordinator) CwaAgentHeartbeat(stream pb.CwaAgent_CwaAgentHeartbeatServer) error {
 	for {
 		req, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -59,7 +62,7 @@ func (c *coordinator) HeartbeatStream(stream pb.AgentService_HeartbeatStreamServ
 		)
 
 		// Send empty response (no commands). Test commands can be added here later.
-		if err := stream.Send(&pb.HeartbeatResponse{}); err != nil {
+		if err := stream.Send(&pb.CwaAgentHeartbeatResponse{}); err != nil {
 			return fmt.Errorf("send: %w", err)
 		}
 	}
@@ -80,7 +83,7 @@ func main() {
 	}
 
 	srv := grpc.NewServer()
-	pb.RegisterAgentServiceServer(srv, &coordinator{logger: logger})
+	pb.RegisterCwaAgentServer(srv, &coordinator{logger: logger})
 
 	// Graceful shutdown on SIGINT/SIGTERM.
 	go func() {

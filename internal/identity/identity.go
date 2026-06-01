@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	pb "gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/proto/gen"
+	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
 // errNoVMID is returned when the VM UUID cannot be read from any source.
@@ -35,7 +35,7 @@ const (
 // Identity holds the resolved identity fields for this agent.
 type Identity struct {
 	VMID        string
-	InstallType pb.InstallType
+	InstallType pb.CwaInstallType
 	AgentID     string
 }
 
@@ -116,25 +116,25 @@ func readVMID(ctx context.Context) (string, error) {
 	return "", errNoVMID
 }
 
-func detectInstallType() pb.InstallType {
+func detectInstallType() pb.CwaInstallType {
 	if os.Getenv(envK8sServiceHost) != "" {
-		return pb.InstallType_INSTALL_TYPE_KUBERNETES
+		return pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES
 	}
 
 	// On VMs, the installer persists "docker" or "native" to the install-mode file.
 	data, err := os.ReadFile(installModeFile)
 	if err != nil {
-		return pb.InstallType_INSTALL_TYPE_UNSPECIFIED
+		return pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED
 	}
 
 	mode := strings.TrimSpace(string(data))
 
 	switch mode {
 	case "docker":
-		return pb.InstallType_INSTALL_TYPE_DOCKER
+		return pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER
 	case "native":
-		return pb.InstallType_INSTALL_TYPE_SYSTEMD
+		return pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD
 	default:
-		return pb.InstallType_INSTALL_TYPE_UNSPECIFIED
+		return pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED
 	}
 }

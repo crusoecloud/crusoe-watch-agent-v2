@@ -6,25 +6,25 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	pb "gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/proto/gen"
+	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
 func TestDetectInstallType(t *testing.T) {
 	t.Run("kubernetes when env var set", func(t *testing.T) {
 		t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
-		assert.Equal(t, pb.InstallType_INSTALL_TYPE_KUBERNETES, detectInstallType())
+		assert.Equal(t, pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES, detectInstallType())
 	})
 
 	t.Run("unspecified when no env and no file", func(t *testing.T) {
 		t.Setenv("KUBERNETES_SERVICE_HOST", "")
-		assert.Equal(t, pb.InstallType_INSTALL_TYPE_UNSPECIFIED, detectInstallType())
+		assert.Equal(t, pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED, detectInstallType())
 	})
 }
 
 func TestDetectInstallType_KubernetesWins(t *testing.T) {
 	// Even if install-mode file existed, K8s env var takes precedence.
 	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
-	assert.Equal(t, pb.InstallType_INSTALL_TYPE_KUBERNETES, detectInstallType())
+	assert.Equal(t, pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES, detectInstallType())
 }
 
 func TestErrNoVMID(t *testing.T) {
