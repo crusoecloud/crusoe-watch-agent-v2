@@ -30,7 +30,7 @@ CME_PORT=9500
 CME_VERSION="0.2.1"
 CME_BIN="/usr/local/bin/crusoe-metrics-exporter"
 
-AMD_EXPORTER_IMAGE_VERSION="v1.4.0"
+AMD_EXPORTER_VERSION="v1.4.0"
 
 # dcgm-exporter Docker image by Ubuntu version.
 declare -A DCGM_EXPORTER_VERSION_MAP=(
@@ -455,7 +455,7 @@ EOF
 
     # Docker image pins (read by docker-compose at `up` time).
     if [[ "$INSTALL_MODE" == "docker" ]]; then
-        echo "VECTOR_IMAGE_VERSION='${VECTOR_VERSION}-debian'" >> "$ENV_FILE"
+        echo "VECTOR_VERSION='${VECTOR_VERSION}-debian'" >> "$ENV_FILE"
     fi
 
     # GPU-specific vars.
@@ -463,12 +463,12 @@ EOF
         echo "DCGM_EXPORTER_PORT='${DCGM_EXPORTER_PORT}'" >> "$ENV_FILE"
         if [[ "$INSTALL_MODE" == "docker" ]]; then
             local image_ver="${DCGM_EXPORTER_VERSION_MAP[$UBUNTU_VERSION]:-4.3.1-4.4.0-ubi9}"
-            echo "DCGM_EXPORTER_IMAGE_VERSION='${image_ver}'" >> "$ENV_FILE"
+            echo "DCGM_EXPORTER_VERSION='${image_ver}'" >> "$ENV_FILE"
         fi
     elif [[ "$GPU_TYPE" == "amd" ]]; then
         echo "GPU_TYPE='amd'" >> "$ENV_FILE"
         echo "AMD_EXPORTER_PORT='${AMD_EXPORTER_PORT}'" >> "$ENV_FILE"
-        echo "ROCM_DEVICE_METRICS_EXPORTER_IMAGE_VERSION='${AMD_EXPORTER_IMAGE_VERSION}'" >> "$ENV_FILE"
+        echo "AMD_EXPORTER_VERSION='${AMD_EXPORTER_VERSION}'" >> "$ENV_FILE"
     fi
 
     # CME vars.
@@ -477,7 +477,7 @@ EOF
         local objstore_fqdn="object.${REGION}.crusoecloudcompute.com"
         echo "OBJSTORE_ENDPOINT_FQDN='${objstore_fqdn}'" >> "$ENV_FILE"
         if [[ "$INSTALL_MODE" == "docker" ]]; then
-            echo "CRUSOE_METRICS_EXPORTER_IMAGE_VERSION='${CME_VERSION}'" >> "$ENV_FILE"
+            echo "CME_VERSION='${CME_VERSION}'" >> "$ENV_FILE"
         fi
     fi
 
