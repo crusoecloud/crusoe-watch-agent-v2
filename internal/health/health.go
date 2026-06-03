@@ -115,14 +115,14 @@ func (c *Collector) collectCwaUpdaterThrottled(ctx context.Context) *pb.CwaUpdat
 
 func (c *Collector) collectVector(ctx context.Context) *pb.CwaVectorHealth {
 	health := &pb.CwaVectorHealth{
-		Status:  pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNKNOWN,
-		Version: version.Version, // TODO: Source from cwa-updater once it can upgrade components independently.
+		Status: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNKNOWN,
 	}
 
 	health.Status = c.checkVectorHealth(ctx)
-	errorCount, ok := c.queryVectorErrorCount(ctx)
+	errorCount, ver, ok := c.scrapeVectorMetrics(ctx)
 	if ok {
 		health.ErrorCount = errorCount
+		health.Version = ver
 		health.LastScrapeSuccess = timestamppb.Now()
 	} else {
 		health.ErrorCount = -1
@@ -165,50 +165,84 @@ func (c *Collector) checkVectorHealth(ctx context.Context) pb.CwaComponentStatus
 	return pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY
 }
 
-// queryVectorErrorCount scrapes Vector's prometheus_exporter sink for the
-// component_errors_total metric and returns the sum across all components.
-// The bool return indicates whether the scrape succeeded.
-func (c *Collector) queryVectorErrorCount(ctx context.Context) (int64, bool) {
+// scrapeVectorMetrics scrapes Vector's prometheus_exporter sink in a single
+// pass, summing component_errors_total across components and extracting the
+// version label from vector_build_info. The bool return indicates whether the
+// scrape succeeded.
+func (c *Collector) scrapeVectorMetrics(ctx context.Context) (int64, string, bool) {
 	resp, err := c.httpGet(ctx, c.vectorMetricsURL)
 	if err != nil {
 		c.logger.Debug("vector metrics request failed", "error", err)
 
-		return 0, false
+		return 0, "", false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		c.logger.Debug("vector metrics endpoint returned non-OK status", "status_code", resp.StatusCode)
 
-		return 0, false
+		return 0, "", false
 	}
 
-	var total float64
+	var (
+		total float64
+		ver   string
+	)
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !strings.HasPrefix(line, "component_errors_total{") {
-			continue
-		}
 
-		// Prometheus exposition format: metric_name{labels} value [timestamp]
-		parts := strings.Fields(line)
-		if len(parts) >= 2 { //nolint:mnd // minimum fields: metric name + value
-			val, parseErr := strconv.ParseFloat(parts[1], 64)
-			if parseErr == nil {
-				total += val
+		switch {
+		case strings.HasPrefix(line, "component_errors_total{"):
+			// Prometheus exposition format: metric_name{labels} value [timestamp]
+			parts := strings.Fields(line)
+			if len(parts) >= 2 { //nolint:mnd // minimum fields: metric name + value
+				val, parseErr := strconv.ParseFloat(parts[1], 64)
+				if parseErr == nil {
+					total += val
+				}
 			}
+		case ver == "" && strings.HasPrefix(line, "vector_build_info{"):
+			ver = extractPromLabel(line, "version")
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		c.logger.Debug("error reading vector metrics response", "error", err)
 
-		return 0, false
+		return 0, "", false
 	}
 
-	return int64(total), true
+	return int64(total), ver, true
+}
+
+// extractPromLabel pulls a label value from a Prometheus exposition-format
+// line. Returns "" if the label is not present. Matches the label only at a
+// label boundary (after `{` or `,`) so e.g. "version" does not match
+// "rust_version".
+func extractPromLabel(line, label string) string {
+	suffix := label + `="`
+
+	for _, prefix := range []string{"{", ","} {
+		needle := prefix + suffix
+
+		i := strings.Index(line, needle)
+		if i < 0 {
+			continue
+		}
+
+		rest := line[i+len(needle):]
+
+		end := strings.Index(rest, `"`)
+		if end < 0 {
+			return ""
+		}
+
+		return rest[:end]
+	}
+
+	return ""
 }
 
 func (c *Collector) collectCwaUpdater(ctx context.Context) *pb.CwaUpdaterHealth {

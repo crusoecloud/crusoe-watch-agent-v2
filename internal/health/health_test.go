@@ -67,7 +67,7 @@ func TestCollectCwaManager(t *testing.T) {
 }
 
 func TestCollectVector(t *testing.T) {
-	t.Run("healthy with error count from metrics", func(t *testing.T) {
+	t.Run("healthy with error count and version from metrics", func(t *testing.T) {
 		healthSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -78,6 +78,9 @@ func TestCollectVector(t *testing.T) {
 			fmt.Fprintln(w, `# TYPE component_errors_total counter`)
 			fmt.Fprintln(w, `component_errors_total{component_id="source0",component_type="prometheus_scrape"} 3`)
 			fmt.Fprintln(w, `component_errors_total{component_id="sink0",component_type="prometheus_remote_write"} 2`)
+			fmt.Fprintln(w, `# HELP vector_build_info vector`)
+			fmt.Fprintln(w, `# TYPE vector_build_info gauge`)
+			fmt.Fprintln(w, `vector_build_info{debug="false",host="vm-host",pid="1",revision="abc",rust_version="1.75.0",version="0.55.0"} 1`)
 		}))
 		defer metricsSrv.Close()
 
@@ -85,7 +88,7 @@ func TestCollectVector(t *testing.T) {
 		h := c.collectVector(context.Background())
 
 		assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY, h.GetStatus())
-		assert.Equal(t, version.Version, h.GetVersion())
+		assert.Equal(t, "0.55.0", h.GetVersion())
 		assert.Equal(t, int64(5), h.GetErrorCount())
 		require.NotNil(t, h.GetLastScrapeSuccess())
 	})
@@ -98,6 +101,7 @@ func TestCollectVector(t *testing.T) {
 
 		metricsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			fmt.Fprintln(w, `component_errors_total{component_id="source0"} 7`)
+			fmt.Fprintln(w, `vector_build_info{version="0.55.0-debian"} 1`)
 		}))
 		defer metricsSrv.Close()
 
@@ -106,6 +110,7 @@ func TestCollectVector(t *testing.T) {
 
 		assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNHEALTHY, h.GetStatus())
 		assert.Equal(t, int64(7), h.GetErrorCount())
+		assert.Equal(t, "0.55.0-debian", h.GetVersion())
 	})
 }
 
@@ -157,17 +162,18 @@ func TestCollectVector_HealthUpMetricsDown(t *testing.T) {
 	assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY, h.GetStatus())
 	assert.Equal(t, int64(-1), h.GetErrorCount(), "error count should be -1 when metrics unreachable")
 	assert.Nil(t, h.GetLastScrapeSuccess(), "last_scrape_success should be nil when metrics unreachable")
-	assert.Equal(t, version.Version, h.GetVersion(), "version should always be set")
+	assert.Empty(t, h.GetVersion(), "version should be empty when metrics scrape fails")
 }
 
-func TestQueryVectorErrorCount(t *testing.T) {
-	t.Run("sums component_errors_total across components", func(t *testing.T) {
+func TestScrapeVectorMetrics(t *testing.T) {
+	t.Run("sums component_errors_total and extracts version", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			fmt.Fprintln(w, `# HELP component_errors_total Total errors`)
 			fmt.Fprintln(w, `# TYPE component_errors_total counter`)
 			fmt.Fprintln(w, `component_errors_total{component_id="src1"} 10`)
 			fmt.Fprintln(w, `component_errors_total{component_id="src2"} 32`)
 			fmt.Fprintln(w, `component_sent_events_total{component_id="src1"} 9999`)
+			fmt.Fprintln(w, `vector_build_info{debug="false",version="0.55.0",rust_version="1.75.0"} 1`)
 		}))
 		defer srv.Close()
 
@@ -177,9 +183,10 @@ func TestQueryVectorErrorCount(t *testing.T) {
 			vectorMetricsURL: srv.URL,
 		}
 
-		count, ok := c.queryVectorErrorCount(context.Background())
+		count, ver, ok := c.scrapeVectorMetrics(context.Background())
 		assert.True(t, ok)
 		assert.Equal(t, int64(42), count)
+		assert.Equal(t, "0.55.0", ver)
 	})
 
 	t.Run("returns false on connection error", func(t *testing.T) {
@@ -189,9 +196,10 @@ func TestQueryVectorErrorCount(t *testing.T) {
 			vectorMetricsURL: "http://localhost:1/metrics",
 		}
 
-		count, ok := c.queryVectorErrorCount(context.Background())
+		count, ver, ok := c.scrapeVectorMetrics(context.Background())
 		assert.False(t, ok)
 		assert.Equal(t, int64(0), count)
+		assert.Empty(t, ver)
 	})
 
 	t.Run("returns zero with ok when no error metrics present", func(t *testing.T) {
@@ -207,13 +215,14 @@ func TestQueryVectorErrorCount(t *testing.T) {
 			vectorMetricsURL: srv.URL,
 		}
 
-		count, ok := c.queryVectorErrorCount(context.Background())
+		count, ver, ok := c.scrapeVectorMetrics(context.Background())
 		assert.True(t, ok)
 		assert.Equal(t, int64(0), count)
+		assert.Empty(t, ver, "version is empty when vector_build_info not present")
 	})
 }
 
-func TestQueryVectorErrorCount_IgnoresMalformedValues(t *testing.T) {
+func TestScrapeVectorMetrics_IgnoresMalformedValues(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, `component_errors_total{component_id="src1"} 10`)
 		fmt.Fprintln(w, `component_errors_total{component_id="src2"} not_a_number`)
@@ -227,12 +236,12 @@ func TestQueryVectorErrorCount_IgnoresMalformedValues(t *testing.T) {
 		vectorMetricsURL: srv.URL,
 	}
 
-	count, ok := c.queryVectorErrorCount(context.Background())
+	count, _, ok := c.scrapeVectorMetrics(context.Background())
 	assert.True(t, ok)
 	assert.Equal(t, int64(15), count, "should skip malformed values and sum the rest")
 }
 
-func TestQueryVectorErrorCount_IgnoresSimilarMetricNames(t *testing.T) {
+func TestScrapeVectorMetrics_IgnoresSimilarMetricNames(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintln(w, `component_errors_total{component_id="src1"} 10`)
 		fmt.Fprintln(w, `component_errors_total_bytes{component_id="src1"} 9999`)
@@ -245,12 +254,12 @@ func TestQueryVectorErrorCount_IgnoresSimilarMetricNames(t *testing.T) {
 		vectorMetricsURL: srv.URL,
 	}
 
-	count, ok := c.queryVectorErrorCount(context.Background())
+	count, _, ok := c.scrapeVectorMetrics(context.Background())
 	assert.True(t, ok)
 	assert.Equal(t, int64(10), count, "should not match component_errors_total_bytes")
 }
 
-func TestQueryVectorErrorCount_NonOKStatus(t *testing.T) {
+func TestScrapeVectorMetrics_NonOKStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -262,9 +271,20 @@ func TestQueryVectorErrorCount_NonOKStatus(t *testing.T) {
 		vectorMetricsURL: srv.URL,
 	}
 
-	count, ok := c.queryVectorErrorCount(context.Background())
+	count, ver, ok := c.scrapeVectorMetrics(context.Background())
 	assert.False(t, ok, "non-OK HTTP status should fail the scrape")
 	assert.Equal(t, int64(0), count)
+	assert.Empty(t, ver)
+}
+
+func TestExtractPromLabel(t *testing.T) {
+	// rust_version listed BEFORE version to catch suffix-collision bugs.
+	line := `vector_build_info{debug="false",host="vm-host",rust_version="1.75.0",version="0.55.0-debian"} 1`
+
+	assert.Equal(t, "0.55.0-debian", extractPromLabel(line, "version"))
+	assert.Equal(t, "1.75.0", extractPromLabel(line, "rust_version"))
+	assert.Equal(t, "false", extractPromLabel(line, "debug"))
+	assert.Equal(t, "", extractPromLabel(line, "missing"))
 }
 
 func TestCollectCwaUpdater_InvalidJSON(t *testing.T) {
