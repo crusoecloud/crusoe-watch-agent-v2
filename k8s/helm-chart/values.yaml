@@ -45,6 +45,13 @@ resources:
     limits:
       cpu: 200m
       memory: 256Mi
+  cme:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
 
 # Exporter toggles — override cwa-manager defaults via env vars.
 dcgm:
@@ -68,9 +75,11 @@ slurm:
   scrapeInterval: 60
 
 cme:
-  enabled: true
+  enabled: false
   port: 9500
   scrapeInterval: 60
+  image: ghcr.io/crusoecloud/crusoe-metrics-exporter/crusoe-metrics-exporter
+  tag: "0.2.3"
 
 customMetrics:
   enabled: true

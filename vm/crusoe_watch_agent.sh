@@ -27,7 +27,7 @@ DCGM_EXPORTER_PORT=9400
 AMD_EXPORTER_PORT=5000
 CME_PORT=9500
 
-CME_VERSION="0.2.1"
+CME_VERSION="0.2.3"
 CME_BIN="/usr/local/bin/crusoe-metrics-exporter"
 
 AMD_EXPORTER_VERSION="v1.4.0"
@@ -45,7 +45,6 @@ declare -A DCGM_EXPORTER_VERSION_MAP=(
 INSTALL_MODE="docker"   # "docker" or "native"
 ENABLE_CME=false
 MONITORING_TOKEN=""
-REGION=""
 INGRESS_URL=""
 
 ###############################################################################
@@ -107,9 +106,6 @@ require_root() {
 validate_flags() {
     if [[ "$GPU_TYPE" == "amd" && "$INSTALL_MODE" == "native" ]]; then
         error_exit "AMD GPU is not supported in native mode. Remove --no-docker."
-    fi
-    if [[ "$ENABLE_CME" == "true" && -z "$REGION" ]]; then
-        error_exit "--cme requires --region."
     fi
 }
 
@@ -474,8 +470,16 @@ EOF
     # CME vars.
     if [[ "$ENABLE_CME" == "true" ]]; then
         echo "CRUSOE_METRICS_EXPORTER_PORT='${CME_PORT}'" >> "$ENV_FILE"
-        local objstore_fqdn="object.${REGION}.crusoecloudcompute.com"
-        echo "OBJSTORE_ENDPOINT_FQDN='${objstore_fqdn}'" >> "$ENV_FILE"
+        # Derive OBJSTORE_ENDPOINT_FQDN from the VM's hostname domain.
+        # Crusoe VMs have a domain like "us-east1-a.compute.internal"; the first
+        # dot-separated segment is the region.
+        local detected_domain
+        detected_domain=$(hostname -d 2>/dev/null || true)
+        if [[ -n "$detected_domain" ]]; then
+            local region="${detected_domain%%.*}"
+            echo "OBJSTORE_ENDPOINT_FQDN='object.${region}.crusoecloudcompute.com'" >> "$ENV_FILE"
+            status "Derived OBJSTORE_ENDPOINT_FQDN from hostname (region: ${region})"
+        fi
         if [[ "$INSTALL_MODE" == "docker" ]]; then
             echo "CME_VERSION='${CME_VERSION}'" >> "$ENV_FILE"
         fi
@@ -886,7 +890,6 @@ Install Options:
   --no-docker                Use native Vector binary (default: Docker)
   --token TOKEN              Monitoring token (prompted if omitted; use single quotes)
   --cme                      Enable Crusoe Metrics Exporter
-  --region REGION            Crusoe region (required with --cme)
   --ingress-url URL          Override CMS base URL
   --dcgm-exporter-port PORT  DCGM exporter port (default: 9400)
   --amd-exporter-port PORT   AMD exporter port (default: 5000)
@@ -898,7 +901,7 @@ Examples:
   sudo ./crusoe_watch_agent.sh install
   sudo ./crusoe_watch_agent.sh install --no-docker
   sudo ./crusoe_watch_agent.sh install --token "$(crusoe monitoring tokens create -f token)"
-  sudo ./crusoe_watch_agent.sh install --cme --region us-east1-a
+  sudo ./crusoe_watch_agent.sh install --cme
   sudo ./crusoe_watch_agent.sh upgrade
   sudo ./crusoe_watch_agent.sh refresh-token
   sudo ./crusoe_watch_agent.sh uninstall
@@ -926,10 +929,6 @@ while [[ $# -gt 0 ]]; do
         --cme)
             ENABLE_CME=true
             shift
-            ;;
-        --region)
-            REGION="${2:?Missing value for --region}"
-            shift 2
             ;;
         --ingress-url)
             INGRESS_URL="${2:?Missing value for --ingress-url}"
