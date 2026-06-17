@@ -1,0 +1,37 @@
+# Manual release job for the K8s delivery mode.
+#
+# Triggered by clicking the job in the pipeline (when: manual). Renders from
+# the chosen commit, packages and OCI-pushes the Helm chart to ghcr, signs the
+# chart digest, and publishes a GitHub Release with the .tgz attached.
+#
+# Variables the operator can set when re-running ("Run pipeline" UI):
+#   RELEASE_SHA  commit to release (default: pipeline's commit)
+#   DRY_RUN      "true" to print what would happen without tagging/publishing
+#
+# Secrets — same set as release:vm.
+
+release:k8s:
+  stage: release
+  image: alpine:3.19
+  resource_group: release-k8s
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_PIPELINE_SOURCE == "web"'
+      when: manual
+      allow_failure: false
+  variables:
+    MODE: k8s
+    RELEASE_SHA: ""
+    DRY_RUN: "false"
+    GHCR_REGISTRY: "ghcr.io/crusoecloud/crusoe-watch-agent-v2"
+    GITHUB_REPO: "crusoecloud/crusoe-watch-agent-v2"
+  before_script:
+    # docker-cli + buildx are needed for `docker buildx imagetools create`,
+    # which moves the chart's :latest pointer in ghcr.io.
+    - apk add --no-cache git bash curl jq cosign docker-cli docker-cli-buildx github-cli helm
+    - git config --global user.name  "gitlab-ci"
+    - git config --global user.email "gitlab-ci@crusoe.ai"
+    - export GIT_PUSH_URL="https://ci-push-token:${REPO_ACCESS_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+    - export GITHUB_TOKEN="${GHCR_TOKEN}"
+    - git fetch --tags --quiet origin
+  script:
+    - ./ci/scripts/release.sh

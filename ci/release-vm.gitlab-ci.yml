@@ -1,0 +1,43 @@
+# Manual release job for the VM delivery mode.
+#
+# Triggered by clicking the job in the pipeline (when: manual). Renders from
+# the chosen commit, signs the rendered installer script with cosign, and
+# publishes a GitHub Release.
+#
+# Variables the operator can set when re-running ("Run pipeline" UI):
+#   RELEASE_SHA  commit to release (default: pipeline's commit)
+#   DRY_RUN      "true" to print what would happen without tagging/publishing
+#
+# Secrets that must exist as protected CI variables:
+#   GHCR_USERNAME, GHCR_TOKEN        ghcr push + GitHub Release auth
+#   COSIGN_PRIVATE_KEY_B64           cosign sign-blob signing key
+#   REPO_ACCESS_TOKEN                token with write_repository for tag push
+
+release:vm:
+  stage: release
+  image: alpine:3.19
+  resource_group: release-vm        # serialize: never two VM releases at once
+  rules:
+    # Manual button on main pipelines. Operators can also trigger via the
+    # "Run pipeline" UI to override RELEASE_SHA/DRY_RUN.
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_PIPELINE_SOURCE == "web"'
+      when: manual
+      allow_failure: false
+  variables:
+    MODE: vm
+    RELEASE_SHA: ""
+    DRY_RUN: "false"
+    GHCR_REGISTRY: "ghcr.io/crusoecloud/crusoe-watch-agent-v2"
+    GITHUB_REPO: "crusoecloud/crusoe-watch-agent-v2"
+  before_script:
+    # Tools: git for tag push; cosign for signing; gh for the GitHub Release;
+    # jq for parsing.
+    - apk add --no-cache git bash curl jq cosign github-cli
+    - git config --global user.name  "gitlab-ci"
+    - git config --global user.email "gitlab-ci@crusoe.ai"
+    # Push URL with a token that can write tags (the job token cannot push tags).
+    - export GIT_PUSH_URL="https://ci-push-token:${REPO_ACCESS_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+    - export GITHUB_TOKEN="${GHCR_TOKEN}"
+    - git fetch --tags --quiet origin
+  script:
+    - ./ci/scripts/release.sh

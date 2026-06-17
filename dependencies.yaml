@@ -1,0 +1,35 @@
+# dependencies.yaml — source of truth for component versions.
+#
+# Every component shipped by either delivery mode (VM installer / Helm chart)
+# is pinned here. The release pipeline reads this file AT THE TAGGED COMMIT
+# and substitutes the values into the templated install sources.
+
+###############################################################################
+# Internal components.
+###############################################################################
+
+# cwa-manager: VM agent + K8s sidecar. Built from root Dockerfile.
+# Tag format: YYYY.MM.DD-<short-sha>.
+cwa-manager: "2026.06.09-36f31e9c"
+
+###############################################################################
+# External components — upstream/vendored versions.
+###############################################################################
+
+# token-job: K8s Job that mints a monitoring token via the Crusoe CLI.
+token-job: "v0.2.12"
+
+# Vector: log/metric forwarder. Used by both VM (docker + native) and K8s.
+# Docker tag suffix `-debian` is appended at render time only where needed.
+vector: "0.55.0"
+
+# crusoe-metrics-exporter: object-store metrics for VM (docker + native).
+crusoe-metrics-exporter: "0.2.1"
+
+# AMD device-metrics-exporter (docker only).
+amd-exporter: "v1.4.0"
+
+# NVIDIA dcgm-exporter (docker only).
+dcgm-exporter-ubuntu2004: "4.3.1-4.4.0-ubi9"
+dcgm-exporter-ubuntu2204: "4.3.1-4.4.0-ubuntu22.04"
+dcgm-exporter-ubuntu2404: "4.3.1-4.4.0-ubi9"

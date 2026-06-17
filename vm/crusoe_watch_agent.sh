@@ -10,34 +10,47 @@ set -euo pipefail
 # Constants & defaults
 ###############################################################################
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AGENT_VERSION="$(tr -d '[:space:]' < "${SCRIPT_DIR}/VERSION")"
+
+# Version pins are stamped at release time from dependencies.yaml.
+AGENT_VERSION="@@AGENT_VERSION@@"
+VECTOR_VERSION="@@VECTOR_VERSION@@"
+CME_VERSION="@@CRUSOE_METRICS_EXPORTER_VERSION@@"
+AMD_EXPORTER_VERSION="@@AMD_EXPORTER_VERSION@@"
+for v in AGENT_VERSION VECTOR_VERSION CME_VERSION AMD_EXPORTER_VERSION; do
+    case "${!v}" in @@*@@) printf -v "$v" '%s' "dev" ;; esac
+done
+
 CMS_BASE_URL="https://cms-monitoring.crusoecloud.com"
-GITHUB_RAW_BASE_URL="https://raw.githubusercontent.com/crusoecloud/crusoe-watch-agent-v2"
-GITHUB_RELEASE_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2/releases/latest/download"
-GITHUB_PAGES_URL="https://crusoecloud.github.io/crusoe-watch-agent-v2"
+
+# GITHUB_LATEST_RELEASE_URL — used only by `do_upgrade` to fetch the newest available release.
+if [[ "$AGENT_VERSION" == "dev" ]]; then
+    GITHUB_RELEASE_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2/releases/latest/download"
+else
+    GITHUB_RELEASE_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2/releases/download/vm/${AGENT_VERSION}"
+fi
+GITHUB_LATEST_RELEASE_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2/releases/latest/download"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/crusoe/crusoe_watch_agent"
 SECRETS_DIR="/etc/crusoe/secrets"
 ENV_FILE="${CONFIG_DIR}/.env"
 VECTOR_CONFIG="/etc/vector/vector.yaml"
-VECTOR_VERSION="0.55.0"
 SYSTEMCTL_DIR="/etc/systemd/system"
 
 DCGM_EXPORTER_PORT=9400
 AMD_EXPORTER_PORT=5000
 CME_PORT=9500
 
-CME_VERSION="0.2.3"
 CME_BIN="/usr/local/bin/crusoe-metrics-exporter"
-
-AMD_EXPORTER_VERSION="v1.4.0"
 
 # dcgm-exporter Docker image by Ubuntu version.
 declare -A DCGM_EXPORTER_VERSION_MAP=(
-  ["20.04"]="4.3.1-4.4.0-ubi9"
-  ["22.04"]="4.3.1-4.4.0-ubuntu22.04"
-  ["24.04"]="4.3.1-4.4.0-ubi9"
+  ["20.04"]="@@DCGM_EXPORTER_UBUNTU2004_VERSION@@"
+  ["22.04"]="@@DCGM_EXPORTER_UBUNTU2204_VERSION@@"
+  ["24.04"]="@@DCGM_EXPORTER_UBUNTU2404_VERSION@@"
 )
+for k in "${!DCGM_EXPORTER_VERSION_MAP[@]}"; do
+    case "${DCGM_EXPORTER_VERSION_MAP[$k]}" in @@*@@) DCGM_EXPORTER_VERSION_MAP[$k]="dev" ;; esac
+done
 
 ###############################################################################
 # Configurable via flags
@@ -91,7 +104,7 @@ download_file() {
         status "Copying local file: ${local_path}"
         cp "$local_path" "$dest"
     else
-        local url="${GITHUB_RAW_BASE_URL}/main/${remote_path}"
+        local url="${GITHUB_RELEASE_URL}/${remote_path##*/}"
         wget -q -O "$dest" "$url" || error_exit "Failed to download ${url}"
     fi
 }
@@ -240,8 +253,7 @@ install_vector_native() {
 setup_nvidia_cuda_repo() {
     status "Setting up NVIDIA CUDA apt repository."
 
-    local ubuntu_short
-    ubuntu_short=$(echo "$UBUNTU_VERSION" | sed 's/\.//')
+    local ubuntu_short="${UBUNTU_VERSION//./}"
 
     local keyring_url="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${ubuntu_short}/x86_64/cuda-keyring_1.1-1_all.deb"
     local keyring_deb="/tmp/cuda-keyring.deb"
@@ -315,12 +327,12 @@ install_dcgm_exporter_native() {
 
     # Ensure Git is installed
     if ! command_exists git; then
-        apt-get update && apt-get install -y git || error_exit "Failed to install git."
+        { apt-get update && apt-get install -y git; } || error_exit "Failed to install git."
     fi
 
     # Ensure build tools are installed (make + gcc for CGo)
     if ! command_exists make || ! command_exists gcc; then
-        apt-get update && apt-get install -y build-essential || error_exit "Failed to install build-essential."
+        { apt-get update && apt-get install -y build-essential; } || error_exit "Failed to install build-essential."
     fi
 
     # Ensure Go >= 1.26 is installed (Ubuntu apt packages are too old)
@@ -462,9 +474,11 @@ EOF
             echo "DCGM_EXPORTER_VERSION='${image_ver}'" >> "$ENV_FILE"
         fi
     elif [[ "$GPU_TYPE" == "amd" ]]; then
-        echo "GPU_TYPE='amd'" >> "$ENV_FILE"
-        echo "AMD_EXPORTER_PORT='${AMD_EXPORTER_PORT}'" >> "$ENV_FILE"
-        echo "AMD_EXPORTER_VERSION='${AMD_EXPORTER_VERSION}'" >> "$ENV_FILE"
+        {
+            echo "GPU_TYPE='amd'"
+            echo "AMD_EXPORTER_PORT='${AMD_EXPORTER_PORT}'"
+            echo "AMD_EXPORTER_VERSION='${AMD_EXPORTER_VERSION}'"
+        } >> "$ENV_FILE"
     fi
 
     # CME vars.
@@ -815,9 +829,12 @@ do_upgrade() {
 
     status "Installed version: ${installed_version}"
 
-    # Fetch remote version.
+    # Fetch the latest published VM release version. The release pipeline
+    # attaches a VERSION asset (containing the tag string) to every GitHub
+    # Release, and /releases/latest/download/ redirects to whichever release
+    # currently holds the "latest" pointer.
     local remote_version
-    local version_url="${GITHUB_PAGES_URL}/vm/latest/VERSION"
+    local version_url="${GITHUB_LATEST_RELEASE_URL}/VERSION"
     remote_version=$(wget -qO- "$version_url" 2>/dev/null | tr -d '[:space:]') || true
 
     if [[ -z "$remote_version" ]]; then
@@ -834,7 +851,7 @@ do_upgrade() {
     status "Upgrading ${installed_version} → ${remote_version}..."
 
     # Download latest install script.
-    local script_url="${GITHUB_PAGES_URL}/vm/latest/crusoe_watch_agent.sh"
+    local script_url="${GITHUB_LATEST_RELEASE_URL}/crusoe_watch_agent.sh"
     local tmp_script
     tmp_script=$(mktemp)
     wget -q -O "$tmp_script" "$script_url" || error_exit "Failed to download latest installer."

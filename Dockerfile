@@ -3,12 +3,11 @@ FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache 'git>=2.47'
 
 ARG CI_SERVER_HOST
-ARG CI_JOB_TOKEN
 
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go env -w "GOPRIVATE=${CI_SERVER_HOST}" && \
-    echo -e "machine ${CI_SERVER_HOST} login gitlab-ci-token password ${CI_JOB_TOKEN}" > ~/.netrc && \
+RUN --mount=type=secret,id=netrc,target=/root/.netrc \
+    go env -w "GOPRIVATE=${CI_SERVER_HOST}" && \
     go mod download
 
 COPY . .

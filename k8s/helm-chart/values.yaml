@@ -17,17 +17,16 @@ existingSecret: crusoe-secrets
 # TODO: manual IMDS endpoint to obtain a short-lived JWT; no manual monitoring token creation required
 tokenJob:
   image: ghcr.io/crusoecloud/crusoe-watch-agent/token-job
-  tag: v0.2.12
+  tag: "@@TOKEN_JOB_VERSION@@"
   ttlSecondsAfterFinished: 300
 
-# Container images.
 vector:
   image: timberio/vector
-  tag: "0.55.0-debian"
+  tag: "@@VECTOR_VERSION@@-debian"
 
 cwaManager:
-  image: ghcr.io/crusoecloud/crusoe-watch-agent/cwa-manager
-  tag: latest
+  image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/cwa-manager
+  tag: "@@AGENT_VERSION@@"
 
 # Resource requests/limits.
 resources:

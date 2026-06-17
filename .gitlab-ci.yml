@@ -5,28 +5,85 @@ include:
   - template: Jobs/Secret-Detection.gitlab-ci.yml
   - template: Security/SAST-IaC.latest.gitlab-ci.yml
   - template: Security/Dependency-Scanning.gitlab-ci.yml
+  # Flow A: per-component image builds (Docker images tagged :YYYY.MM.DD-sha,
+  # published to the internal GitLab Container Registry, no :latest).
+  - local: 'ci/components.gitlab-ci.yml'
+  # Manual, tag-anchored release jobs. One per delivery mode; they share
+  # ci/scripts/release.sh as the orchestrator.
+  - local: 'ci/release-vm.gitlab-ci.yml'
+  - local: 'ci/release-k8s.gitlab-ci.yml'
+
+# Pipeline stages. Builds (per-component images) run continuously; the manual
+# release job lives in a later stage so a `release:*` button only appears
+# after builds are green for the pipeline's commit.
+stages:
+  - test
+  - build
+  - release
+
+lint:mr:
+  stage: .pre
+  image: alpine:3.19
+  script:
+    - |
+      echo "MR title: $CI_MERGE_REQUEST_TITLE"
+      if ! echo "$CI_MERGE_REQUEST_TITLE" | grep -qE '^(feat|fix|chore|docs|refactor|test|ci|perf): .+'; then
+        echo "ERROR: MR title must match '<type>: <description>'"
+        echo "Valid types: feat, fix, chore, docs, refactor, test, ci, perf"
+        exit 1
+      fi
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# Static analysis for the VM installer script. Scoped to crusoe_watch_agent.sh.
+shellcheck:
+  stage: test
+  image: koalaman/shellcheck-alpine:v0.11.0
+  script:
+    - shellcheck --version
+    - shellcheck vm/crusoe_watch_agent.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - vm/crusoe_watch_agent.sh
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - vm/crusoe_watch_agent.sh
+        - .gitlab-ci.yml
 
 variables:
   TAG_PREFIX: ""
   CI_IMAGE: "registry.gitlab.com/crusoeenergy/tools/go-ci-1.26"
+  CI_IMAGE_TAG: "master"
 
-.code-changes: &code-changes
-  changes:
-    - .gitlab-ci.yml
-    - Makefile
-    - cmd/**/*
-    - internal/**/*
-    - go.*
-
-.private-repo-script: &private-repo-script
+# Validates the Vector configs produced by `cwa-manager --dump-vector-config`.
+vector:validate:
+  stage: test
+  image: ${CI_IMAGE}:${CI_IMAGE_TAG}
   before_script:
     - go env -w "GOPRIVATE=${CI_SERVER_HOST}"
     - echo -e "machine ${CI_SERVER_HOST} login gitlab-ci-token password ${CI_JOB_TOKEN}" > ~/.netrc
-
-.cache-setup: &cache-setup
-  - mkdir -p .cache
-  - export GOPATH="$CI_PROJECT_DIR/.cache"
-  - export PATH=$PATH:$GOPATH/bin
+    - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+    - curl -fsSL https://sh.vector.dev | bash -s -- -y --prefix /usr/local
+    - export PATH="/usr/local/bin:$PATH"
+    - vector --version
+  script:
+    - export PATH="/usr/local/bin:$PATH"
+    - make vector-validate
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - .gitlab-ci.yml
+        - cmd/cwa-manager/**/*
+        - internal/vector/**/*
+        - go.*
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - .gitlab-ci.yml
+        - cmd/cwa-manager/**/*
+        - internal/vector/**/*
+        - go.*
 
 code_intelligence:
   rules:

@@ -58,6 +58,33 @@ lint-ci:
 lint:
 	@golangci-lint run ./...
 
+.PHONY: shellcheck
+shellcheck:
+	@command -v shellcheck >/dev/null || { echo "install: brew install shellcheck"; exit 1; }
+	@shellcheck vm/crusoe_watch_agent.sh
+
+.PHONY: vector-validate
+vector-validate: build-cwa-manager
+	@command -v vector >/dev/null || { echo "install: brew install vectordotdev/brew/vector  (or see https://vector.dev/docs/setup/installation/)"; exit 1; }
+	@mkdir -p ${BUILDDIR}/vector-configs
+	@AGENT_VERSION=dev \
+	 CRUSOE_AUTH_TOKEN=test-token \
+	 CRUSOE_CLUSTER_ID=test-cluster \
+	 CRUSOE_MONITORING_TOKEN=test-token \
+	 CRUSOE_PROJECT_ID=test-project \
+	 LOGS_INGRESS_ENDPOINT=https://example.com \
+	 TELEMETRY_INGRESS_ENDPOINT=https://example.com \
+	 VM_ID=test-vm \
+	 sh -c 'for gpu in none nvidia amd; do \
+	    for cme_flag in "" "--cme"; do \
+	        suffix=""; [ -n "$$cme_flag" ] && suffix="-cme"; \
+	        name="vm-$${gpu}$${suffix}"; \
+	        ${BUILDDIR}/cwa-manager --gpu=$$gpu $$cme_flag --dump-vector-config > ${BUILDDIR}/vector-configs/$$name.yaml; \
+	        echo "Validating $$name"; \
+	        vector validate --no-environment ${BUILDDIR}/vector-configs/$$name.yaml || exit 1; \
+	    done; \
+	 done'
+
 .PHONY: clean
 clean:
 	@rm -rf ${BUILDDIR}
