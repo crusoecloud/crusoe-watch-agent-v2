@@ -85,6 +85,10 @@ vector:validate:
         - internal/vector/**/*
         - go.*
 
+tag_semver:
+  rules:
+    - when: never
+
 code_intelligence:
   rules:
     - when: never
