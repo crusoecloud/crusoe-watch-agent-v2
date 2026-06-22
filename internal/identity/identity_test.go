@@ -67,3 +67,41 @@ func TestRegistered_FalseWhenNoFile(t *testing.T) {
 	r := NewResolver()
 	assert.False(t, r.Registered())
 }
+
+func TestReadProjectID(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		want string
+	}{
+		{"set", "proj-123", "proj-123"},
+		{"unset", "", ""},
+		{"whitespace trimmed", "  proj-123\n", "proj-123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envProjectID, tc.env)
+			assert.Equal(t, tc.want, readProjectID())
+		})
+	}
+}
+
+func TestReadRegion(t *testing.T) {
+	cases := []struct {
+		name     string
+		nodeName string
+		want     string
+	}{
+		{"crusoe FQDN", "myhost.us-east1-a.compute.internal", "us-east1-a"},
+		{"two-segment FQDN", "host.us-east1-a", "us-east1-a"},
+		{"short hostname", "myhost", ""},
+		{"empty", "", ""},
+		{"whitespace", "   ", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envNodeName, tc.nodeName)
+			assert.Equal(t, tc.want, readRegion())
+		})
+	}
+}

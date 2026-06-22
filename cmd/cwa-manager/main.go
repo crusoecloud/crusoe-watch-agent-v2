@@ -84,6 +84,8 @@ func runAgent(coordAddr string) error {
 		"vm_id", ident.VMID,
 		"install_type", ident.InstallType.String(),
 		"agent_id", ident.AgentID,
+		"region", ident.Region,
+		"project_id", ident.ProjectID,
 	)
 
 	// In K8s mode, start the Vector config watcher (pod + ConfigMap informers).

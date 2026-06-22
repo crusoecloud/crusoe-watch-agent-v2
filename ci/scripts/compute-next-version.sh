@@ -20,7 +20,7 @@ git fetch --tags --quiet origin 2>/dev/null || true
 latest=$(git tag -l "${MODE}/v*" | sort -V | tail -n1 || true)
 
 if [[ -z "$latest" ]]; then
-    echo "v1.0"
+    echo "v2.0"
     exit 0
 fi
 

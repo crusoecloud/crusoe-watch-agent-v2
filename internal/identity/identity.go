@@ -30,6 +30,12 @@ const (
 
 	// Environment variables.
 	envK8sServiceHost = "KUBERNETES_SERVICE_HOST"
+	// envNodeName carries the host FQDN. In K8s it's set via the downward API
+	// (spec.nodeName); on VMs the installer writes `hostname -f` into the .env.
+	envNodeName = "NODE_NAME"
+	// envProjectID is sourced from the crusoe-secrets Secret via envFrom in K8s
+	// mode (the same secret Vector consumes). Unset on VMs.
+	envProjectID = "CRUSOE_PROJECT_ID"
 )
 
 // Identity holds the resolved identity fields for this agent.
@@ -37,6 +43,8 @@ type Identity struct {
 	VMID        string
 	InstallType pb.CwaInstallType
 	AgentID     string
+	Region      string
+	ProjectID   string
 }
 
 // Resolver resolves identity fields from the local environment.
@@ -59,6 +67,8 @@ func (r *Resolver) Resolve(ctx context.Context) (*Identity, error) {
 	identity := &Identity{
 		VMID:        vmID,
 		InstallType: detectInstallType(),
+		Region:      readRegion(),
+		ProjectID:   readProjectID(),
 	}
 
 	agentID, err := os.ReadFile(agentIDPath)
@@ -92,6 +102,25 @@ func (r *Resolver) Registered() bool {
 	_, err := os.Stat(agentIDPath)
 
 	return err == nil
+}
+
+func readProjectID() string {
+	return strings.TrimSpace(os.Getenv(envProjectID))
+}
+
+// readRegion parses the Crusoe region from NODE_NAME.
+// "<host>.us-east1-a.compute.internal" → "us-east1-a".
+func readRegion() string {
+	name := strings.TrimSpace(os.Getenv(envNodeName))
+
+	_, domain, ok := strings.Cut(name, ".")
+	if !ok {
+		return ""
+	}
+
+	region, _, _ := strings.Cut(domain, ".")
+
+	return region
 }
 
 func readVMID(ctx context.Context) (string, error) {

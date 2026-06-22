@@ -138,6 +138,9 @@ spec:
             - name: NO_PROXY
               value: {{ .Values.proxy.noProxy | quote }}
             {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret }}
           volumeMounts:
             - name: vector-config
               mountPath: /etc/vector

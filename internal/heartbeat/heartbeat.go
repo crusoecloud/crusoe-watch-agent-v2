@@ -47,12 +47,18 @@ func NewLoop(id *identity.Identity, hc *health.Collector, conn grpc.ClientConnIn
 
 // Register calls the RegisterCwaAgent RPC to obtain an agent_id.
 func (l *Loop) Register(ctx context.Context) (string, error) {
-	resp, err := l.client.RegisterCwaAgent(ctx, &pb.RegisterCwaAgentRequest{
+	req := &pb.RegisterCwaAgentRequest{
 		VmId:           l.identity.VMID,
 		InstallType:    l.identity.InstallType,
 		Version:        version.Version,
 		CapabilityList: []string{"heartbeat"}, // TODO: dynamic CapabilityList
-	})
+		Location:       l.identity.Region,
+	}
+	if l.identity.ProjectID != "" {
+		req.ProjectId = &l.identity.ProjectID
+	}
+
+	resp, err := l.client.RegisterCwaAgent(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("register RPC: %w", err)
 	}
@@ -126,6 +132,7 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 		Components:        components,
 		LastUpgradeResult: nil, // TODO: Populate from cwa-updater persistence store on startup.
 		CommandResults:    results,
+		Location:          l.identity.Region,
 	}
 
 	if err := stream.Send(req); err != nil {

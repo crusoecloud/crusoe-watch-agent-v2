@@ -461,6 +461,14 @@ LOGS_INGRESS_ENDPOINT='${cms_url}/logs/ingest'
 AGENT_VERSION='${AGENT_VERSION}'
 EOF
 
+    # NODE_NAME mirrors the K8s downward-API var so cwa-manager can parse the
+    # region (first dot-segment of the domain) the same way in both modes.
+    local detected_fqdn
+    detected_fqdn=$(hostname -f 2>/dev/null || true)
+    if [[ -n "$detected_fqdn" ]]; then
+        echo "NODE_NAME='${detected_fqdn}'" >> "$ENV_FILE"
+    fi
+
     # Docker image pins (read by docker-compose at `up` time).
     if [[ "$INSTALL_MODE" == "docker" ]]; then
         echo "VECTOR_VERSION='${VECTOR_VERSION}-debian'" >> "$ENV_FILE"
