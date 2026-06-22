@@ -487,7 +487,10 @@ func applyLogs(sources, transforms, sinks map[string]any, cfg K8sConfig) {
 		"compression": "snappy",
 		"healthcheck": map[string]any{"enabled": false},
 		"request": map[string]any{
-			"headers":      map[string]any{"X-Crusoe-Vm-Id": "${VM_ID:-unknown}"},
+			"headers": map[string]any{
+				"X-Crusoe-Vm-Id": "${VM_ID:-unknown}",
+				"User-Agent":     "CrusoeWatchAgent/CMK-${AGENT_VERSION}",
+			},
 			"timeout_secs": requestTimeoutSecs,
 		},
 		"auth":     map[string]any{"strategy": "bearer", "token": "${CRUSOE_MONITORING_TOKEN}"},

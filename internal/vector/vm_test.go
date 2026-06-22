@@ -230,6 +230,59 @@ func TestGenerateVM_CwaManagerLogs(t *testing.T) {
 	assert.Contains(t, enrichInputs, "parse_cwa_manager_logs")
 }
 
+func TestGenerateVM_LogsEnvelopeContract(t *testing.T) {
+	// Standardized envelope: raw event under payload, identity under crusoe,
+	// _msg/_time/level/log_source at the top level. Scratch (._*) never ships.
+	cfg := parsedVM(t, VMConfig{GPUType: GPUNone})
+	xf := transforms(cfg)
+
+	enrich := xf["enrich_logs"].(map[string]any)["source"].(string)
+	assert.Contains(t, enrich, ".payload = raw")
+	assert.Contains(t, enrich, `.crusoe = { "agent": "crusoe-watch-agent"`)
+	assert.Contains(t, enrich, `"agent_version": "${AGENT_VERSION}"`)
+	// chart_version and cluster_id are K8s envelope fields.
+	assert.NotContains(t, enrich, `"chart_version"`)
+	assert.NotContains(t, enrich, `"cluster_id"`)
+	assert.Contains(t, enrich, ".log_source = cwa_log_source")
+	assert.NotContains(t, enrich, ".crusoe.log_source")
+	assert.NotContains(t, enrich, "._payload")
+	assert.NotContains(t, enrich, "._crusoe")
+	// Scratch is pulled out before wrapping, so it never lands in payload.
+	assert.Contains(t, enrich, "cwa_level = del(.level)")
+	assert.Contains(t, enrich, "cwa_log_source = del(.log_source)")
+	// No flattening of agent metadata to the top level.
+	assert.NotContains(t, enrich, `.agent = "crusoe-watch-agent"`)
+	assert.NotContains(t, enrich, ".host = get_hostname")
+	assert.Contains(t, enrich, "._msg = parsed_msg")
+	assert.Contains(t, enrich, "._msg = .payload.message")
+	assert.Contains(t, enrich, "._time = parsed_time")
+
+	journald := xf["parse_journald_logs"].(map[string]any)["source"].(string)
+	// Drop-nothing: must not delete the raw message/timestamp.
+	assert.NotContains(t, journald, "del(.message)")
+	assert.NotContains(t, journald, "del(.timestamp)")
+	assert.Contains(t, journald, `.log_source = "journald"`)
+	assert.Contains(t, journald, `.level = "info"`)
+
+	cwaManager := xf["parse_cwa_manager_logs"].(map[string]any)["source"].(string)
+	assert.Contains(t, cwaManager, `.log_source = "cwa-manager"`)
+	assert.Contains(t, cwaManager, ".level = downcase(string!(parsed.level))")
+	assert.NotContains(t, cwaManager, "del(.message)")
+	assert.NotContains(t, cwaManager, "del(.timestamp)")
+
+	internal := xf["parse_internal_logs"].(map[string]any)["source"].(string)
+	assert.Contains(t, internal, `.log_source = "crusoe-watch-agent"`)
+}
+
+func TestGenerateVM_LogsSinkUserAgent(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{GPUType: GPUNone})
+	sk := sinks(cfg)
+
+	logs := sk["crusoe_ingest"].(map[string]any)
+	headers := logs["request"].(map[string]any)["headers"].(map[string]any)
+	assert.Equal(t, "CrusoeWatchAgent/VM-${AGENT_VERSION}", headers["User-Agent"])
+}
+
 func TestGenerateVM_HostMetricsCollectors(t *testing.T) {
 	cfg := parsedVM(t, VMConfig{GPUType: GPUNone})
 	src := sources(cfg)

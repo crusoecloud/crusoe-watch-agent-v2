@@ -152,7 +152,10 @@ func logsSink() map[string]any {
 		"compression": "snappy",
 		"healthcheck": map[string]any{"enabled": false},
 		"request": map[string]any{
-			"headers":      map[string]any{"X-Crusoe-Vm-Id": "${VM_ID}"},
+			"headers": map[string]any{
+				"X-Crusoe-Vm-Id": "${VM_ID}",
+				"User-Agent":     "CrusoeWatchAgent/VM-${AGENT_VERSION}",
+			},
 			"timeout_secs": requestTimeoutSecs,
 		},
 		"auth": map[string]any{

@@ -9,11 +9,11 @@ package vector
 
 // vrlParseJournaldBody is the shared journald log parser body used by both
 // VM and K8s modes. It maps syslog PRIORITY to a level name and extracts
-// structured fields from known logfmt emitters.
+// parsed msg/level/time from known logfmt emitters.
 const vrlParseJournaldBody = `
 .log_source = "journald"
 
-# Map syslog PRIORITY (0–7) to canonical level names.
+# Map syslog PRIORITY (0–7) to a canonical level.
 priority = to_string(.PRIORITY) ?? ""
 if priority == "0" {
     .level = "emergency"
@@ -37,40 +37,25 @@ msg = string(.message) ?? ""
 ._msg = msg
 
 # Only parse logfmt from known emitters (containerd, dockerd, etcd).
-# Gate on ` + "`" + `^\S+=` + "`" + ` to avoid false positives. Validate extracted keys
-# are proper identifiers. Everything else keeps its raw _msg.
+# Gate on ` + "`" + `^\S+=` + "`" + ` to avoid false positives.
 logfmt_emitters = ["containerd", "dockerd", "etcd"]
 syslog_id = string(.SYSLOG_IDENTIFIER) ?? ""
 
 if includes(logfmt_emitters, syslog_id) && match(msg, r'^\S+=') {
     parsed, err = parse_logfmt(msg)
     if err == null && is_object(parsed) {
-        structured_fields = {}
-        for_each(object(parsed)) -> |key, value| {
-            is_bare = (value == true) || (value == "true")
-            if !is_bare && match(key, r'^[a-zA-Z_][a-zA-Z0-9_.-]*$') {
-                structured_fields = set!(structured_fields, [key], value)
+        structured_fields = object(parsed)
+        if exists(structured_fields.msg) {
+            ._msg = string!(structured_fields.msg)
+        }
+        if exists(structured_fields.time) {
+            parsed_time, ts_err = parse_timestamp(string!(structured_fields.time), format: "%+")
+            if ts_err == null {
+                ._time = parsed_time
             }
         }
-
-        if length(structured_fields) > 0 {
-            if exists(structured_fields.msg) {
-                ._msg = string!(structured_fields.msg)
-            }
-            if exists(structured_fields.time) {
-                parsed_time, ts_err = parse_timestamp(string!(structured_fields.time), format: "%+")
-                if ts_err == null {
-                    ._time = parsed_time
-                }
-            }
-            if exists(structured_fields.level) {
-                .level = downcase(string!(structured_fields.level))
-            }
-            for_each(structured_fields) -> |key, value| {
-                if key != "msg" && key != "time" && key != "level" {
-                    . = set!(., [key], value)
-                }
-            }
+        if exists(structured_fields.level) {
+            .level = downcase(string!(structured_fields.level))
         }
     }
 }
@@ -98,38 +83,60 @@ if err == null && is_object(parsed) {
         if ts_err == null { ._time = parsed_time }
     }
     if exists(parsed.level) { .level = downcase(string!(parsed.level)) }
-    for_each(object(parsed)) -> |key, value| {
-        if key != "msg" && key != "time" && key != "level" {
-            . = set!(., [key], value)
-        }
-    }
 }
-
-del(.message)
-del(.timestamp)
 `
 
-// vrlEnrichLogsBody is the shared log enrichment body: deletes source_type,
-// normalizes timestamps and messages, and maps log levels to a canonical enum.
-// Mode-specific headers (agent metadata) are prepended by vrlEnrichLogs / vrlEnrichLogsK8s.
-const vrlEnrichLogsBody = `
-del(.source_type)
-
-# Timestamp fallback: __REALTIME_TIMESTAMP (journald) → .timestamp (internal)
-if !exists(._time) {
-    if exists(.__REALTIME_TIMESTAMP) {
-        ._time = .__REALTIME_TIMESTAMP
-    } else if exists(.timestamp) {
-        ._time = .timestamp
-    }
+// vrlEnrichLogsPrefix and vrlEnrichLogsSuffix assemble the standardized
+// envelope (see "Managed Logs Redesign"): the raw event verbatim under
+// `payload`, Crusoe identity metadata under `crusoe` (the mode-specific object
+// literal is spliced between the two; remaining identity fields are added by
+// CML Ingress), and `_msg`/`_time`/`level`/`log_source` at the top level.
+const vrlEnrichLogsPrefix = `
+parsed_msg = null
+if exists(._msg) {
+    parsed_msg = del(._msg)
+}
+parsed_time = null
+if exists(._time) {
+    parsed_time = del(._time)
+}
+cwa_level = null
+if exists(.level) {
+    cwa_level = del(.level)
+}
+cwa_log_source = null
+if exists(.log_source) {
+    cwa_log_source = del(.log_source)
 }
 
-# Message fallback
-if !exists(._msg) && exists(.message) {
-    ._msg = del(.message)
+raw = .
+. = {}
+.payload = raw
+
+.crusoe = `
+
+const vrlEnrichLogsSuffix = `
+
+if cwa_log_source != null {
+    .log_source = cwa_log_source
 }
 
-# Level normalization: map synonyms to canonical enum, drop unrecognized.
+if parsed_msg != null {
+    ._msg = parsed_msg
+} else if exists(.payload.message) {
+    ._msg = .payload.message
+}
+
+if parsed_time != null {
+    ._time = parsed_time
+} else if exists(.payload.__REALTIME_TIMESTAMP) {
+    ._time = .payload.__REALTIME_TIMESTAMP
+} else if exists(.payload.timestamp) {
+    ._time = .payload.timestamp
+}
+
+# Normalize level to canonical enum (mirrors GCP Cloud Logging SEVERITY_TRANSLATIONS).
+# Unrecognized values are omitted.
 level_synonyms = {
     "emergency": "emergency", "emerg": "emergency",
     "alert": "alert", "a": "alert",
@@ -141,13 +148,11 @@ level_synonyms = {
     "debug": "debug", "trace": "debug", "trace_int": "debug",
     "fine": "debug", "finer": "debug", "finest": "debug", "config": "debug", "d": "debug"
 }
-if exists(.level) {
-    lvl = downcase(string!(.level))
+if cwa_level != null {
+    lvl = downcase(string!(cwa_level))
     normalized = get(level_synonyms, [lvl]) ?? null
     if normalized != null {
         .level = normalized
-    } else {
-        del(.level)
     }
 }
 `

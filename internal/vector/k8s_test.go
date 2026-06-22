@@ -339,6 +339,60 @@ func TestApplyLogs(t *testing.T) {
 	assert.Contains(t, sink["uri"].(string), "/logs/ingest")
 }
 
+func TestK8sLogsEnvelopeContract(t *testing.T) {
+	// Standardized envelope: raw event under payload, identity under crusoe,
+	// _msg/_time/level/log_source at the top level. Scratch (._*) never ships.
+	cfg := buildAndParse(t, nil, nil, testK8sConfig())
+	transforms := getTransforms(cfg)
+
+	enrich := transforms["enrich_logs"].(map[string]any)["source"].(string)
+	assert.Contains(t, enrich, ".payload = raw")
+	assert.Contains(t, enrich, `.crusoe = { "agent": "crusoe-watch-agent"`)
+	// K8s envelope uses chart_version (not agent_version — that's the VM field name).
+	assert.Contains(t, enrich, `"chart_version": "${AGENT_VERSION}"`)
+	assert.NotContains(t, enrich, `"agent_version"`)
+	assert.NotContains(t, enrich, "cluster_id")
+	assert.Contains(t, enrich, ".log_source = cwa_log_source")
+	assert.NotContains(t, enrich, ".crusoe.log_source")
+	assert.NotContains(t, enrich, "._payload")
+	assert.NotContains(t, enrich, "._crusoe")
+	// Scratch is pulled out before wrapping, so it never lands in payload.
+	assert.Contains(t, enrich, "cwa_level = del(.level)")
+	assert.Contains(t, enrich, "cwa_log_source = del(.log_source)")
+	// No flattening of agent metadata to the top level.
+	assert.NotContains(t, enrich, `.agent = "crusoe-watch-agent"`)
+	assert.NotContains(t, enrich, ".host = get_hostname")
+	assert.Contains(t, enrich, "._msg = parsed_msg")
+	assert.Contains(t, enrich, "._msg = .payload.message")
+	assert.Contains(t, enrich, "._time = parsed_time")
+
+	journald := transforms["parse_journald_logs"].(map[string]any)["source"].(string)
+	// Drop-nothing: must not delete the raw message/timestamp.
+	assert.NotContains(t, journald, "del(.message)")
+	assert.NotContains(t, journald, "del(.timestamp)")
+	assert.Contains(t, journald, `.log_source = "journald"`)
+	assert.Contains(t, journald, `.level = "info"`)
+	assert.Contains(t, journald, ".level = string!(parsed_klog.level)")
+
+	cwaManager := transforms["parse_cwa_manager_logs"].(map[string]any)["source"].(string)
+	assert.Contains(t, cwaManager, `.log_source = "cwa-manager"`)
+	assert.Contains(t, cwaManager, ".level = downcase(string!(parsed.level))")
+	assert.NotContains(t, cwaManager, "del(.message)")
+	assert.NotContains(t, cwaManager, "del(.timestamp)")
+
+	internal := transforms["parse_internal_logs"].(map[string]any)["source"].(string)
+	assert.Contains(t, internal, `.log_source = "crusoe-watch-agent"`)
+}
+
+func TestK8sLogsSinkUserAgent(t *testing.T) {
+	cfg := buildAndParse(t, nil, nil, testK8sConfig())
+	sinks := getSinks(cfg)
+
+	sink := sinks["crusoe_ingest"].(map[string]any)
+	headers := sink["request"].(map[string]any)["headers"].(map[string]any)
+	assert.Equal(t, "CrusoeWatchAgent/CMK-${AGENT_VERSION}", headers["User-Agent"])
+}
+
 func TestApplyLogsDisabled(t *testing.T) {
 	k := testK8sConfig()
 	k.LogsEnabled = false

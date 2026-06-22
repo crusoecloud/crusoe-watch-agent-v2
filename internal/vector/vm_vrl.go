@@ -7,24 +7,19 @@ package vector
 // Log pipeline (VM mode)
 // ---------------------------------------------------------------------------
 
-// vrlParseJournaldLogs is the VM version: shared body + cleanup.
-const vrlParseJournaldLogs = vrlParseJournaldBody + `
-del(.message)
-del(.timestamp)
-`
+// vrlParseJournaldLogs is the VM version: the shared body.
+const vrlParseJournaldLogs = vrlParseJournaldBody
 
-// vrlParseCwaManagerLogs is the VM version: journald source → logfmt body + cleanup.
+// vrlParseCwaManagerLogs is the VM version: journald source → logfmt body.
 const vrlParseCwaManagerLogs = `
 .log_source = "cwa-manager"
 log_line = string(.message) ?? ""
 ` + vrlParseCwaManagerBody
 
-// vrlEnrichLogs is the VM version: agent metadata + shared body.
-const vrlEnrichLogs = `
-.agent = "crusoe-watch-agent"
-.agent_version = "${AGENT_VERSION}"
-.host = get_hostname!()
-` + vrlEnrichLogsBody
+// vrlEnrichLogs is the VM version of the envelope assembly.
+const vrlEnrichLogs = vrlEnrichLogsPrefix +
+	`{ "agent": "crusoe-watch-agent", "agent_version": "${AGENT_VERSION}" }` +
+	vrlEnrichLogsSuffix
 
 // ---------------------------------------------------------------------------
 // Metrics pipeline (VM mode)

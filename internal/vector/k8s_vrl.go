@@ -21,27 +21,22 @@ const vrlFilterJournaldNoise = `
 const vrlParseJournaldLogsK8s = vrlParseJournaldBody + `
 # klog prefix parser. Without this, kubelet stdout is always level=info
 # (journald PRIORITY is fixed at 6); parse_klog reads the leading severity
-# letter and leaves the payload verbatim.
+# letter.
 klog_emitters = ["kubelet", "kube-proxy"]
 if includes(klog_emitters, syslog_id) {
     parsed_klog, klog_err = parse_klog(msg)
     if klog_err == null && is_object(parsed_klog) {
-        for_each(object(parsed_klog)) -> |key, value| {
-            if key == "message" {
-                ._msg = string!(value)
-            } else if key == "level" {
-                .level = string!(value)
-            } else if key == "timestamp" {
-                ._time = value
-            } else {
-                . = set!(., [key], value)
-            }
+        if exists(parsed_klog.message) {
+            ._msg = string!(parsed_klog.message)
+        }
+        if exists(parsed_klog.level) {
+            .level = string!(parsed_klog.level)
+        }
+        if exists(parsed_klog.timestamp) {
+            ._time = parsed_klog.timestamp
         }
     }
 }
-
-del(.message)
-del(.timestamp)
 `
 
 // vrlParseCwaManagerLogsK8s is the K8s version: unwraps CRI log format, then
@@ -63,13 +58,11 @@ if parsed_cri != null {
 }
 ` + vrlParseCwaManagerBody
 
-// vrlEnrichLogsK8s is the K8s version: agent metadata + cluster ID + shared body.
-const vrlEnrichLogsK8s = `
-.agent = "crusoe-watch-agent"
-.agent_version = "${AGENT_VERSION}"
-.host = get_hostname!()
-.crusoe_cluster_id = "${CRUSOE_CLUSTER_ID}"
-` + vrlEnrichLogsBody
+// vrlEnrichLogsK8s is the K8s version of the envelope assembly. chart_version
+// is populated from AGENT_VERSION (helm AppVersion).
+const vrlEnrichLogsK8s = vrlEnrichLogsPrefix +
+	`{ "agent": "crusoe-watch-agent", "chart_version": "${AGENT_VERSION}" }` +
+	vrlEnrichLogsSuffix
 
 // ---------------------------------------------------------------------------
 // Metric transforms (K8s mode)
