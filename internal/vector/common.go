@@ -131,10 +131,18 @@ func diskBufferConfig() map[string]any {
 	}
 }
 
-func tlsConfig() map[string]any {
+// tlsConfig returns the TLS settings for a sink. When the sink routes through a
+// proxy, h2 is stripped from the ALPN list: the proxy terminates HTTP/1.1 and
+// re-establishing h2 through it breaks the connection.
+func tlsConfig(viaProxy bool) map[string]any {
+	alpn := []string{"h2", "http/1.1"}
+	if viaProxy {
+		alpn = []string{"http/1.1"}
+	}
+
 	return map[string]any{
 		"verify_certificate": true,
 		"verify_hostname":    true,
-		"alpn_protocols":     []string{"h2", "http/1.1"},
+		"alpn_protocols":     alpn,
 	}
 }

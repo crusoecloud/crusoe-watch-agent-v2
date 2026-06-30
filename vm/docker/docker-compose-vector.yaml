@@ -1,6 +1,6 @@
 services:
   crusoe-vector:
-    image: timberio/vector:${VECTOR_VERSION}
+    image: ghcr.io/vectordotdev/vector:${VECTOR_VERSION}
     container_name: crusoe-vector
     hostname: crusoe-vector
     volumes:

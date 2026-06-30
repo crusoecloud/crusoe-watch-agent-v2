@@ -438,6 +438,10 @@ func TestNodeMetricsSinkProxyWhenEnabled(t *testing.T) {
 	sinks := getSinks(cfg)
 	sink := sinks["cms_gateway_node_metrics"].(map[string]any)
 	assert.Contains(t, sink, "proxy")
+
+	// h2 must be stripped from ALPN when routing through the proxy.
+	tls := sink["tls"].(map[string]any)
+	assert.Equal(t, []any{"http/1.1"}, tls["alpn_protocols"])
 }
 
 // ---------------------------------------------------------------------------

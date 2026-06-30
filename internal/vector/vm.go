@@ -164,7 +164,7 @@ func logsSink() map[string]any {
 		},
 		"encoding": map[string]any{"codec": "json"},
 		"batch":    map[string]any{"max_bytes": logBatchMaxBytes},
-		"tls":      tlsConfig(),
+		"tls":      tlsConfig(false),
 	}
 }
 
@@ -180,6 +180,6 @@ func metricsRemoteWriteSink(inputs []string) map[string]any {
 		"batch":       map[string]any{"max_bytes": metricBatchMaxBytes, "aggregate": false},
 		"buffer":      diskBufferConfig(),
 		"compression": "snappy",
-		"tls":         tlsConfig(),
+		"tls":         tlsConfig(false),
 	}
 }

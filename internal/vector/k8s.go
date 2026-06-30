@@ -196,7 +196,7 @@ func buildStaticConfig(sources, transforms, sinks map[string]any, cfg K8sConfig)
 
 	// Node metrics sink
 	nodeMetricsSink := buildPromRemoteWriteSink(
-		cfg.infraEndpoint(), "cri:vm/${VM_ID}", cfg.Proxy, true,
+		cfg.infraEndpoint(), "cri:vm/${VM_ID}", cfg.Proxy,
 	)
 	nodeMetricsSink["inputs"] = []string{nodeMetricsTransformName, "add_internal_labels"}
 	sinks["cms_gateway_node_metrics"] = nodeMetricsSink
@@ -251,7 +251,7 @@ func buildDynamicConfig(
 		sinkName:      "kube_state_metrics_sink",
 		transformVRL:  vrlEnrichKSM,
 		sinkConfig: buildPromRemoteWriteSink(
-			cfg.clusterEndpoint(), "cri:cmk/${CRUSOE_CLUSTER_ID}", cfg.Proxy, false,
+			cfg.clusterEndpoint(), "cri:cmk/${CRUSOE_CLUSTER_ID}", cfg.Proxy,
 		),
 	})
 	applyClusterExporter(sources, transforms, sinks, podsByType.slurmIP, clusterExporterSpec{
@@ -261,7 +261,7 @@ func buildDynamicConfig(
 		sinkName:      "slurm_metrics_sink",
 		transformVRL:  vrlEnrichSlurm,
 		sinkConfig: buildPromRemoteWriteSink(
-			cfg.clusterEndpoint(), "cri:cmk/${CRUSOE_CLUSTER_ID}", cfg.Proxy, true,
+			cfg.clusterEndpoint(), "cri:cmk/${CRUSOE_CLUSTER_ID}", cfg.Proxy,
 		),
 	})
 	applyClusterExporter(sources, transforms, sinks, podsByType.cmeIP, clusterExporterSpec{
@@ -271,7 +271,7 @@ func buildDynamicConfig(
 		sinkName:      "crusoe_metrics_exporter_sink",
 		transformVRL:  buildCMETransformVRL(cfg.NodeLabels),
 		sinkConfig: buildPromRemoteWriteSink(
-			cfg.infraEndpoint(), "cri:vm/${VM_ID}", cfg.Proxy, true,
+			cfg.infraEndpoint(), "cri:vm/${VM_ID}", cfg.Proxy,
 		),
 	})
 
@@ -363,7 +363,7 @@ func applyCustomMetrics(
 	}
 
 	baseSinkConfig := buildPromRemoteWriteSink(
-		cfg.customEndpoint(), "cri:custom_metrics/${CRUSOE_CLUSTER_ID}", cfg.Proxy, true,
+		cfg.customEndpoint(), "cri:custom_metrics/${CRUSOE_CLUSTER_ID}", cfg.Proxy,
 	)
 
 	for _, pod := range pods {
@@ -496,7 +496,7 @@ func applyLogs(sources, transforms, sinks map[string]any, cfg K8sConfig) {
 		"auth":     map[string]any{"strategy": "bearer", "token": "${CRUSOE_MONITORING_TOKEN}"},
 		"encoding": map[string]any{"codec": "json"},
 		"batch":    map[string]any{"max_bytes": logBatchMaxBytes},
-		"tls":      tlsConfig(),
+		"tls":      tlsConfig(cfg.Proxy.Enabled),
 	}
 	if cfg.Proxy.Enabled {
 		sinkConfig["proxy"] = cfg.Proxy.toMap()
@@ -508,7 +508,7 @@ func applyLogs(sources, transforms, sinks map[string]any, cfg K8sConfig) {
 // Sink builders
 // ---------------------------------------------------------------------------
 
-func buildPromRemoteWriteSink(endpoint, tenantID string, proxy ProxyConfig, withProxy bool) map[string]any {
+func buildPromRemoteWriteSink(endpoint, tenantID string, proxy ProxyConfig) map[string]any {
 	cfg := map[string]any{
 		"type":        "prometheus_remote_write",
 		"endpoint":    endpoint,
@@ -519,9 +519,9 @@ func buildPromRemoteWriteSink(endpoint, tenantID string, proxy ProxyConfig, with
 		"request":     map[string]any{"concurrency": "adaptive", "timeout_secs": requestTimeoutSecs},
 		"batch":       map[string]any{"max_bytes": metricBatchMaxBytes, "aggregate": false},
 		"buffer":      diskBufferConfig(),
-		"tls":         tlsConfig(),
+		"tls":         tlsConfig(proxy.Enabled),
 	}
-	if withProxy && proxy.Enabled {
+	if proxy.Enabled {
 		cfg["proxy"] = proxy.toMap()
 	}
 

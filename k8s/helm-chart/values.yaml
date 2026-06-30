@@ -21,7 +21,7 @@ tokenJob:
   ttlSecondsAfterFinished: 300
 
 vector:
-  image: timberio/vector
+  image: ghcr.io/vectordotdev/vector
   tag: "@@VECTOR_VERSION@@-debian"
 
 cwaManager:
@@ -74,11 +74,11 @@ slurm:
   scrapeInterval: 60
 
 cme:
-  enabled: false
+  enabled: true
   port: 9500
   scrapeInterval: 60
   image: ghcr.io/crusoecloud/crusoe-metrics-exporter/crusoe-metrics-exporter
-  tag: "0.2.3"
+  tag: "0.2.4"
 
 customMetrics:
   enabled: true

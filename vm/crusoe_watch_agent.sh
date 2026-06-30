@@ -39,7 +39,7 @@ SYSTEMCTL_DIR="/etc/systemd/system"
 DCGM_EXPORTER_PORT=9400
 AMD_EXPORTER_PORT=5000
 CME_PORT=9500
-
+CME_VERSION="0.2.4"
 CME_BIN="/usr/local/bin/crusoe-metrics-exporter"
 
 # dcgm-exporter Docker image by Ubuntu version.
@@ -56,7 +56,7 @@ done
 # Configurable via flags
 ###############################################################################
 INSTALL_MODE="docker"   # "docker" or "native"
-ENABLE_CME=false
+ENABLE_CME=true
 MONITORING_TOKEN=""
 INGRESS_URL=""
 
