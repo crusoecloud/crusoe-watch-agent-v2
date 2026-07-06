@@ -63,6 +63,14 @@ publish_vm() {
         "$script"
     rm -f "$key"
 
+    # Build the cwa-manager binary for native-mode installs.
+    log "Building cwa-manager-linux-amd64"
+    local binary="${RENDER_OUT}/cwa-manager-linux-amd64"
+    ( cd "$WORK" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+        -ldflags "-X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${NEW_VERSION}'" \
+        -o "$binary" \
+        ./cmd/cwa-manager ) || die "go build cwa-manager failed"
+
     local notes_file
     notes_file=$(generate_notes "$NEW_TAG")
 
@@ -71,6 +79,7 @@ publish_vm() {
         "${script}#crusoe_watch_agent.sh"
         "${script}.sig#crusoe_watch_agent.sh.sig"
         "${script}.bundle#crusoe_watch_agent.sh.bundle"
+        "${binary}#cwa-manager-linux-amd64"
         "${RENDER_OUT}/VERSION#VERSION"
     )
     # Compose + systemd + config files travel with the script as assets so a
@@ -126,7 +135,6 @@ publish_k8s() {
         --target "$RELEASE_SHA" \
         --title "K8s Agent ${NEW_VERSION}" \
         ${notes_file:+--notes-file "$notes_file"} \
-        --latest \
         "${tgz}#crusoe-watch-agent-${chart_version}.tgz"
 }
 

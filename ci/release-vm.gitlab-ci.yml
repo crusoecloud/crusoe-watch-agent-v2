@@ -15,7 +15,7 @@
 
 release:vm:
   stage: release
-  image: alpine:3.19
+  image: golang:1.26-alpine
   resource_group: release-vm        # serialize: never two VM releases at once
   rules:
     # Manual button on main pipelines. Operators can also trigger via the
@@ -31,13 +31,16 @@ release:vm:
     GITHUB_REPO: "crusoecloud/crusoe-watch-agent-v2"
   before_script:
     # Tools: git for tag push; cosign for signing; gh for the GitHub Release;
-    # jq for parsing.
+    # jq for parsing. Go ships in the base image.
     - apk add --no-cache git bash curl jq cosign github-cli
     - git config --global user.name  "gitlab-ci"
     - git config --global user.email "gitlab-ci@crusoe.ai"
     # Push URL with a token that can write tags (the job token cannot push tags).
     - export GIT_PUSH_URL="https://ci-push-token:${REPO_ACCESS_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
     - export GITHUB_TOKEN="${GHCR_TOKEN}"
+    # Private Go modules (gitlab.com/crusoeenergy/*) — same pattern as Dockerfile.
+    - printf 'machine %s login gitlab-ci-token password %s\n' "${CI_SERVER_HOST}" "${CI_JOB_TOKEN}" > ~/.netrc
+    - go env -w "GOPRIVATE=${CI_SERVER_HOST}"
     - git fetch --tags --quiet origin
   script:
     - ./ci/scripts/release.sh
