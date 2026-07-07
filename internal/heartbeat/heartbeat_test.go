@@ -1,12 +1,15 @@
 package heartbeat
 
 import (
+	"context"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/command"
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
@@ -74,54 +77,63 @@ func TestDeriveAgentStatus(t *testing.T) {
 	}
 }
 
-func TestHandleCommand(t *testing.T) {
-	t.Run("stores result in pendingResults", func(t *testing.T) {
-		l := newTestLoop()
-
-		cmd := &pb.CwaCommand{
-			ExecutionId: "exec-1",
-			Command:     "restart_vector",
-		}
-		l.handleCommand(cmd)
-
-		result, ok := l.pendingResults["exec-1"]
-		require.True(t, ok, "result should be stored in pendingResults")
-		assert.Equal(t, "exec-1", result.GetExecutionId())
-		assert.Equal(t, "restart_vector", result.GetCommand())
-		assert.Equal(t, pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_SUCCEEDED, result.GetStatus())
-	})
-
-	t.Run("initializes nil pendingResults map", func(t *testing.T) {
-		l := &Loop{logger: slog.Default()}
-
-		l.handleCommand(&pb.CwaCommand{ExecutionId: "exec-1", Command: "noop"})
-
-		require.NotNil(t, l.pendingResults)
-		assert.Contains(t, l.pendingResults, "exec-1")
-	})
-
-	t.Run("multiple commands", func(t *testing.T) {
-		l := newTestLoop()
-
-		l.handleCommand(&pb.CwaCommand{ExecutionId: "exec-1", Command: "cmd-a"})
-		l.handleCommand(&pb.CwaCommand{ExecutionId: "exec-2", Command: "cmd-b"})
-		l.handleCommand(&pb.CwaCommand{ExecutionId: "exec-3", Command: "cmd-c"})
-
-		assert.Len(t, l.pendingResults, 3)
-		assert.Contains(t, l.pendingResults, "exec-1")
-		assert.Contains(t, l.pendingResults, "exec-2")
-		assert.Contains(t, l.pendingResults, "exec-3")
-	})
-}
-
-func TestHandleCommand_OverwritesDuplicate(t *testing.T) {
+// DeliverResult is the command.ResultSink implementation used by the dispatcher.
+func TestDeliverResult(t *testing.T) {
 	l := newTestLoop()
 
-	l.handleCommand(&pb.CwaCommand{ExecutionId: "exec-1", Command: "cmd-a"})
-	l.handleCommand(&pb.CwaCommand{ExecutionId: "exec-1", Command: "cmd-b"})
+	l.DeliverResult(&pb.CwaCommandResult{
+		ExecutionId: "exec-1",
+		Command:     "config.apply",
+		Status:      pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_SUCCEEDED,
+	})
 
-	assert.Len(t, l.pendingResults, 1)
-	assert.Equal(t, "cmd-b", l.pendingResults["exec-1"].GetCommand(), "duplicate execution_id should overwrite")
+	result, ok := l.pendingResults["exec-1"]
+	require.True(t, ok, "result should be stored in pendingResults")
+	assert.Equal(t, "config.apply", result.GetCommand())
+}
+
+func TestDeliverResult_InitializesNilMap(t *testing.T) {
+	l := &Loop{logger: slog.Default()}
+
+	l.DeliverResult(&pb.CwaCommandResult{ExecutionId: "exec-1"})
+
+	require.NotNil(t, l.pendingResults)
+	assert.Contains(t, l.pendingResults, "exec-1")
+}
+
+type stubHandler struct{}
+
+func (stubHandler) Timeout() time.Duration { return command.Instant }
+
+func (stubHandler) Run(context.Context, map[string]string) error { return nil }
+
+func TestHandleCommand_DelegatesToDispatcher(t *testing.T) {
+	l := newTestLoop()
+	disp := command.NewDispatcher(l, slog.Default())
+	disp.Register("config.apply", stubHandler{})
+	l.SetDispatcher(disp)
+
+	l.handleCommand(context.Background(), &pb.CwaCommand{ExecutionId: "exec-1", Command: "config.apply"})
+
+	require.Eventually(t, func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+
+		return l.pendingResults["exec-1"] != nil
+	}, time.Second, 5*time.Millisecond)
+
+	l.mu.Lock()
+	result := l.pendingResults["exec-1"]
+	l.mu.Unlock()
+	assert.Equal(t, pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_SUCCEEDED, result.GetStatus())
+}
+
+func TestHandleCommand_NoDispatcherIsNoOp(t *testing.T) {
+	l := newTestLoop()
+
+	l.handleCommand(context.Background(), &pb.CwaCommand{ExecutionId: "exec-1", Command: "config.apply"})
+
+	assert.Empty(t, l.pendingResults)
 }
 
 func TestDeriveAgentStatus_UnspecifiedIsDegraded(t *testing.T) {
@@ -136,9 +148,9 @@ func TestDeriveAgentStatus_UnspecifiedIsDegraded(t *testing.T) {
 
 func TestPruneAckedResults(t *testing.T) {
 	tests := []struct {
-		name             string
-		pending          map[string]*pb.CwaCommandResult
-		echoed           map[string]struct{}
+		name              string
+		pending           map[string]*pb.CwaCommandResult
+		echoed            map[string]struct{}
 		expectedRemaining []string
 	}{
 		{

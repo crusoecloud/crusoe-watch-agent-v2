@@ -430,6 +430,36 @@ func TestNodeMetricsSinkEndpointSet(t *testing.T) {
 	assert.Equal(t, "https://cms-monitoring.example.com/ingest", sink["endpoint"])
 }
 
+func TestK8sEndpointOverrides(t *testing.T) {
+	pods := []ClassifiedPod{{Name: "ksm-1", IP: "10.0.0.3", Type: PodTypeKSM}}
+	k := testK8sConfig()
+	k.LogsEndpoint = "https://logs.example.com"
+	k.MetricsEndpoint = "https://metrics.example.com"
+	cfg := buildAndParse(t, pods, nil, k)
+
+	// Control-plane overrides win over SinkEndpoint, per sink kind: every
+	// metrics-derived endpoint uses the metrics base, logs use the logs base.
+	sinks := getSinks(cfg)
+	nodeMetrics := sinks["cms_gateway_node_metrics"].(map[string]any)
+	assert.Equal(t, "https://metrics.example.com/ingest", nodeMetrics["endpoint"])
+	ksm := sinks["kube_state_metrics_sink"].(map[string]any)
+	assert.Equal(t, "https://metrics.example.com/cluster", ksm["endpoint"])
+	logs := sinks["crusoe_ingest"].(map[string]any)
+	assert.Equal(t, "https://logs.example.com/logs/ingest", logs["uri"])
+}
+
+func TestK8sEndpointOverride_PartialFallsBackToSinkEndpoint(t *testing.T) {
+	k := testK8sConfig()
+	k.LogsEndpoint = "https://logs.example.com"
+	cfg := buildAndParse(t, nil, nil, k)
+
+	sinks := getSinks(cfg)
+	logs := sinks["crusoe_ingest"].(map[string]any)
+	assert.Equal(t, "https://logs.example.com/logs/ingest", logs["uri"])
+	nodeMetrics := sinks["cms_gateway_node_metrics"].(map[string]any)
+	assert.Equal(t, "https://cms-monitoring.example.com/ingest", nodeMetrics["endpoint"])
+}
+
 func TestNodeMetricsSinkProxyWhenEnabled(t *testing.T) {
 	k := testK8sConfig()
 	k.Proxy = ProxyConfig{Enabled: true, HTTP: "http://proxy:8080"}

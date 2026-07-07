@@ -106,14 +106,38 @@ type K8sConfig struct {
 	SinkEndpoint string // base URL, e.g. "https://cms-monitoring.crusoecloud.com"
 	Proxy        ProxyConfig
 
+	// LogsEndpoint and MetricsEndpoint are control-plane base-URL overrides
+	// (from config.apply) for the log and metric sinks respectively. They may
+	// differ, so logs and metrics can be redirected independently. When empty
+	// the sinks fall back to SinkEndpoint.
+	LogsEndpoint    string
+	MetricsEndpoint string
+
 	NodeLabels NodeLabels
 }
 
+// Base-URL helpers: control-plane overrides win over the deployment default.
+func (c K8sConfig) logsBase() string {
+	if c.LogsEndpoint != "" {
+		return c.LogsEndpoint
+	}
+
+	return c.SinkEndpoint
+}
+
+func (c K8sConfig) metricsBase() string {
+	if c.MetricsEndpoint != "" {
+		return c.MetricsEndpoint
+	}
+
+	return c.SinkEndpoint
+}
+
 // Derived endpoint helpers.
-func (c K8sConfig) infraEndpoint() string   { return c.SinkEndpoint + "/ingest" }
-func (c K8sConfig) clusterEndpoint() string { return c.SinkEndpoint + "/cluster" }
-func (c K8sConfig) customEndpoint() string  { return c.SinkEndpoint + "/custom" }
-func (c K8sConfig) logsEndpoint() string    { return c.SinkEndpoint + "/logs/ingest" }
+func (c K8sConfig) infraEndpoint() string   { return c.metricsBase() + "/ingest" }
+func (c K8sConfig) clusterEndpoint() string { return c.metricsBase() + "/cluster" }
+func (c K8sConfig) customEndpoint() string  { return c.metricsBase() + "/custom" }
+func (c K8sConfig) logsEndpoint() string    { return c.logsBase() + "/logs/ingest" }
 
 // ---------------------------------------------------------------------------
 // Constants

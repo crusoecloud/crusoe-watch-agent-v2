@@ -13,7 +13,7 @@ import (
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/watcher"
 )
 
-const defaultVectorConfigPath = "/etc/vector/vector.yaml"
+const defaultVectorConfigPath = "/etc/crusoe/vector/vector.yaml"
 
 // Default exporter ports and scrape intervals matching production v1 deployment.
 const (
@@ -34,32 +34,37 @@ const (
 // startK8sWatcher creates an in-cluster Kubernetes client and launches the
 // Vector config watcher in a background goroutine. If client creation fails,
 // it logs the error and returns — the agent continues in degraded mode.
-func startK8sWatcher(ctx context.Context, logger *slog.Logger) {
+func startK8sWatcher(ctx context.Context, logger *slog.Logger, logsEndpoint, metricsEndpoint string) *watcher.Watcher {
 	nodeName, err := watcher.ResolveNodeName()
 	if err != nil {
 		logger.Error("failed to resolve node name, k8s watcher disabled", "error", err)
 
-		return
+		return nil
 	}
 
 	restCfg, err := rest.InClusterConfig()
 	if err != nil {
 		logger.Error("failed to create in-cluster config, k8s watcher disabled", "error", err)
 
-		return
+		return nil
 	}
 
 	client, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		logger.Error("failed to create kubernetes client, k8s watcher disabled", "error", err)
 
-		return
+		return nil
 	}
+
+	k8sCfg := buildK8sConfig()
+	// Seed the persisted control-plane endpoints so the first reconcile carries them.
+	k8sCfg.LogsEndpoint = logsEndpoint
+	k8sCfg.MetricsEndpoint = metricsEndpoint
 
 	configWatcher := watcher.New(watcher.Config{
 		NodeName:   nodeName,
 		ConfigPath: getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
-		K8sCfg:     buildK8sConfig(),
+		K8sCfg:     k8sCfg,
 		Logger:     logger,
 	}, client)
 
@@ -70,6 +75,8 @@ func startK8sWatcher(ctx context.Context, logger *slog.Logger) {
 	}()
 
 	logger.Info("k8s watcher launched", "node", nodeName)
+
+	return configWatcher
 }
 
 func buildK8sConfig() vector.K8sConfig {

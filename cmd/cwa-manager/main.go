@@ -9,17 +9,20 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/command"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/health"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/heartbeat"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/identity"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/watcher"
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
@@ -28,6 +31,10 @@ var errUnknownGPUType = errors.New("unknown GPU type (use none, nvidia, amd)")
 const (
 	defaultCoordinatorAddr = "localhost:50051"
 	retryDelay             = 30 * time.Second
+
+	defaultStateDir     = "/etc/crusoe"
+	logsEndpointFile    = ".logs-endpoint"
+	metricsEndpointFile = ".metrics-endpoint"
 )
 
 func main() {
@@ -64,10 +71,10 @@ func run() error {
 		return nil
 	}
 
-	return runAgent(*coordAddr)
+	return runAgent(*coordAddr, vmCfg)
 }
 
-func runAgent(coordAddr string) error {
+func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	logger.Info("cwa-manager starting", "version", version.Version)
 
@@ -88,9 +95,19 @@ func runAgent(coordAddr string) error {
 		"project_id", ident.ProjectID,
 	)
 
-	// In K8s mode, start the Vector config watcher (pod + ConfigMap informers).
+	stateDir := getEnvOrDefault("CWA_STATE_DIR", defaultStateDir)
+	logsPath := filepath.Join(stateDir, logsEndpointFile)
+	metricsPath := filepath.Join(stateDir, metricsEndpointFile)
+
+	// Restore the last-applied endpoints so restart doesn't revert to defaults.
+	logsEndpoint := command.LoadEndpoint(logsPath)
+	metricsEndpoint := command.LoadEndpoint(metricsPath)
+	vmCfg.LogsEndpoint = logsEndpoint
+	vmCfg.MetricsEndpoint = metricsEndpoint
+
+	var configWatcher *watcher.Watcher
 	if ident.InstallType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
-		startK8sWatcher(ctx, logger)
+		configWatcher = startK8sWatcher(ctx, logger, logsEndpoint, metricsEndpoint)
 	}
 
 	// TODO: Use TLS with JWT credentials once IMDS fetch is implemented.
@@ -108,11 +125,43 @@ func runAgent(coordAddr string) error {
 	hc := health.NewCollector(logger, ident.InstallType)
 	loop := heartbeat.NewLoop(ident, hc, conn, logger)
 
+	loop.SetDispatcher(buildDispatcher(loop, ident, vmCfg, configWatcher, logsPath, metricsPath, logger))
+
 	heartbeatLoop(ctx, coordAddr, ident, loop, resolver, logger)
 
 	logger.Info("cwa-manager shutdown complete")
 
 	return nil
+}
+
+// buildDispatcher wires the command dispatcher with the config.apply handler.
+func buildDispatcher(
+	loop *heartbeat.Loop,
+	ident *identity.Identity,
+	vmCfg vector.VMConfig,
+	configWatcher *watcher.Watcher,
+	logsPath string,
+	metricsPath string,
+	logger *slog.Logger,
+) *command.Dispatcher {
+	disp := command.NewDispatcher(loop, logger)
+
+	deps := command.ConfigApplyDeps{
+		InstallType:      ident.InstallType,
+		VMCfg:            vmCfg,
+		VMConfigPath:     getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
+		LogsStatePath:    logsPath,
+		MetricsStatePath: metricsPath,
+	}
+
+	// Only set the interface when a watcher exists.
+	if configWatcher != nil {
+		deps.Watcher = configWatcher
+	}
+
+	disp.Register(command.ConfigApplyCommand, command.NewConfigApply(deps))
+
+	return disp
 }
 
 func heartbeatLoop(

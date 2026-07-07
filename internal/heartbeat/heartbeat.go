@@ -13,6 +13,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/command"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/health"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/identity"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
@@ -21,18 +22,45 @@ import (
 
 const (
 	heartbeatInterval = 30 * time.Second
+	shutdownGrace     = 5 * time.Second
 )
+
+func capabilities() []string {
+	return []string{
+		"heartbeat",
+		"config_apply",
+	}
+}
 
 // Loop manages the bidirectional heartbeat stream.
 type Loop struct {
-	identity *identity.Identity
-	health   *health.Collector
-	client   pb.CwaAgentClient
-	logger   *slog.Logger
-	mu       sync.Mutex
+	identity   *identity.Identity
+	health     *health.Collector
+	client     pb.CwaAgentClient
+	logger     *slog.Logger
+	dispatcher *command.Dispatcher
+	mu         sync.Mutex
 	// pendingResults holds command results that are re-sent on every heartbeat
 	// until the coordinator stops echoing the corresponding command.
 	pendingResults map[string]*pb.CwaCommandResult
+}
+
+// SetDispatcher wires the command dispatcher. The loop is constructed before
+// handlers so they can be registered against a loop that already exists.
+func (l *Loop) SetDispatcher(d *command.Dispatcher) {
+	l.dispatcher = d
+}
+
+// DeliverResult implements command.ResultSink. It stores a finished command
+// result for inclusion in the next heartbeat, re-sent until the coordinator acks.
+func (l *Loop) DeliverResult(result *pb.CwaCommandResult) {
+	l.mu.Lock()
+	if l.pendingResults == nil {
+		l.pendingResults = make(map[string]*pb.CwaCommandResult)
+	}
+
+	l.pendingResults[result.GetExecutionId()] = result
+	l.mu.Unlock()
 }
 
 // NewLoop creates a heartbeat Loop.
@@ -51,7 +79,7 @@ func (l *Loop) Register(ctx context.Context) (string, error) {
 		VmId:           l.identity.VMID,
 		InstallType:    l.identity.InstallType,
 		Version:        version.Version,
-		CapabilityList: []string{"heartbeat"}, // TODO: dynamic CapabilityList
+		CapabilityList: capabilities(),
 		Location:       l.identity.Region,
 	}
 	if l.identity.ProjectID != "" {
@@ -82,7 +110,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 
 	go func() {
-		errCh <- l.receiveLoop(stream)
+		errCh <- l.receiveLoop(ctx, stream)
 	}()
 
 	// Send loop: tick every 30s.
@@ -97,11 +125,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			// TODO: Graceful shutdown — wait for in-flight commands to complete,
-			// send a final heartbeat with results (or interrupted status), then exit.
-			if closeErr := stream.CloseSend(); closeErr != nil {
-				l.logger.Warn("error closing heartbeat stream", "error", closeErr)
-			}
+			l.shutdown(ctx, stream)
 
 			return fmt.Errorf("context done: %w", ctx.Err())
 		case err := <-errCh:
@@ -127,7 +151,7 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 	req := &pb.CwaAgentHeartbeatRequest{
 		AgentId:           l.identity.AgentID,
 		InstallType:       l.identity.InstallType,
-		CapabilityList:    []string{"heartbeat"}, // TODO: dynamic CapabilityList
+		CapabilityList:    capabilities(),
 		AgentStatus:       deriveAgentStatus(components),
 		Components:        components,
 		LastUpgradeResult: nil, // TODO: Populate from cwa-updater persistence store on startup.
@@ -144,7 +168,7 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 	return nil
 }
 
-func (l *Loop) receiveLoop(stream pb.CwaAgent_CwaAgentHeartbeatClient) error {
+func (l *Loop) receiveLoop(ctx context.Context, stream pb.CwaAgent_CwaAgentHeartbeatClient) error {
 	for {
 		resp, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -186,7 +210,7 @@ func (l *Loop) receiveLoop(stream pb.CwaAgent_CwaAgentHeartbeatClient) error {
 				"command", cmd.GetCommand(),
 				"parameters", cmd.GetParameters(),
 			)
-			l.handleCommand(cmd)
+			l.handleCommand(ctx, cmd)
 		}
 	}
 }
@@ -205,20 +229,35 @@ func deriveAgentStatus(c *pb.CwaComponentsHealth) pb.CwaAgentStatus {
 	return pb.CwaAgentStatus_CWA_AGENT_STATUS_DEGRADED
 }
 
-func (l *Loop) handleCommand(cmd *pb.CwaCommand) {
-	// TODO: Real command dispatch with per-command timeouts (instant: 30s, long-running: 10min).
-	// TODO: Persistence store — write {execution_id, status: "in_progress"} before execution, scan on startup.
-	result := &pb.CwaCommandResult{
-		ExecutionId: cmd.GetExecutionId(),
-		Command:     cmd.GetCommand(),
-		Status:      pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_SUCCEEDED,
-		Reason:      "acknowledged (no-op)",
+func (l *Loop) handleCommand(ctx context.Context, cmd *pb.CwaCommand) {
+	if l.dispatcher == nil {
+		l.logger.Warn("no dispatcher configured, ignoring command",
+			"command", cmd.GetCommand(), "execution_id", cmd.GetExecutionId())
+
+		return
 	}
 
-	l.mu.Lock()
-	if l.pendingResults == nil {
-		l.pendingResults = make(map[string]*pb.CwaCommandResult)
+	l.dispatcher.Dispatch(ctx, cmd)
+}
+
+// shutdown handles graceful termination: it interrupts any in-flight commands
+// (marking them INTERRUPTED), flushes a final heartbeat carrying those results
+// within a short grace window, then closes the stream.
+func (l *Loop) shutdown(ctx context.Context, stream pb.CwaAgent_CwaAgentHeartbeatClient) {
+	if l.dispatcher != nil {
+		l.dispatcher.Interrupt()
 	}
-	l.pendingResults[cmd.GetExecutionId()] = result
-	l.mu.Unlock()
+
+	// ctx is already cancelled here; detach so the final flush gets its own
+	// grace window.
+	graceCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
+	defer cancel()
+
+	if err := l.sendHeartbeat(graceCtx, stream); err != nil {
+		l.logger.Warn("error sending final heartbeat", "error", err)
+	}
+
+	if closeErr := stream.CloseSend(); closeErr != nil {
+		l.logger.Warn("error closing heartbeat stream", "error", closeErr)
+	}
 }

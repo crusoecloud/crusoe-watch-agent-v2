@@ -33,7 +33,7 @@ INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/crusoe/crusoe_watch_agent"
 SECRETS_DIR="/etc/crusoe/secrets"
 ENV_FILE="${CONFIG_DIR}/.env"
-VECTOR_CONFIG="/etc/vector/vector.yaml"
+VECTOR_CONFIG="/etc/crusoe/vector/vector.yaml"
 SYSTEMCTL_DIR="/etc/systemd/system"
 
 DCGM_EXPORTER_PORT=9400

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -99,7 +98,9 @@ func (w *Watcher) Run(ctx context.Context) error {
 		return fmt.Errorf("reading node labels: %w", err)
 	}
 
+	w.mu.Lock()
 	w.cfg.K8sCfg.NodeLabels = nodeLabels
+	w.mu.Unlock()
 	w.logger.Info("node labels resolved",
 		"vm_id", nodeLabels.VMID,
 		"nodepool_id", nodeLabels.NodepoolID,
@@ -210,6 +211,30 @@ func (w *Watcher) triggerReconcile() {
 	}
 }
 
+// SetIngestionEndpoints applies control-plane-originated log and metric
+// endpoint overrides (from a config.apply command); an empty value means no
+// override for that sink kind. They are stored on the watcher so they survive
+// subsequent data-plane-driven reconciles (pod/ConfigMap events), then a
+// reconcile is triggered to regenerate and rewrite the Vector config.
+func (w *Watcher) SetIngestionEndpoints(logs, metrics string) {
+	w.mu.Lock()
+	w.cfg.K8sCfg.LogsEndpoint = logs
+	w.cfg.K8sCfg.MetricsEndpoint = metrics
+	w.mu.Unlock()
+
+	w.logger.Info("ingestion endpoints updated", "logs", logs, "metrics", metrics)
+	w.triggerReconcile()
+}
+
+// snapshotCfg returns a copy of the K8s config under the lock, so reconciles
+// observe a consistent view even while SetIngestionEndpoints mutates it.
+func (w *Watcher) snapshotCfg() vector.K8sConfig {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.cfg.K8sCfg
+}
+
 // ---------------------------------------------------------------------------
 // Reconciliation
 // ---------------------------------------------------------------------------
@@ -231,10 +256,11 @@ func (w *Watcher) reconcileLoop(ctx context.Context) {
 }
 
 func (w *Watcher) reconcile() {
-	pods := w.classifyPods()
+	cfg := w.snapshotCfg()
+	pods := w.classifyPods(cfg)
 	cmData := w.readConfigMapData()
 
-	out, err := vector.GenerateK8s(pods, cmData, w.cfg.K8sCfg)
+	out, err := vector.GenerateK8s(pods, cmData, cfg)
 	if err != nil {
 		w.logger.Error("generating vector config failed", "error", err)
 
@@ -255,7 +281,7 @@ func (w *Watcher) reconcile() {
 		return
 	}
 
-	if err := writeConfig(w.cfg.ConfigPath, out); err != nil {
+	if err := vector.WriteConfigFile(w.cfg.ConfigPath, out); err != nil {
 		w.logger.Error("writing vector config failed", "error", err)
 
 		return
@@ -264,11 +290,11 @@ func (w *Watcher) reconcile() {
 	w.logger.Info("vector config updated", "pods", len(pods), "path", w.cfg.ConfigPath)
 }
 
-func (w *Watcher) classifyPods() []vector.ClassifiedPod {
+func (w *Watcher) classifyPods(cfg vector.K8sConfig) []vector.ClassifiedPod {
 	var classified []vector.ClassifiedPod
 
-	defaultPort := w.cfg.K8sCfg.CustomMetricsDefaultPort
-	defaultPath := w.cfg.K8sCfg.CustomMetricsDefaultPath
+	defaultPort := cfg.CustomMetricsDefaultPort
+	defaultPath := cfg.CustomMetricsDefaultPath
 
 	for _, obj := range w.podInformer.GetStore().List() {
 		pod, ok := obj.(*corev1.Pod)
@@ -298,7 +324,7 @@ func (w *Watcher) readConfigMapData() map[string]string {
 }
 
 func (w *Watcher) writeBaseConfig() error {
-	out, err := vector.GenerateK8s(nil, nil, w.cfg.K8sCfg)
+	out, err := vector.GenerateK8s(nil, nil, w.snapshotCfg())
 	if err != nil {
 		return fmt.Errorf("generating base config: %w", err)
 	}
@@ -307,37 +333,8 @@ func (w *Watcher) writeBaseConfig() error {
 	w.lastHash = sha256.Sum256(out)
 	w.mu.Unlock()
 
-	return writeConfig(w.cfg.ConfigPath, out)
-}
-
-// writeConfig atomically writes data to path using a temp file + rename.
-func writeConfig(path string, data []byte) error {
-	dir := filepath.Dir(path)
-
-	tmp, err := os.CreateTemp(dir, ".vector-config-*.yaml")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-
-	tmpPath := tmp.Name()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-
-		return fmt.Errorf("writing temp file: %w", err)
-	}
-
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-
-		return fmt.Errorf("renaming config: %w", err)
+	if err := vector.WriteConfigFile(w.cfg.ConfigPath, out); err != nil {
+		return fmt.Errorf("writing base config: %w", err)
 	}
 
 	return nil

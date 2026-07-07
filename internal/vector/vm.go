@@ -21,6 +21,17 @@ const (
 type VMConfig struct {
 	GPUType   GPUType
 	EnableCME bool // Include Crusoe Metrics Exporter source/sink
+
+	// LogsEndpoint and MetricsEndpoint, when non-empty, are control-plane
+	// overrides (from config.apply): the corresponding sinks get literal
+	// endpoints derived from these base URLs (<base>/logs/ingest for logs,
+	// <base>/ingest for metrics — the same derivation the installer applies
+	// to cms_url). They may differ, so logs and metrics can be redirected
+	// independently. When empty the config keeps the
+	// ${LOGS_INGRESS_ENDPOINT} / ${TELEMETRY_INGRESS_ENDPOINT} env-var
+	// placeholders that Vector resolves at runtime.
+	LogsEndpoint    string
+	MetricsEndpoint string
 }
 
 // GenerateVMBase returns the static VM base config: data_dir, api, all sources
@@ -85,6 +96,28 @@ func ApplyVM(baseCfg map[string]any, cfg VMConfig) {
 			[]string{"crusoe_infra_metrics"}, vrlEnrichCMEMetrics,
 		)
 		sinks["cms_gateway_cme"] = metricsRemoteWriteSink([]string{"enrich_crusoe_infra_metrics"})
+	}
+
+	applyEndpointOverrides(sinks, cfg)
+}
+
+// applyEndpointOverrides replaces the ${...} env-var placeholders in the logs
+// and metrics sinks with literal endpoints derived from the control-plane
+// base URLs. An empty override leaves that sink's placeholder untouched.
+func applyEndpointOverrides(sinks map[string]any, cfg VMConfig) {
+	if cfg.LogsEndpoint != "" {
+		if s, ok := sinks["crusoe_ingest"].(map[string]any); ok {
+			s["uri"] = cfg.LogsEndpoint + "/logs/ingest"
+		}
+	}
+
+	if cfg.MetricsEndpoint != "" {
+		// Both the node-metrics sink and the CME sink target the telemetry endpoint.
+		for _, name := range []string{"cms_gateway", "cms_gateway_cme"} {
+			if s, ok := sinks[name].(map[string]any); ok {
+				s["endpoint"] = cfg.MetricsEndpoint + "/ingest"
+			}
+		}
 	}
 }
 

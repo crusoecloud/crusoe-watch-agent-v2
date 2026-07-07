@@ -3,6 +3,47 @@ package vector
 // Shared constants, source/transform/sink builders, and utilities used by
 // both VM and K8s Vector config generators.
 
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// WriteConfigFile atomically writes a generated Vector config to path via a
+// temp file + rename, so Vector's --watch-config never observes a partially
+// written file. Used by the K8s watcher and the VM config.apply handler.
+func WriteConfigFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+
+	tmp, err := os.CreateTemp(dir, ".vector-config-*.yaml")
+	if err != nil {
+		return fmt.Errorf("creating temp file: %w", err)
+	}
+
+	tmpPath := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+
+		return fmt.Errorf("writing temp file: %w", err)
+	}
+
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+
+		return fmt.Errorf("closing temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+
+		return fmt.Errorf("renaming config: %w", err)
+	}
+
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------

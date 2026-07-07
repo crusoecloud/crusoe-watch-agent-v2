@@ -82,6 +82,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: CWA_STATE_DIR
+              value: /var/lib/cwa-manager
             - name: CMS_ENDPOINT
               value: {{ .Values.cmsEndpoint | quote }}
             - name: VECTOR_CONFIG_PATH
@@ -143,6 +145,8 @@ spec:
             - name: host-sys
               mountPath: /host/sys
               readOnly: true
+            - name: cwa-state
+              mountPath: /var/lib/cwa-manager
           resources:
             {{- toYaml .Values.resources.cwaManager | nindent 12 }}
 
@@ -172,4 +176,10 @@ spec:
         - name: journal-logs
           hostPath:
             path: /var/log/journal
+            type: DirectoryOrCreate
+        # Persistent state for the last-applied control-plane config
+        # (survives pod restarts, not node reimage).
+        - name: cwa-state
+          hostPath:
+            path: /var/lib/cwa-manager
             type: DirectoryOrCreate

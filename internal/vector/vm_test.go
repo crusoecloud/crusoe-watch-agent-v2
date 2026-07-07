@@ -57,6 +57,32 @@ func TestGenerateVM_CPUOnly(t *testing.T) {
 	assert.NotContains(t, sk, "cms_gateway_cme")
 }
 
+func TestGenerateVM_EndpointOverrides(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{
+		EnableCME:       true,
+		LogsEndpoint:    "https://logs.example.com",
+		MetricsEndpoint: "https://metrics.example.com",
+	})
+
+	// Sink endpoints are derived from the per-kind base URLs as literals,
+	// replacing the ${...} env placeholders (same derivation the installer
+	// applies to cms_url). Logs and metrics can point at different bases.
+	sk := sinks(cfg)
+	assert.Equal(t, "https://logs.example.com/logs/ingest", sk["crusoe_ingest"].(map[string]any)["uri"])
+	assert.Equal(t, "https://metrics.example.com/ingest", sk["cms_gateway"].(map[string]any)["endpoint"])
+	// The CME sink shares the telemetry endpoint.
+	assert.Equal(t, "https://metrics.example.com/ingest", sk["cms_gateway_cme"].(map[string]any)["endpoint"])
+}
+
+func TestGenerateVM_PartialEndpointOverride(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{LogsEndpoint: "https://logs.example.com"})
+
+	// Only the overridden sink gets a literal; the other keeps its env placeholder.
+	sk := sinks(cfg)
+	assert.Equal(t, "https://logs.example.com/logs/ingest", sk["crusoe_ingest"].(map[string]any)["uri"])
+	assert.Equal(t, "${TELEMETRY_INGRESS_ENDPOINT}", sk["cms_gateway"].(map[string]any)["endpoint"])
+}
+
 func TestGenerateVM_NvidiaGPU(t *testing.T) {
 	cfg := parsedVM(t, VMConfig{GPUType: GPUNvidia})
 
