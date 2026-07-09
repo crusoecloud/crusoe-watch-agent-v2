@@ -4,6 +4,8 @@ package vector
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,6 +18,23 @@ const (
 	GPUNvidia                // NVIDIA GPU — scrapes DCGM exporter on ${DCGM_EXPORTER_PORT}
 	GPUAMD                   // AMD GPU — scrapes AMD exporter on ${AMD_EXPORTER_PORT}
 )
+
+// DetectGPU classifies the VM's GPU by probing loaded kernel modules.
+func DetectGPU() GPUType {
+	return detectGPU("/sys/module")
+}
+
+func detectGPU(sysModuleDir string) GPUType {
+	if _, err := os.Stat(filepath.Join(sysModuleDir, "nvidia")); err == nil {
+		return GPUNvidia
+	}
+
+	if _, err := os.Stat(filepath.Join(sysModuleDir, "amdgpu")); err == nil {
+		return GPUAMD
+	}
+
+	return GPUNone
+}
 
 // VMConfig controls which sections appear in the generated VM Vector config.
 type VMConfig struct {
@@ -32,6 +51,10 @@ type VMConfig struct {
 	// placeholders that Vector resolves at runtime.
 	LogsEndpoint    string
 	MetricsEndpoint string
+
+	// IngestionBlocked, when true (from ingestion.block), strips every sink
+	// except the local internal-metrics exporter so nothing is forwarded off-host.
+	IngestionBlocked bool
 }
 
 // GenerateVMBase returns the static VM base config: data_dir, api, all sources
@@ -65,7 +88,7 @@ func GenerateVMBase() map[string]any {
 	// Sinks
 	sinks["crusoe_ingest"] = logsSink()
 	sinks["cms_gateway"] = metricsRemoteWriteSink([]string{"add_update_labels", "add_internal_labels"})
-	sinks["internal_metrics_exporter"] = internalMetricsExporterSink()
+	sinks[internalMetricsExporterSinkName] = internalMetricsExporterSink()
 
 	return baseCfg
 }
@@ -99,6 +122,10 @@ func ApplyVM(baseCfg map[string]any, cfg VMConfig) {
 	}
 
 	applyEndpointOverrides(sinks, cfg)
+
+	if cfg.IngestionBlocked {
+		removeExternalSinks(sinks)
+	}
 }
 
 // applyEndpointOverrides replaces the ${...} env-var placeholders in the logs

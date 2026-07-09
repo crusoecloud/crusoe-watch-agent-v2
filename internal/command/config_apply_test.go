@@ -14,13 +14,20 @@ import (
 )
 
 type fakeReloader struct {
-	logs    string
-	metrics string
+	logs       string
+	metrics    string
+	blocked    bool
+	blockedSet bool
 }
 
 func (f *fakeReloader) SetIngestionEndpoints(logs, metrics string) {
 	f.logs = logs
 	f.metrics = metrics
+}
+
+func (f *fakeReloader) SetIngestionBlocked(blocked bool) {
+	f.blocked = blocked
+	f.blockedSet = true
 }
 
 func vmSinks(t *testing.T, path string) map[string]any {
@@ -39,15 +46,16 @@ func vmSinks(t *testing.T, path string) map[string]any {
 }
 
 // testDeps returns VM deps with config and state paths in a temp dir.
-func testDeps(t *testing.T) ConfigApplyDeps {
+func testDeps(t *testing.T) Deps {
 	t.Helper()
 	dir := t.TempDir()
 
-	return ConfigApplyDeps{
+	return Deps{
 		InstallType:      pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER,
 		VMConfigPath:     filepath.Join(dir, "vector.yaml"),
 		LogsStatePath:    filepath.Join(dir, ".logs-endpoint"),
 		MetricsStatePath: filepath.Join(dir, ".metrics-endpoint"),
+		BlockedStatePath: filepath.Join(dir, ".ingestion-blocked"),
 	}
 }
 
@@ -124,8 +132,30 @@ func TestConfigApply_VM_PartialUpdateKeepsOtherEndpoint(t *testing.T) {
 	assert.Equal(t, "https://metrics.example.com", LoadEndpoint(deps.MetricsStatePath))
 }
 
+func TestConfigApply_VM_PreservesIngestionBlock(t *testing.T) {
+	deps := testDeps(t)
+
+	// Ingestion was blocked before this config.apply arrived.
+	require.NoError(t, os.WriteFile(deps.BlockedStatePath, []byte("blocked\n"), 0o600))
+
+	h := NewConfigApply(deps)
+
+	err := h.Run(context.Background(), map[string]string{
+		ParamIngestionEndpoint: "https://cms.example.com",
+	})
+	require.NoError(t, err)
+
+	// The endpoints are persisted for a later unblock, but the rewritten
+	// config must not restore the sinks while ingestion is blocked.
+	sinks := vmSinks(t, deps.VMConfigPath)
+	assert.Len(t, sinks, 1)
+	assert.Contains(t, sinks, "internal_metrics_exporter")
+	assert.Equal(t, "https://cms.example.com", LoadEndpoint(deps.LogsStatePath))
+	assert.Equal(t, "https://cms.example.com", LoadEndpoint(deps.MetricsStatePath))
+}
+
 func TestConfigApply_MissingEndpointFails(t *testing.T) {
-	h := NewConfigApply(ConfigApplyDeps{
+	h := NewConfigApply(Deps{
 		InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER,
 	})
 
@@ -140,7 +170,7 @@ func TestConfigApply_VM_WriteFailure(t *testing.T) {
 	notADir := filepath.Join(dir, "file")
 	require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o600))
 
-	h := NewConfigApply(ConfigApplyDeps{
+	h := NewConfigApply(Deps{
 		InstallType:  pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER,
 		VMConfigPath: filepath.Join(notADir, "vector.yaml"),
 	})
@@ -154,7 +184,7 @@ func TestConfigApply_VM_WriteFailure(t *testing.T) {
 func TestConfigApply_K8s(t *testing.T) {
 	rel := &fakeReloader{}
 
-	h := NewConfigApply(ConfigApplyDeps{
+	h := NewConfigApply(Deps{
 		InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES,
 		Watcher:     rel,
 	})
@@ -169,7 +199,7 @@ func TestConfigApply_K8s(t *testing.T) {
 }
 
 func TestConfigApply_K8s_NoWatcher(t *testing.T) {
-	h := NewConfigApply(ConfigApplyDeps{
+	h := NewConfigApply(Deps{
 		InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES,
 	})
 
@@ -180,7 +210,7 @@ func TestConfigApply_K8s_NoWatcher(t *testing.T) {
 }
 
 func TestConfigApply_UnsupportedInstallType(t *testing.T) {
-	h := NewConfigApply(ConfigApplyDeps{
+	h := NewConfigApply(Deps{
 		InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED,
 	})
 
@@ -191,7 +221,7 @@ func TestConfigApply_UnsupportedInstallType(t *testing.T) {
 }
 
 func TestConfigApply_Timeout(t *testing.T) {
-	h := NewConfigApply(ConfigApplyDeps{})
+	h := NewConfigApply(Deps{})
 	assert.Equal(t, Instant, h.Timeout())
 }
 

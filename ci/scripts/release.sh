@@ -58,6 +58,7 @@ publish_vm() {
 
     local script="${RENDER_OUT}/crusoe_watch_agent.sh"
     cosign sign-blob --yes --key "$key" \
+        --new-bundle-format=false \
         --bundle "${script}.bundle" \
         --output-signature "${script}.sig" \
         "$script"

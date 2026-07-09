@@ -23,25 +23,23 @@ import (
 
 const defaultPort = "50051"
 
-// testExecutionID identifies the single config.apply command this mock echoes
-// when any SEND_* env var is set.
-const testExecutionID = "mock-config-apply-1"
-
 type coordinator struct {
 	pb.UnimplementedCwaAgentServer
 	logger *slog.Logger
 
-	// testParams, when non-nil, makes the mock echo a config.apply command
-	// with these parameters on every heartbeat until the agent reports a
-	// result for it.
-	testParams   map[string]string
+	// testCmd, when non-nil, is echoed on every heartbeat until the agent
+	// reports a result for it. Built from SEND_* env vars at startup.
+	testCmd      *pb.CwaCommand
 	commandAcked atomic.Bool
 }
 
-// buildTestParams assembles config.apply parameters from env vars:
-// SEND_CONFIG_APPLY=<base> (both sink kinds), SEND_LOGS_ENDPOINT=<base>,
-// SEND_METRICS_ENDPOINT=<base>. Returns nil when none are set.
-func buildTestParams() map[string]string {
+// buildTestCommand returns the single command to echo, selected by env var,
+// or nil when none is set. Restart the mock to send another command.
+// Endpoint vars combine into one config.apply: SEND_CONFIG_APPLY=<base>
+// (both sink kinds), SEND_LOGS_ENDPOINT=<base>, SEND_METRICS_ENDPOINT=<base>.
+// SEND_INGESTION_BLOCK=1 / SEND_INGESTION_UNBLOCK=1 send the parameterless
+// block and unblock commands.
+func buildTestCommand() *pb.CwaCommand {
 	params := map[string]string{}
 
 	for env, param := range map[string]string{
@@ -54,11 +52,23 @@ func buildTestParams() map[string]string {
 		}
 	}
 
-	if len(params) == 0 {
-		return nil
+	if len(params) > 0 {
+		return &pb.CwaCommand{
+			ExecutionId: "mock-config-apply-1",
+			Command:     command.ConfigApplyCommand,
+			Parameters:  params,
+		}
 	}
 
-	return params
+	if os.Getenv("SEND_INGESTION_BLOCK") != "" {
+		return &pb.CwaCommand{ExecutionId: "mock-ingestion-block-1", Command: command.IngestionBlockCommand}
+	}
+
+	if os.Getenv("SEND_INGESTION_UNBLOCK") != "" {
+		return &pb.CwaCommand{ExecutionId: "mock-ingestion-unblock-1", Command: command.IngestionUnblockCommand}
+	}
+
+	return nil
 }
 
 func (c *coordinator) RegisterCwaAgent(
@@ -99,9 +109,10 @@ func (c *coordinator) CwaAgentHeartbeat(stream pb.CwaAgent_CwaAgentHeartbeatServ
 		resp := &pb.CwaAgentHeartbeatResponse{}
 		if testCmd := c.testCommand(req); testCmd != nil {
 			resp.Commands = []*pb.CwaCommand{testCmd}
-			c.logger.Info("echoing config.apply command",
-				"execution_id", testExecutionID,
-				"parameters", c.testParams,
+			c.logger.Info("echoing test command",
+				"execution_id", testCmd.GetExecutionId(),
+				"command", testCmd.GetCommand(),
+				"parameters", testCmd.GetParameters(),
 			)
 		}
 
@@ -111,17 +122,17 @@ func (c *coordinator) CwaAgentHeartbeat(stream pb.CwaAgent_CwaAgentHeartbeatServ
 	}
 }
 
-// testCommand returns the config.apply command to echo, or nil once the agent
-// has reported a result for it. Echoing until the result arrives (then
-// stopping) exercises the agent's full ACK loop: dedup of the re-echoed
-// command, result re-send, and pending-result pruning.
+// testCommand returns the test command to echo, or nil once the agent has
+// reported a result for it. Echoing until the result arrives (then stopping)
+// exercises the agent's full ACK loop: dedup of the re-echoed command, result
+// re-send, and pending-result pruning.
 func (c *coordinator) testCommand(req *pb.CwaAgentHeartbeatRequest) *pb.CwaCommand {
-	if c.testParams == nil {
+	if c.testCmd == nil {
 		return nil
 	}
 
 	for _, result := range req.GetCommandResults() {
-		if result.GetExecutionId() != testExecutionID {
+		if result.GetExecutionId() != c.testCmd.GetExecutionId() {
 			continue
 		}
 
@@ -141,11 +152,7 @@ func (c *coordinator) testCommand(req *pb.CwaAgentHeartbeatRequest) *pb.CwaComma
 		return nil
 	}
 
-	return &pb.CwaCommand{
-		ExecutionId: testExecutionID,
-		Command:     command.ConfigApplyCommand,
-		Parameters:  c.testParams,
-	}
+	return c.testCmd
 }
 
 func main() {
@@ -164,17 +171,19 @@ func main() {
 
 	srv := grpc.NewServer()
 	pb.RegisterCwaAgentServer(srv, &coordinator{
-		logger:     logger,
-		testParams: buildTestParams(),
+		logger:  logger,
+		testCmd: buildTestCommand(),
 	})
 
-	// Graceful shutdown on SIGINT/SIGTERM.
+	// Shutdown on SIGINT/SIGTERM. Stop (not GracefulStop) because the
+	// heartbeat stream never completes, so a graceful drain would hang until
+	// the agent disconnects.
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		sig := <-sigCh
 		logger.Info("shutting down", "signal", sig.String())
-		srv.GracefulStop()
+		srv.Stop()
 	}()
 
 	logger.Info("mock coordinator listening", "port", port)

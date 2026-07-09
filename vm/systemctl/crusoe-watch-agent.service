@@ -1,6 +1,7 @@
 [Unit]
 Description=Crusoe Watch Agent data pipeline
-After=network-online.target docker.service
+After=network-online.target docker.service cwa-manager.service
+After=crusoe-dcgm-exporter.service crusoe-amd-exporter.service crusoe-metrics-exporter.service
 Wants=network-online.target
 
 [Service]

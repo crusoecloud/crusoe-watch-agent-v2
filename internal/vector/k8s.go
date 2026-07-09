@@ -113,6 +113,10 @@ type K8sConfig struct {
 	LogsEndpoint    string
 	MetricsEndpoint string
 
+	// IngestionBlocked, when true (from ingestion.block), strips every sink
+	// except the local internal-metrics exporter so nothing is forwarded off-host.
+	IngestionBlocked bool
+
 	NodeLabels NodeLabels
 }
 
@@ -189,6 +193,10 @@ func ApplyK8s(baseCfg map[string]any, pods []ClassifiedPod, cmData map[string]st
 	sinks := ensureMap(baseCfg, "sinks")
 
 	buildDynamicConfig(sources, transforms, sinks, pods, cmData, cfg)
+
+	if cfg.IngestionBlocked {
+		removeExternalSinks(sinks)
+	}
 }
 
 // GenerateK8s builds the complete K8s Vector config and returns YAML bytes.
@@ -216,7 +224,7 @@ func buildStaticConfig(sources, transforms, sinks map[string]any, cfg K8sConfig)
 	sources["internal_metrics"] = internalMetricsSource()
 	transforms["filter_internal_metrics"] = filterTransform([]string{"internal_metrics"}, vrlFilterInternalMetrics)
 	transforms["add_internal_labels"] = remapTransform([]string{"filter_internal_metrics"}, vrlAddInternalLabelsK8s)
-	sinks["internal_metrics_exporter"] = internalMetricsExporterSink()
+	sinks[internalMetricsExporterSinkName] = internalMetricsExporterSink()
 
 	// Node metrics sink
 	nodeMetricsSink := buildPromRemoteWriteSink(

@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -26,15 +25,14 @@ import (
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
-var errUnknownGPUType = errors.New("unknown GPU type (use none, nvidia, amd)")
-
 const (
 	defaultCoordinatorAddr = "localhost:50051"
 	retryDelay             = 30 * time.Second
 
-	defaultStateDir     = "/etc/crusoe"
-	logsEndpointFile    = ".logs-endpoint"
-	metricsEndpointFile = ".metrics-endpoint"
+	defaultStateDir      = "/etc/crusoe"
+	logsEndpointFile     = ".logs-endpoint"
+	metricsEndpointFile  = ".metrics-endpoint"
+	ingestionBlockedFile = ".ingestion-blocked"
 )
 
 func main() {
@@ -46,17 +44,14 @@ func main() {
 
 func run() error {
 	coordAddr := flag.String("coordinator", defaultCoordinatorAddr, "cwa-coordinator gRPC address")
-	gpuFlag := flag.String("gpu", "none", "GPU type for Vector config: none, nvidia, amd")
-	enableCME := flag.Bool("cme", false, "include Crusoe Metrics Exporter in Vector config")
 	dumpVectorCfg := flag.Bool("dump-vector-config", false, "print generated Vector config to stdout and exit")
 	flag.Parse()
 
-	gpuType, err := parseGPUType(*gpuFlag)
-	if err != nil {
-		return err
+	// The agent owns VM Vector config generation.
+	vmCfg := vector.VMConfig{
+		GPUType:   vector.DetectGPU(),
+		EnableCME: getEnvBool("CME_ENABLED", true),
 	}
-
-	vmCfg := vector.VMConfig{GPUType: gpuType, EnableCME: *enableCME}
 
 	if *dumpVectorCfg {
 		out, genErr := vector.GenerateVM(vmCfg)
@@ -98,16 +93,23 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	stateDir := getEnvOrDefault("CWA_STATE_DIR", defaultStateDir)
 	logsPath := filepath.Join(stateDir, logsEndpointFile)
 	metricsPath := filepath.Join(stateDir, metricsEndpointFile)
+	blockedPath := filepath.Join(stateDir, ingestionBlockedFile)
 
-	// Restore the last-applied endpoints so restart doesn't revert to defaults.
-	logsEndpoint := command.LoadEndpoint(logsPath)
-	metricsEndpoint := command.LoadEndpoint(metricsPath)
-	vmCfg.LogsEndpoint = logsEndpoint
-	vmCfg.MetricsEndpoint = metricsEndpoint
+	// Restore the last-applied endpoints and blocked state so restart doesn't revert to defaults.
+	vmCfg.LogsEndpoint = command.LoadEndpoint(logsPath)
+	vmCfg.MetricsEndpoint = command.LoadEndpoint(metricsPath)
+	vmCfg.IngestionBlocked = command.LoadIngestionBlocked(blockedPath)
+	deps := command.Deps{
+		InstallType:      ident.InstallType,
+		VMCfg:            vmCfg,
+		VMConfigPath:     getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
+		LogsStatePath:    logsPath,
+		MetricsStatePath: metricsPath,
+		BlockedStatePath: blockedPath,
+	}
 
-	var configWatcher *watcher.Watcher
-	if ident.InstallType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
-		configWatcher = startK8sWatcher(ctx, logger, logsEndpoint, metricsEndpoint)
+	if configWatcher := startDataPlane(ctx, deps, logger); configWatcher != nil {
+		deps.Watcher = configWatcher
 	}
 
 	// TODO: Use TLS with JWT credentials once IMDS fetch is implemented.
@@ -124,9 +126,7 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 
 	hc := health.NewCollector(logger, ident.InstallType)
 	loop := heartbeat.NewLoop(ident, hc, conn, logger)
-
-	loop.SetDispatcher(buildDispatcher(loop, ident, vmCfg, configWatcher, logsPath, metricsPath, logger))
-
+	loop.SetDispatcher(buildDispatcher(loop, deps, logger))
 	heartbeatLoop(ctx, coordAddr, ident, loop, resolver, logger)
 
 	logger.Info("cwa-manager shutdown complete")
@@ -134,32 +134,31 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	return nil
 }
 
-// buildDispatcher wires the command dispatcher with the config.apply handler.
-func buildDispatcher(
-	loop *heartbeat.Loop,
-	ident *identity.Identity,
-	vmCfg vector.VMConfig,
-	configWatcher *watcher.Watcher,
-	logsPath string,
-	metricsPath string,
-	logger *slog.Logger,
-) *command.Dispatcher {
+// startDataPlane writes the VM Vector config at startup, or on K8s launches
+// the watcher (returned for command wiring) that regenerates it continuously.
+func startDataPlane(ctx context.Context, deps command.Deps, logger *slog.Logger) *watcher.Watcher {
+	switch deps.InstallType {
+	case pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES:
+		return startK8sWatcher(
+			ctx, logger, deps.VMCfg.LogsEndpoint, deps.VMCfg.MetricsEndpoint, deps.VMCfg.IngestionBlocked,
+		)
+	case pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER, pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD:
+		if err := writeVMConfig(deps.VMCfg, deps.VMConfigPath); err != nil {
+			// Degraded, not fatal: Vector keeps its previous config.
+			logger.Error("failed to write vector config at startup", "error", err)
+		}
+	case pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED:
+	}
+
+	return nil
+}
+
+// buildDispatcher wires the command dispatcher with all command handlers.
+func buildDispatcher(loop *heartbeat.Loop, deps command.Deps, logger *slog.Logger) *command.Dispatcher {
 	disp := command.NewDispatcher(loop, logger)
-
-	deps := command.ConfigApplyDeps{
-		InstallType:      ident.InstallType,
-		VMCfg:            vmCfg,
-		VMConfigPath:     getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
-		LogsStatePath:    logsPath,
-		MetricsStatePath: metricsPath,
-	}
-
-	// Only set the interface when a watcher exists.
-	if configWatcher != nil {
-		deps.Watcher = configWatcher
-	}
-
 	disp.Register(command.ConfigApplyCommand, command.NewConfigApply(deps))
+	disp.Register(command.IngestionBlockCommand, command.NewIngestionBlock(deps, true))
+	disp.Register(command.IngestionUnblockCommand, command.NewIngestionBlock(deps, false))
 
 	return disp
 }
@@ -229,15 +228,16 @@ func registerIfNeeded(
 	return nil
 }
 
-func parseGPUType(gpu string) (vector.GPUType, error) {
-	switch gpu {
-	case "none":
-		return vector.GPUNone, nil
-	case "nvidia":
-		return vector.GPUNvidia, nil
-	case "amd":
-		return vector.GPUAMD, nil
-	default:
-		return vector.GPUNone, fmt.Errorf("%w: %q", errUnknownGPUType, gpu)
+// writeVMConfig generates the VM Vector config and atomically writes it.
+func writeVMConfig(vmCfg vector.VMConfig, path string) error {
+	out, err := vector.GenerateVM(vmCfg)
+	if err != nil {
+		return fmt.Errorf("generating vector config: %w", err)
 	}
+
+	if err := vector.WriteConfigFile(path, out); err != nil {
+		return fmt.Errorf("writing vector config: %w", err)
+	}
+
+	return nil
 }

@@ -34,7 +34,12 @@ const (
 // startK8sWatcher creates an in-cluster Kubernetes client and launches the
 // Vector config watcher in a background goroutine. If client creation fails,
 // it logs the error and returns — the agent continues in degraded mode.
-func startK8sWatcher(ctx context.Context, logger *slog.Logger, logsEndpoint, metricsEndpoint string) *watcher.Watcher {
+func startK8sWatcher(
+	ctx context.Context,
+	logger *slog.Logger,
+	logsEndpoint, metricsEndpoint string,
+	ingestionBlocked bool,
+) *watcher.Watcher {
 	nodeName, err := watcher.ResolveNodeName()
 	if err != nil {
 		logger.Error("failed to resolve node name, k8s watcher disabled", "error", err)
@@ -57,9 +62,10 @@ func startK8sWatcher(ctx context.Context, logger *slog.Logger, logsEndpoint, met
 	}
 
 	k8sCfg := buildK8sConfig()
-	// Seed the persisted control-plane endpoints so the first reconcile carries them.
+	// Seed the persisted control-plane state so the first reconcile carries it.
 	k8sCfg.LogsEndpoint = logsEndpoint
 	k8sCfg.MetricsEndpoint = metricsEndpoint
+	k8sCfg.IngestionBlocked = ingestionBlocked
 
 	configWatcher := watcher.New(watcher.Config{
 		NodeName:   nodeName,

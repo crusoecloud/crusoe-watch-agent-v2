@@ -263,6 +263,52 @@ func TestWatcher_ReconcileSkipsUnchanged(t *testing.T) {
 	assert.Equal(t, info1.ModTime(), info2.ModTime(), "file should not be rewritten when config is unchanged")
 }
 
+func TestWatcher_SetIngestionBlocked(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "vector.yaml")
+
+	client := fake.NewSimpleClientset(testNode())
+	k8sCfg := testK8sCfg()
+	k8sCfg.NodeLabels = vector.NodeLabels{VMID: "vm-1", Hostname: "test-node"}
+
+	w := New(Config{
+		NodeName:   "test-node",
+		ConfigPath: configPath,
+		K8sCfg:     k8sCfg,
+		Logger:     testLogger(),
+	}, client)
+
+	w.podInformer = newFakeInformer()
+	w.cmInformer = newFakeInformer()
+
+	readSinks := func() map[string]any {
+		data, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+
+		var parsed map[string]any
+		require.NoError(t, yaml.Unmarshal(data, &parsed))
+
+		return parsed["sinks"].(map[string]any)
+	}
+
+	// Block: the flag is stored on the watcher, so the reconcile it triggers
+	// (and every later data-plane reconcile) writes a sink-stripped config.
+	w.SetIngestionBlocked(true)
+	w.reconcile()
+
+	sinks := readSinks()
+	assert.Len(t, sinks, 1)
+	assert.Contains(t, sinks, "internal_metrics_exporter")
+
+	// Unblock restores the sinks.
+	w.SetIngestionBlocked(false)
+	w.reconcile()
+
+	sinks = readSinks()
+	assert.Contains(t, sinks, "cms_gateway_node_metrics")
+	assert.Contains(t, sinks, "crusoe_ingest")
+}
+
 func TestWatcher_ReconcileWithConfigMap(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "vector.yaml")

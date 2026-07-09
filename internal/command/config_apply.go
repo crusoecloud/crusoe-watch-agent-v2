@@ -5,11 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
-
-	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
-	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
 const ConfigApplyCommand = "config.apply"
@@ -22,49 +18,16 @@ const (
 	ParamMetricsEndpoint   = "metrics_endpoint"
 )
 
-const endpointFilePerm = 0o600
-
-var (
-	errMissingEndpoint = errors.New("missing required parameter: one of " +
-		ParamIngestionEndpoint + ", " + ParamLogsEndpoint + ", " + ParamMetricsEndpoint)
-	errUnsupportedInstallType = errors.New("unsupported install type")
-	errWatcherUnavailable     = errors.New("k8s watcher unavailable")
-)
-
-// LoadEndpoint reads a persisted control-plane endpoint file.
-func LoadEndpoint(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-
-	return strings.TrimSpace(string(data))
-}
-
-// ConfigReloader applies the endpoint overrides on the K8s watcher so they
-// survive subsequent data-plane reconciles. *watcher.Watcher implements it.
-type ConfigReloader interface {
-	SetIngestionEndpoints(logs, metrics string)
-}
-
-// ConfigApplyDeps wires the config.apply handler to platform-specific machinery.
-type ConfigApplyDeps struct {
-	InstallType  pb.CwaInstallType
-	VMCfg        vector.VMConfig // baseline VM config; the endpoints are folded in per-apply
-	VMConfigPath string          // where the VM Vector config is written
-	Watcher      ConfigReloader  // non-nil on K8s
-
-	LogsStatePath    string
-	MetricsStatePath string
-}
+var errMissingEndpoint = errors.New("missing required parameter: one of " +
+	ParamIngestionEndpoint + ", " + ParamLogsEndpoint + ", " + ParamMetricsEndpoint)
 
 // ConfigApply is the config.apply handler.
 type ConfigApply struct {
-	deps ConfigApplyDeps
+	deps Deps
 }
 
 // NewConfigApply creates a config.apply handler.
-func NewConfigApply(deps ConfigApplyDeps) *ConfigApply {
+func NewConfigApply(deps Deps) *ConfigApply {
 	return &ConfigApply{deps: deps}
 }
 
@@ -90,15 +53,10 @@ func (c *ConfigApply) Run(_ context.Context, params map[string]string) error {
 		return err
 	}
 
-	switch c.deps.InstallType {
-	case pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES:
-		return c.applyK8s(logs, metrics)
-	case pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER, pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD:
-		return c.applyVM(logs, metrics)
-	case pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED:
-	}
-
-	return fmt.Errorf("%w: %s", errUnsupportedInstallType, c.deps.InstallType)
+	return c.deps.apply(
+		func(w Reloader) { w.SetIngestionEndpoints(logs, metrics) },
+		logs, metrics, LoadIngestionBlocked(c.deps.BlockedStatePath),
+	)
 }
 
 // resolveEndpoints computes the effective logs and metrics base URLs.
@@ -132,39 +90,8 @@ func persistEndpoint(path, endpoint string) error {
 		return nil
 	}
 
-	if err := os.WriteFile(path, []byte(endpoint+"\n"), endpointFilePerm); err != nil {
+	if err := os.WriteFile(path, []byte(endpoint+"\n"), stateFilePerm); err != nil {
 		return fmt.Errorf("persisting endpoint: %w", err)
-	}
-
-	return nil
-}
-
-// applyK8s hands the endpoints to the watcher, which merges them into every
-// subsequent reconcile alongside the data-plane-derived config.
-func (c *ConfigApply) applyK8s(logs, metrics string) error {
-	if c.deps.Watcher == nil {
-		return errWatcherUnavailable
-	}
-
-	c.deps.Watcher.SetIngestionEndpoints(logs, metrics)
-
-	return nil
-}
-
-// applyVM regenerates the VM Vector config with the new endpoints and atomically
-// rewrites it. Vector's --watch-config picks it up.
-func (c *ConfigApply) applyVM(logs, metrics string) error {
-	vmCfg := c.deps.VMCfg
-	vmCfg.LogsEndpoint = logs
-	vmCfg.MetricsEndpoint = metrics
-
-	out, err := vector.GenerateVM(vmCfg)
-	if err != nil {
-		return fmt.Errorf("generating vector config: %w", err)
-	}
-
-	if err := vector.WriteConfigFile(c.deps.VMConfigPath, out); err != nil {
-		return fmt.Errorf("writing vector config: %w", err)
 	}
 
 	return nil

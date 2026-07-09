@@ -7,7 +7,8 @@ GO_LDFLAGS := -ldflags "-X '${MODULE}/internal/version.Version=$${CI_COMMIT_REF_
 GOLANGCI_VERSION = v1.63.4
 GOTESTSUM_VERSION = v1.13.0
 GOCOVER_VERSION = v1.4.0
-GO_COVER_PACKAGES = ${MODULE}/...
+VECTOR_VERSION := $(shell grep '^vector:' dependencies.yaml | awk '{print $$2}' | tr -d '"')
+GO_COVER_PACKAGES = $(shell go list ${MODULE}/... | grep -v -e '/ci/' -e '/mock-coordinator' | tr '\n' ',')
 
 .PHONY: build
 build: build-cwa-manager build-mock-coordinator
@@ -64,8 +65,9 @@ shellcheck:
 	@shellcheck vm/crusoe_watch_agent.sh
 
 .PHONY: vector-validate
-vector-validate: build-cwa-manager
-	@command -v vector >/dev/null || { echo "install: brew install vectordotdev/brew/vector  (or see https://vector.dev/docs/setup/installation/)"; exit 1; }
+vector-validate:
+	@command -v vector >/dev/null || { echo "install: brew install vectordotdev/brew/vector@${VECTOR_VERSION}  (or see https://vector.dev/docs/setup/installation/)"; exit 1; }
+	@vector --version 2>&1 | grep -qF "${VECTOR_VERSION}" || { echo "wrong vector version: expected ${VECTOR_VERSION}, got $$(vector --version 2>&1 | head -1)"; exit 1; }
 	@mkdir -p ${BUILDDIR}/vector-configs
 	@AGENT_VERSION=dev \
 	 CRUSOE_AUTH_TOKEN=test-token \
@@ -79,7 +81,7 @@ vector-validate: build-cwa-manager
 	    for cme_flag in "" "--cme"; do \
 	        suffix=""; [ -n "$$cme_flag" ] && suffix="-cme"; \
 	        name="vm-$${gpu}$${suffix}"; \
-	        ${BUILDDIR}/cwa-manager --gpu=$$gpu $$cme_flag --dump-vector-config > ${BUILDDIR}/vector-configs/$$name.yaml; \
+	        go run ./ci/vector-config-dump --gpu=$$gpu $$cme_flag > ${BUILDDIR}/vector-configs/$$name.yaml; \
 	        echo "Validating $$name"; \
 	        vector validate --no-environment ${BUILDDIR}/vector-configs/$$name.yaml || exit 1; \
 	    done; \

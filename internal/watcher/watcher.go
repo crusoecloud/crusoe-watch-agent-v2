@@ -226,8 +226,21 @@ func (w *Watcher) SetIngestionEndpoints(logs, metrics string) {
 	w.triggerReconcile()
 }
 
+// SetIngestionBlocked applies a control-plane ingestion block or unblock (from
+// ingestion.block/unblock commands). Like the endpoint overrides, the flag is
+// stored on the watcher so it survives subsequent data-plane reconciles, then
+// a reconcile is triggered to regenerate and rewrite the Vector config.
+func (w *Watcher) SetIngestionBlocked(blocked bool) {
+	w.mu.Lock()
+	w.cfg.K8sCfg.IngestionBlocked = blocked
+	w.mu.Unlock()
+
+	w.logger.Info("ingestion blocked state updated", "blocked", blocked)
+	w.triggerReconcile()
+}
+
 // snapshotCfg returns a copy of the K8s config under the lock, so reconciles
-// observe a consistent view even while SetIngestionEndpoints mutates it.
+// observe a consistent view even while the control-plane setters mutate it.
 func (w *Watcher) snapshotCfg() vector.K8sConfig {
 	w.mu.Lock()
 	defer w.mu.Unlock()

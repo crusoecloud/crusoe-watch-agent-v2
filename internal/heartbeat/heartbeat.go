@@ -29,6 +29,8 @@ func capabilities() []string {
 	return []string{
 		"heartbeat",
 		"config_apply",
+		"ingestion_block",
+		"ingestion_unblock",
 	}
 }
 

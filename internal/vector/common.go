@@ -9,11 +9,17 @@ import (
 	"path/filepath"
 )
 
+// configDirPerm is the mode for created Vector config directories.
+const configDirPerm = 0o750
+
 // WriteConfigFile atomically writes a generated Vector config to path via a
 // temp file + rename, so Vector's --watch-config never observes a partially
 // written file. Used by the K8s watcher and the VM config.apply handler.
 func WriteConfigFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, configDirPerm); err != nil {
+		return fmt.Errorf("creating config dir: %w", err)
+	}
 
 	tmp, err := os.CreateTemp(dir, ".vector-config-*.yaml")
 	if err != nil {
@@ -153,6 +159,18 @@ func wireIntoTransform(transforms map[string]any, transformName, inputName strin
 // ---------------------------------------------------------------------------
 // Sink helpers
 // ---------------------------------------------------------------------------
+
+// internalMetricsExporterSinkName is the one sink that survives an ingestion block.
+const internalMetricsExporterSinkName = "internal_metrics_exporter"
+
+// removeExternalSinks deletes every sink except the local internal-metrics exporter.
+func removeExternalSinks(sinks map[string]any) {
+	for name := range sinks {
+		if name != internalMetricsExporterSinkName {
+			delete(sinks, name)
+		}
+	}
+}
 
 // internalMetricsExporterSink exposes Vector's internal metrics on port 9598
 // so cwa-manager can scrape component_errors_total for health assessment.

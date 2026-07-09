@@ -56,7 +56,7 @@ done
 # Configurable via flags
 ###############################################################################
 INSTALL_MODE="docker"   # "docker" or "native"
-ENABLE_CME=true
+CME_ENABLED=true
 MONITORING_TOKEN=""
 INGRESS_URL=""
 
@@ -459,6 +459,7 @@ VM_ID='${vm_id}'
 TELEMETRY_INGRESS_ENDPOINT='${cms_url}/ingest'
 LOGS_INGRESS_ENDPOINT='${cms_url}/logs/ingest'
 AGENT_VERSION='${AGENT_VERSION}'
+CME_ENABLED='${CME_ENABLED}'
 EOF
 
     # NODE_NAME mirrors the K8s downward-API var so cwa-manager can parse the
@@ -483,14 +484,13 @@ EOF
         fi
     elif [[ "$GPU_TYPE" == "amd" ]]; then
         {
-            echo "GPU_TYPE='amd'"
             echo "AMD_EXPORTER_PORT='${AMD_EXPORTER_PORT}'"
             echo "AMD_EXPORTER_VERSION='${AMD_EXPORTER_VERSION}'"
         } >> "$ENV_FILE"
     fi
 
     # CME vars.
-    if [[ "$ENABLE_CME" == "true" ]]; then
+    if [[ "$CME_ENABLED" == "true" ]]; then
         echo "CRUSOE_METRICS_EXPORTER_PORT='${CME_PORT}'" >> "$ENV_FILE"
         # Derive OBJSTORE_ENDPOINT_FQDN from the VM's hostname domain.
         # Crusoe VMs have a domain like "us-east1-a.compute.internal"; the first
@@ -508,18 +508,6 @@ EOF
     fi
 
     chmod 640 "$ENV_FILE"
-}
-
-write_vector_config() {
-    local cme_flag=""
-    [[ "$ENABLE_CME" == "true" ]] && cme_flag="--cme"
-
-    status "Generating Vector config (gpu=${GPU_TYPE}, cme=${ENABLE_CME})..."
-    mkdir -p "$(dirname "$VECTOR_CONFIG")"
-    local tmp="${VECTOR_CONFIG}.tmp.$$"  # Write atomically
-    "${INSTALL_DIR}/cwa-manager" --dump-vector-config --gpu "$GPU_TYPE" ${cme_flag} > "$tmp"
-    chmod 640 "$tmp"
-    mv -f "$tmp" "$VECTOR_CONFIG"
 }
 
 install_vector_compose() {
@@ -594,7 +582,7 @@ install_systemd_units() {
     fi
 
     # CME Docker (native installs its own unit from tarball)
-    if [[ "$ENABLE_CME" == "true" && "$INSTALL_MODE" == "docker" ]]; then
+    if [[ "$CME_ENABLED" == "true" && "$INSTALL_MODE" == "docker" ]]; then
         install_unit "crusoe-metrics-exporter.service"
     fi
 }
@@ -722,26 +710,38 @@ do_install() {
     esac
 
     # Optional CME.
-    if [[ "$ENABLE_CME" == "true" ]]; then
+    if [[ "$CME_ENABLED" == "true" ]]; then
         cme_setup
     fi
 
     write_env_file "$vm_id"
-    write_vector_config
     mkdir -p /var/lib/vector
     install_systemd_units
 
     save_install_mode
     save_version
 
-    # Start services.
+    # Start services. cwa-manager owns Vector config generation, so it starts
+    # first and must produce the config before Vector starts against it.
     status "Starting services..."
     systemctl daemon-reload
 
-    local services=("cwa-manager.service" "crusoe-watch-agent.service")
+    systemctl enable cwa-manager.service
+    systemctl restart cwa-manager.service
+
+    status "Waiting for cwa-manager to write ${VECTOR_CONFIG}..."
+    for _ in $(seq 1 60); do
+        [[ -f "$VECTOR_CONFIG" ]] && break
+        sleep 1
+    done
+    [[ -f "$VECTOR_CONFIG" ]] || error_exit "cwa-manager did not write ${VECTOR_CONFIG}. Check: journalctl -u cwa-manager"
+
+    # Exporters before Vector, so its first scrapes find them listening.
+    local services=()
     [[ "$GPU_TYPE" == "nvidia" ]] && services+=("crusoe-dcgm-exporter.service")
     [[ "$GPU_TYPE" == "amd" ]]    && services+=("crusoe-amd-exporter.service")
-    [[ "$ENABLE_CME" == "true" ]] && services+=("crusoe-metrics-exporter.service")
+    [[ "$CME_ENABLED" == "true" ]] && services+=("crusoe-metrics-exporter.service")
+    services+=("crusoe-watch-agent.service")
 
     for svc in "${services[@]}"; do
         systemctl enable "$svc"
@@ -754,7 +754,7 @@ do_install() {
     echo "  systemctl status crusoe-watch-agent"
     [[ "$GPU_TYPE" == "nvidia" ]] && echo "  systemctl status crusoe-dcgm-exporter"
     [[ "$GPU_TYPE" == "amd" ]]    && echo "  systemctl status crusoe-amd-exporter"
-    [[ "$ENABLE_CME" == "true" ]] && echo "  systemctl status crusoe-metrics-exporter"
+    [[ "$CME_ENABLED" == "true" ]] && echo "  systemctl status crusoe-metrics-exporter"
 }
 
 do_uninstall() {
@@ -952,7 +952,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --cme)
-            ENABLE_CME=true
+            CME_ENABLED=true
             shift
             ;;
         --ingress-url)

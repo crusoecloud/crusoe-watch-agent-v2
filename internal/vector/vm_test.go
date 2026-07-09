@@ -1,12 +1,26 @@
 package vector
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
+
+func TestDetectGPU(t *testing.T) {
+	dir := t.TempDir()
+	assert.Equal(t, GPUNone, detectGPU(dir))
+
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "amdgpu"), 0o750))
+	assert.Equal(t, GPUAMD, detectGPU(dir))
+
+	// NVIDIA wins when both modules are present.
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "nvidia"), 0o750))
+	assert.Equal(t, GPUNvidia, detectGPU(dir))
+}
 
 // parsedVM unmarshals generated VM config YAML into a map for assertion.
 func parsedVM(t *testing.T, cfg VMConfig) map[string]any {
@@ -81,6 +95,31 @@ func TestGenerateVM_PartialEndpointOverride(t *testing.T) {
 	sk := sinks(cfg)
 	assert.Equal(t, "https://logs.example.com/logs/ingest", sk["crusoe_ingest"].(map[string]any)["uri"])
 	assert.Equal(t, "${TELEMETRY_INGRESS_ENDPOINT}", sk["cms_gateway"].(map[string]any)["endpoint"])
+}
+
+func TestGenerateVM_IngestionBlocked(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{
+		GPUType:          GPUNvidia,
+		EnableCME:        true,
+		LogsEndpoint:     "https://logs.example.com",
+		MetricsEndpoint:  "https://metrics.example.com",
+		IngestionBlocked: true,
+	})
+
+	// Only the local internal-metrics exporter survives a block.
+	sk := sinks(cfg)
+	assert.Len(t, sk, 1)
+	assert.Contains(t, sk, "internal_metrics_exporter")
+
+	// Sources and transforms keep running; only forwarding stops.
+	src := sources(cfg)
+	assert.Contains(t, src, "host_metrics")
+	assert.Contains(t, src, "journald_logs")
+	assert.Contains(t, src, "dcgm_metrics")
+
+	xf := transforms(cfg)
+	assert.Contains(t, xf, "enrich_logs")
+	assert.Contains(t, xf, "add_update_labels")
 }
 
 func TestGenerateVM_NvidiaGPU(t *testing.T) {

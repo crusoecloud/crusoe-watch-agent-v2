@@ -503,6 +503,31 @@ func TestFullK8sPipeline(t *testing.T) {
 	assert.Contains(t, sinks, "cms_gateway_node_metrics")
 }
 
+func TestApplyK8sIngestionBlocked(t *testing.T) {
+	pods := []ClassifiedPod{
+		{Name: "dcgm-1", IP: "10.0.0.1", Type: PodTypeDCGM},
+		{Name: "ksm-1", IP: "10.0.0.3", Type: PodTypeKSM},
+		{Name: "svc-x-1", IP: "10.2.0.1", Type: PodTypeCustom, Port: 9100, Path: "/metrics", DeploymentName: "svc"},
+	}
+	k8sCfg := testK8sConfig()
+	k8sCfg.IngestionBlocked = true
+	cfg := buildAndParse(t, pods, nil, k8sCfg)
+
+	// Only the local internal-metrics exporter survives a block — static,
+	// per-pod, and log sinks are all stripped.
+	sinks := getSinks(cfg)
+	assert.Len(t, sinks, 1)
+	assert.Contains(t, sinks, "internal_metrics_exporter")
+
+	// Sources and transforms keep running; only forwarding stops.
+	sources := getSources(cfg)
+	assert.Contains(t, sources, "host_metrics")
+	assert.Contains(t, sources, "journald_logs")
+	assert.Contains(t, sources, "dcgm_exporter_scrape")
+	assert.Contains(t, sources, "kube_state_metrics_scrape")
+	assert.Contains(t, sources, "svc_x_1_scrape")
+}
+
 // ---------------------------------------------------------------------------
 // SanitizeName
 // ---------------------------------------------------------------------------

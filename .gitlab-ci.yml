@@ -65,7 +65,8 @@ vector:validate:
     - go env -w "GOPRIVATE=${CI_SERVER_HOST}"
     - echo -e "machine ${CI_SERVER_HOST} login gitlab-ci-token password ${CI_JOB_TOKEN}" > ~/.netrc
     - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
-    - curl -fsSL https://sh.vector.dev | bash -s -- -y --prefix /usr/local
+    - VECTOR_VERSION=$(grep '^vector:' dependencies.yaml | awk '{print $2}' | tr -d '"')
+    - curl -fsSL https://sh.vector.dev | VECTOR_VERSION="${VECTOR_VERSION}" bash -s -- -y --prefix /usr/local
     - export PATH="/usr/local/bin:$PATH"
     - vector --version
   script:
