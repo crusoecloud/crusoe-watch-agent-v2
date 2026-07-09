@@ -60,7 +60,6 @@ publish_vm() {
     cosign sign-blob --yes --key "$key" \
         --new-bundle-format=false \
         --bundle "${script}.bundle" \
-        --output-signature "${script}.sig" \
         "$script"
     rm -f "$key"
 
@@ -78,7 +77,6 @@ publish_vm() {
     log "Creating GitHub Release ${NEW_TAG}"
     local -a assets=(
         "${script}#crusoe_watch_agent.sh"
-        "${script}.sig#crusoe_watch_agent.sh.sig"
         "${script}.bundle#crusoe_watch_agent.sh.bundle"
         "${binary}#cwa-manager-linux-amd64"
         "${RENDER_OUT}/VERSION#VERSION"
