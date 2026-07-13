@@ -220,7 +220,7 @@ func logsSink() map[string]any {
 		},
 		"auth": map[string]any{
 			"strategy": "bearer",
-			"token":    "${CRUSOE_AUTH_TOKEN}", // TODO: Replace with JWT once IMDS fetch is implemented.
+			"token":    "${CRUSOE_MONITORING_TOKEN}", // TODO: Replace with JWT once IMDS fetch is implemented.
 		},
 		"encoding": map[string]any{"codec": "json"},
 		"batch":    map[string]any{"max_bytes": logBatchMaxBytes},
@@ -234,7 +234,7 @@ func metricsRemoteWriteSink(inputs []string) map[string]any {
 		"inputs":      inputs,
 		"endpoint":    "${TELEMETRY_INGRESS_ENDPOINT}",
 		"tenant_id":   "cri:vm/${VM_ID}",
-		"auth":        map[string]any{"strategy": "bearer", "token": "${CRUSOE_AUTH_TOKEN}"}, // TODO: Replace with JWT
+		"auth":        map[string]any{"strategy": "bearer", "token": "${CRUSOE_MONITORING_TOKEN}"}, // TODO: Replace with JWT
 		"healthcheck": map[string]any{"enabled": false},
 		"request":     map[string]any{"concurrency": "adaptive", "timeout_secs": requestTimeoutSecs},
 		"batch":       map[string]any{"max_bytes": metricBatchMaxBytes, "aggregate": false},

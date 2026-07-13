@@ -84,6 +84,11 @@ spec:
                   fieldPath: spec.nodeName
             - name: CWA_STATE_DIR
               value: /var/lib/cwa-manager
+            - name: CRUSOE_MONITORING_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cwa.monitoringSecretName" . }}
+                  key: CRUSOE_MONITORING_TOKEN
             - name: CMS_ENDPOINT
               value: {{ .Values.cmsEndpoint | quote }}
             - name: VECTOR_CONFIG_PATH

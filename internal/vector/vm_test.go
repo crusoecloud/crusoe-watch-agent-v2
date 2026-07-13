@@ -229,7 +229,7 @@ func TestGenerateVM_LogsSinkConfig(t *testing.T) {
 
 	auth := logs["auth"].(map[string]any)
 	assert.Equal(t, "bearer", auth["strategy"])
-	assert.Equal(t, "${CRUSOE_AUTH_TOKEN}", auth["token"])
+	assert.Equal(t, "${CRUSOE_MONITORING_TOKEN}", auth["token"])
 }
 
 func TestGenerateVM_MetricsSinkConfig(t *testing.T) {

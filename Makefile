@@ -70,7 +70,6 @@ vector-validate:
 	@vector --version 2>&1 | grep -qF "${VECTOR_VERSION}" || { echo "wrong vector version: expected ${VECTOR_VERSION}, got $$(vector --version 2>&1 | head -1)"; exit 1; }
 	@mkdir -p ${BUILDDIR}/vector-configs
 	@AGENT_VERSION=dev \
-	 CRUSOE_AUTH_TOKEN=test-token \
 	 CRUSOE_CLUSTER_ID=test-cluster \
 	 CRUSOE_MONITORING_TOKEN=test-token \
 	 CRUSOE_PROJECT_ID=test-project \

@@ -3,9 +3,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,7 +17,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/command"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/health"
@@ -25,15 +29,28 @@ import (
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
+var errMissingMonitoringToken = errors.New("CRUSOE_MONITORING_TOKEN is not set")
+
 const (
-	defaultCoordinatorAddr = "localhost:50051"
+	defaultCoordinatorAddr = "cwa-coordinator.crusoecloud.com:443"
+	monitoringTokenEnv     = "CRUSOE_MONITORING_TOKEN"
 	retryDelay             = 30 * time.Second
+	retryJitter            = 30 * time.Second
 
 	defaultStateDir      = "/etc/crusoe"
 	logsEndpointFile     = ".logs-endpoint"
 	metricsEndpointFile  = ".metrics-endpoint"
 	ingestionBlockedFile = ".ingestion-blocked"
 )
+
+// bearerToken sends `authorization: Bearer <CRUSOE_MONITORING_TOKEN>` on every RPC.
+type bearerToken struct{ token string }
+
+func (b bearerToken) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
+	return map[string]string{"authorization": "Bearer " + b.token}, nil
+}
+
+func (bearerToken) RequireTransportSecurity() bool { return true }
 
 func main() {
 	if err := run(); err != nil {
@@ -76,7 +93,6 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	resolver := identity.NewResolver()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-
 	ident, err := resolver.Resolve(ctx)
 	if err != nil {
 		return fmt.Errorf("resolving identity: %w", err)
@@ -90,30 +106,22 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 		"project_id", ident.ProjectID,
 	)
 
-	stateDir := getEnvOrDefault("CWA_STATE_DIR", defaultStateDir)
-	logsPath := filepath.Join(stateDir, logsEndpointFile)
-	metricsPath := filepath.Join(stateDir, metricsEndpointFile)
-	blockedPath := filepath.Join(stateDir, ingestionBlockedFile)
-
-	// Restore the last-applied endpoints and blocked state so restart doesn't revert to defaults.
-	vmCfg.LogsEndpoint = command.LoadEndpoint(logsPath)
-	vmCfg.MetricsEndpoint = command.LoadEndpoint(metricsPath)
-	vmCfg.IngestionBlocked = command.LoadIngestionBlocked(blockedPath)
-	deps := command.Deps{
-		InstallType:      ident.InstallType,
-		VMCfg:            vmCfg,
-		VMConfigPath:     getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
-		LogsStatePath:    logsPath,
-		MetricsStatePath: metricsPath,
-		BlockedStatePath: blockedPath,
-	}
+	deps := buildDeps(ident, vmCfg)
 
 	if configWatcher := startDataPlane(ctx, deps, logger); configWatcher != nil {
 		deps.Watcher = configWatcher
 	}
 
-	// TODO: Use TLS with JWT credentials once IMDS fetch is implemented.
-	conn, err := grpc.NewClient(coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	token := os.Getenv(monitoringTokenEnv)
+	if token == "" {
+		return errMissingMonitoringToken
+	}
+
+	conn, err := grpc.NewClient(
+		coordAddr,
+		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})),
+		grpc.WithPerRPCCredentials(bearerToken{token: token}),
+	)
 	if err != nil {
 		return fmt.Errorf("connecting to coordinator: %w", err)
 	}
@@ -128,10 +136,31 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	loop := heartbeat.NewLoop(ident, hc, conn, logger)
 	loop.SetDispatcher(buildDispatcher(loop, deps, logger))
 	heartbeatLoop(ctx, coordAddr, ident, loop, resolver, logger)
-
 	logger.Info("cwa-manager shutdown complete")
 
 	return nil
+}
+
+// buildDeps assembles command.Deps, restoring the last-applied endpoints and
+// blocked state so a restart doesn't revert to defaults.
+func buildDeps(ident *identity.Identity, vmCfg vector.VMConfig) command.Deps {
+	stateDir := getEnvOrDefault("CWA_STATE_DIR", defaultStateDir)
+	logsPath := filepath.Join(stateDir, logsEndpointFile)
+	metricsPath := filepath.Join(stateDir, metricsEndpointFile)
+	blockedPath := filepath.Join(stateDir, ingestionBlockedFile)
+
+	vmCfg.LogsEndpoint = command.LoadEndpoint(logsPath)
+	vmCfg.MetricsEndpoint = command.LoadEndpoint(metricsPath)
+	vmCfg.IngestionBlocked = command.LoadIngestionBlocked(blockedPath)
+
+	return command.Deps{
+		InstallType:      ident.InstallType,
+		VMCfg:            vmCfg,
+		VMConfigPath:     getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
+		LogsStatePath:    logsPath,
+		MetricsStatePath: metricsPath,
+		BlockedStatePath: blockedPath,
+	}
 }
 
 // startDataPlane writes the VM Vector config at startup, or on K8s launches
@@ -163,6 +192,17 @@ func buildDispatcher(loop *heartbeat.Loop, deps command.Deps, logger *slog.Logge
 	return disp
 }
 
+// retryWait returns retryDelay plus a random jitter in [0, retryJitter) so a mass
+// disconnect does not cause the whole fleet to reconnect and heartbeat in lockstep.
+func retryWait() time.Duration {
+	jitter, err := rand.Int(rand.Reader, big.NewInt(int64(retryJitter)))
+	if err != nil {
+		return retryDelay
+	}
+
+	return retryDelay + time.Duration(jitter.Int64())
+}
+
 func heartbeatLoop(
 	ctx context.Context,
 	coordAddr string,
@@ -177,11 +217,12 @@ func heartbeatLoop(
 				return
 			}
 
-			logger.Error("registration failed, retrying", "error", err, "retry_in", retryDelay)
+			wait := retryWait()
+			logger.Error("registration failed, retrying", "error", err, "retry_in", wait)
 
 			select {
 			case <-ctx.Done():
-			case <-time.After(retryDelay):
+			case <-time.After(wait):
 			}
 
 			continue
@@ -190,11 +231,12 @@ func heartbeatLoop(
 		logger.Info("starting heartbeat loop", "coordinator", coordAddr)
 
 		if err := loop.Run(ctx); err != nil && ctx.Err() == nil {
-			logger.Error("heartbeat stream failed, reconnecting", "error", err, "retry_in", retryDelay)
+			wait := retryWait()
+			logger.Error("heartbeat stream failed, reconnecting", "error", err, "retry_in", wait)
 
 			select {
 			case <-ctx.Done():
-			case <-time.After(retryDelay):
+			case <-time.After(wait):
 			}
 		}
 	}

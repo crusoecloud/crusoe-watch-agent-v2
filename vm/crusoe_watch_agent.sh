@@ -425,19 +425,19 @@ write_token() {
     fi
     mkdir -p "$SECRETS_DIR"
     # Single-quote the token value to prevent $-interpolation by systemd/docker-compose.
-    echo "CRUSOE_AUTH_TOKEN='${MONITORING_TOKEN}'" > "${SECRETS_DIR}/.monitoring-token"
+    echo "CRUSOE_MONITORING_TOKEN='${MONITORING_TOKEN}'" > "${SECRETS_DIR}/.monitoring-token"
     chmod 600 "${SECRETS_DIR}/.monitoring-token"
 }
 
 handle_token() {
-    # Priority: --token flag > CRUSOE_AUTH_TOKEN env > existing file > interactive prompt.
+    # Priority: --token flag > CRUSOE_MONITORING_TOKEN env > existing file > interactive prompt.
     if [[ -n "$MONITORING_TOKEN" ]]; then
         status "Using token from --token flag."
-    elif [[ -n "${CRUSOE_AUTH_TOKEN:-}" ]]; then
-        MONITORING_TOKEN="$CRUSOE_AUTH_TOKEN"
-        status "Using token from CRUSOE_AUTH_TOKEN environment variable."
+    elif [[ -n "${CRUSOE_MONITORING_TOKEN:-}" ]]; then
+        MONITORING_TOKEN="$CRUSOE_MONITORING_TOKEN"
+        status "Using token from CRUSOE_MONITORING_TOKEN environment variable."
     elif [[ -s "${SECRETS_DIR}/.monitoring-token" ]]; then
-        MONITORING_TOKEN=$(sed "s/^CRUSOE_AUTH_TOKEN=//; s/^'//; s/'$//" "${SECRETS_DIR}/.monitoring-token")
+        MONITORING_TOKEN=$(sed "s/^CRUSOE_MONITORING_TOKEN=//; s/^'//; s/'$//" "${SECRETS_DIR}/.monitoring-token")
         status "Using existing token from ${SECRETS_DIR}/.monitoring-token"
     else
         echo "Enter monitoring token:"
