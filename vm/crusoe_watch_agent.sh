@@ -13,10 +13,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Version pins are stamped at release time from dependencies.yaml.
 AGENT_VERSION="@@AGENT_VERSION@@"
+CWA_MANAGER_VERSION="@@CWA_MANAGER_VERSION@@"
 VECTOR_VERSION="@@VECTOR_VERSION@@"
 CME_VERSION="@@CRUSOE_METRICS_EXPORTER_VERSION@@"
 AMD_EXPORTER_VERSION="@@AMD_EXPORTER_VERSION@@"
-for v in AGENT_VERSION VECTOR_VERSION CME_VERSION AMD_EXPORTER_VERSION; do
+for v in AGENT_VERSION CWA_MANAGER_VERSION VECTOR_VERSION CME_VERSION AMD_EXPORTER_VERSION; do
     case "${!v}" in @@*@@) printf -v "$v" '%s' "dev" ;; esac
 done
 
@@ -459,6 +460,7 @@ VM_ID='${vm_id}'
 TELEMETRY_INGRESS_ENDPOINT='${cms_url}/ingest'
 LOGS_INGRESS_ENDPOINT='${cms_url}/logs/ingest'
 AGENT_VERSION='${AGENT_VERSION}'
+CWA_MANAGER_VERSION='${CWA_MANAGER_VERSION}'
 CME_ENABLED='${CME_ENABLED}'
 EOF
 
@@ -694,7 +696,11 @@ do_install() {
 
     handle_token
     mkdir -p "$CONFIG_DIR"
-    install_cwa_manager
+
+    # Docker mode runs cwa-manager as a container (see install_systemd_units).
+    if [[ "$INSTALL_MODE" == "native" ]]; then
+        install_cwa_manager
+    fi
 
     # Install Vector.
     if [[ "$INSTALL_MODE" == "docker" ]]; then

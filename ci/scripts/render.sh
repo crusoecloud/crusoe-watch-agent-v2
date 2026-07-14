@@ -104,6 +104,7 @@ render_vm() {
 
     substitute_file "$dst" \
         AGENT_VERSION                       "$agent_version" \
+        CWA_MANAGER_VERSION                 "$CWA_MANAGER" \
         VECTOR_VERSION                      "$VECTOR" \
         CRUSOE_METRICS_EXPORTER_VERSION     "$CRUSOE_METRICS_EXPORTER" \
         AMD_EXPORTER_VERSION                "$AMD_EXPORTER" \
@@ -130,7 +131,7 @@ render_k8s() {
     # k8s/v0.9 stamps as 0.9. The release pipeline passes whatever
     # compute-next-version produced; trust it but normalize here.
     local chart_version="${RELEASE_VERSION#v}"
-    local agent_version="$CWA_MANAGER"
+    local cwa_manager_version="$CWA_MANAGER"
 
     [[ -n "$chart_version" ]] || die "release version must not be empty"
 
@@ -144,7 +145,7 @@ render_k8s() {
         CHART_VERSION       "$chart_version" \
         CHART_APP_VERSION   "$chart_version"
     substitute_file "$values" \
-        AGENT_VERSION       "$agent_version" \
+        CWA_MANAGER_VERSION "$cwa_manager_version" \
         VECTOR_VERSION      "$VECTOR" \
         TOKEN_JOB_VERSION   "$TOKEN_JOB"
 

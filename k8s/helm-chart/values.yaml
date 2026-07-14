@@ -26,7 +26,7 @@ vector:
 
 cwaManager:
   image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/cwa-manager
-  tag: "@@AGENT_VERSION@@"
+  tag: "@@CWA_MANAGER_VERSION@@"
 
 # Resource requests/limits.
 resources:
