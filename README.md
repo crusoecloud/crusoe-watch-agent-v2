@@ -22,10 +22,7 @@ make lint
 ## Development
 
 ```bash
-# Terminal 1: start mock coordinator
-make run-mock
-
-# Terminal 2: start cwa-manager
+# start cwa-manager
 make run
 ```
 

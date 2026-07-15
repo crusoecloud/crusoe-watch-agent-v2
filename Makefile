@@ -8,26 +8,18 @@ GOLANGCI_VERSION = v1.63.4
 GOTESTSUM_VERSION = v1.13.0
 GOCOVER_VERSION = v1.4.0
 VECTOR_VERSION := $(shell grep '^vector:' dependencies.yaml | awk '{print $$2}' | tr -d '"')
-GO_COVER_PACKAGES = $(shell go list ${MODULE}/... | grep -v -e '/ci/' -e '/mock-coordinator' | tr '\n' ',')
+GO_COVER_PACKAGES = $(shell go list ${MODULE}/... | grep -v -e '/ci/' | tr '\n' ',')
 
 .PHONY: build
-build: build-cwa-manager build-mock-coordinator
+build: build-cwa-manager
 
 .PHONY: build-cwa-manager
 build-cwa-manager:
 	@go build -o ${BUILDDIR}/cwa-manager ${GO_LDFLAGS} ./cmd/cwa-manager
 
-.PHONY: build-mock-coordinator
-build-mock-coordinator:
-	@go build -o ${BUILDDIR}/mock-coordinator ./cmd/mock-coordinator
-
 .PHONY: cross
 cross:
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ${BUILDDIR}/cwa-manager ${GO_LDFLAGS} ./cmd/cwa-manager
-
-.PHONY: cross-mock
-cross-mock:
-	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ${BUILDDIR}/mock-coordinator ./cmd/mock-coordinator
 
 .PHONY: test
 test:
@@ -93,7 +85,3 @@ clean:
 .PHONY: run
 run: build-cwa-manager
 	@${BUILDDIR}/cwa-manager
-
-.PHONY: run-mock
-run-mock: build-mock-coordinator
-	@${BUILDDIR}/mock-coordinator
