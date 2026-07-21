@@ -22,7 +22,14 @@ import (
 
 const (
 	heartbeatInterval = 30 * time.Second
-	shutdownGrace     = 5 * time.Second
+
+	// commandDrainGrace + heartbeatFlushGrace (the shutdown budget) must stay under
+	// the platform's post-SIGTERM grace on every deploy target (all 30s).
+
+	// commandDrainGrace bounds how long shutdown waits for instant commands to finish on their own before INTERRUPTED.
+	commandDrainGrace = 20 * time.Second
+	// heartbeatFlushGrace bounds the final heartbeat send during shutdown.
+	heartbeatFlushGrace = 5 * time.Second
 )
 
 func capabilities() []string {
@@ -99,7 +106,9 @@ func (l *Loop) Register(ctx context.Context) (string, error) {
 // Run opens the heartbeat stream and sends heartbeats every 30 seconds.
 // It blocks until ctx is cancelled or the stream errors out.
 func (l *Loop) Run(ctx context.Context) error {
-	streamCtx, streamCancel := context.WithCancel(ctx)
+	// The stream must outlive ctx cancellation (SIGTERM): shutdown() sends the
+	// final heartbeat on it after ctx is already cancelled.
+	streamCtx, streamCancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer streamCancel()
 
 	stream, err := l.client.CwaAgentHeartbeat(streamCtx)
@@ -127,7 +136,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			l.shutdown(ctx, stream)
+			l.shutdown(ctx, stream, streamCancel)
 
 			return fmt.Errorf("context done: %w", ctx.Err())
 		case err := <-errCh:
@@ -243,24 +252,37 @@ func (l *Loop) handleCommand(ctx context.Context, cmd *pb.CwaCommand) {
 	l.dispatcher.Dispatch(ctx, cmd)
 }
 
-// shutdown handles graceful termination: it interrupts any in-flight commands
-// (marking them INTERRUPTED), flushes a final heartbeat carrying those results
-// within a short grace window, then closes the stream.
-func (l *Loop) shutdown(ctx context.Context, stream pb.CwaAgent_CwaAgentHeartbeatClient) {
+// shutdown handles graceful termination: it drains in-flight commands, then
+// flushes a final heartbeat carrying those results and closes the stream.
+func (l *Loop) shutdown(ctx context.Context,
+	stream pb.CwaAgent_CwaAgentHeartbeatClient, streamCancel context.CancelFunc,
+) {
 	if l.dispatcher != nil {
-		l.dispatcher.Interrupt()
+		l.dispatcher.Interrupt(commandDrainGrace)
 	}
 
-	// ctx is already cancelled here; detach so the final flush gets its own
-	// grace window.
-	graceCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
+	// ctx is already cancelled here; detach so the final flush gets its own grace window.
+	graceCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), heartbeatFlushGrace)
 	defer cancel()
 
-	if err := l.sendHeartbeat(graceCtx, stream); err != nil {
-		l.logger.Warn("error sending final heartbeat", "error", err)
-	}
+	flushed := make(chan struct{})
 
-	if closeErr := stream.CloseSend(); closeErr != nil {
-		l.logger.Warn("error closing heartbeat stream", "error", closeErr)
+	go func() {
+		defer close(flushed)
+
+		if err := l.sendHeartbeat(graceCtx, stream); err != nil {
+			l.logger.Warn("error sending final heartbeat", "error", err)
+		}
+
+		if closeErr := stream.CloseSend(); closeErr != nil {
+			l.logger.Warn("error closing heartbeat stream", "error", closeErr)
+		}
+	}()
+
+	select {
+	case <-flushed:
+	case <-graceCtx.Done():
+		l.logger.Warn("final heartbeat flush exceeded grace; aborting")
+		streamCancel() // unblock a stuck send/close
 	}
 }

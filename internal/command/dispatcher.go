@@ -39,8 +39,12 @@ type ResultSink interface {
 }
 
 type inflightCmd struct {
-	command string
-	cancel  context.CancelFunc
+	id          string
+	command     string
+	cancel      context.CancelFunc
+	longRunning bool
+	done        chan struct{} // done is closed when run() has finished (delivered or skipped its result).
+	delivered   bool          // delivered guards against double-delivery between run() and Interrupt().
 }
 
 // Dispatcher routes commands to handlers, running each asynchronously with a
@@ -103,31 +107,33 @@ func (d *Dispatcher) Dispatch(ctx context.Context, cmd *pb.CwaCommand) {
 	// Detach from the caller's cancellation: a command outlives the heartbeat
 	// stream that delivered it and is bounded by its own timeout (or Interrupt).
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handler.Timeout())
-	d.inflight[execID] = &inflightCmd{command: cmd.GetCommand(), cancel: cancel}
+	inf := &inflightCmd{
+		id:          execID,
+		command:     cmd.GetCommand(),
+		cancel:      cancel,
+		longRunning: handler.Timeout() > Instant,
+		done:        make(chan struct{}),
+	}
+	d.inflight[execID] = inf
 	d.mu.Unlock()
 
-	go d.run(runCtx, cancel, cmd, handler)
+	go d.run(runCtx, inf, cmd, handler)
 }
 
-func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, cmd *pb.CwaCommand, handler Handler) {
-	defer cancel()
+func (d *Dispatcher) run(ctx context.Context, inf *inflightCmd, cmd *pb.CwaCommand, handler Handler) {
+	defer inf.cancel()
+	defer close(inf.done)
 
-	execID := cmd.GetExecutionId()
-
-	d.logger.Info("executing command", "command", cmd.GetCommand(), "execution_id", execID)
+	d.logger.Info("executing command", "command", cmd.GetCommand(), "execution_id", inf.id)
 
 	err := handler.Run(ctx, cmd.GetParameters())
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		err = fmt.Errorf("%w after %s", errCommandTimedOut, handler.Timeout())
+
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return
 	}
 
-	d.mu.Lock()
-	shuttingDown := d.shuttingDown
-	d.mu.Unlock()
-
-	// During shutdown, Interrupt() owns the (INTERRUPTED) result for in-flight commands.
-	if shuttingDown {
-		return
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("%w after %s", errCommandTimedOut, handler.Timeout())
 	}
 
 	status, reason := succeededStatus, ""
@@ -135,35 +141,43 @@ func (d *Dispatcher) run(ctx context.Context, cancel context.CancelFunc, cmd *pb
 		status, reason = failedStatus, err.Error()
 	}
 
-	// Deliver before clearing in-flight.
-	d.deliver(execID, cmd.GetCommand(), status, reason)
-
-	d.mu.Lock()
-	delete(d.inflight, execID)
-	d.mu.Unlock()
+	d.deliverOnce(inf, status, reason)
 }
 
-// Interrupt cancels all in-flight commands and reports them as INTERRUPTED. It
-// is called on graceful shutdown (SIGTERM); the caller then flushes a final
-// heartbeat carrying these results so the control plane applies its retry policy.
-func (d *Dispatcher) Interrupt() {
+// Interrupt handles in-flight commands on graceful shutdown (SIGTERM).
+// Instant commands are given up to grace to finish. Long-running commands are cancelled immediately.
+// Interrupt blocks until every in-flight command has a terminal result to flush a final heartbeat.
+func (d *Dispatcher) Interrupt(grace time.Duration) {
 	d.mu.Lock()
 	d.shuttingDown = true
 
-	type interruptedCmd struct{ id, command string }
-
-	interrupted := make([]interruptedCmd, 0, len(d.inflight))
-
-	for id, inf := range d.inflight {
-		inf.cancel()
-		interrupted = append(interrupted, interruptedCmd{id: id, command: inf.command})
+	inflight := make([]*inflightCmd, 0, len(d.inflight))
+	for _, inf := range d.inflight {
+		inflight = append(inflight, inf)
 	}
-
-	d.inflight = make(map[string]*inflightCmd)
 	d.mu.Unlock()
 
-	for _, c := range interrupted {
-		d.deliver(c.id, c.command, interruptedStatus, "interrupted by agent shutdown")
+	// Shared window: all instant commands race the same deadline.
+	graceCtx, graceCancel := context.WithTimeout(context.Background(), grace)
+	defer graceCancel()
+
+	for _, inf := range inflight {
+		if inf.longRunning {
+			// Long-running commands cannot finish within the grace window, so interrupt them immediately.
+			inf.cancel()
+			d.deliverOnce(inf, interruptedStatus, "interrupted by agent shutdown")
+
+			continue
+		}
+
+		// Instant commands may finish on their own within the grace window; wait and interrupt.
+		select {
+		case <-inf.done:
+			// run() delivered the command's real result.
+		case <-graceCtx.Done():
+			inf.cancel()
+			d.deliverOnce(inf, interruptedStatus, "interrupted by agent shutdown")
+		}
 	}
 }
 
@@ -173,6 +187,22 @@ const (
 	failedStatus      = pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_FAILED
 	interruptedStatus = pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_INTERRUPTED
 )
+
+// deliverOnce delivers a terminal result for inf exactly once, coordinating the
+// normal-completion path (run) with the shutdown path (Interrupt).
+func (d *Dispatcher) deliverOnce(inf *inflightCmd, status pb.CwaCommandResultStatus, reason string) {
+	d.mu.Lock()
+	if inf.delivered {
+		d.mu.Unlock()
+
+		return
+	}
+	inf.delivered = true
+	delete(d.inflight, inf.id)
+	d.mu.Unlock()
+
+	d.deliver(inf.id, inf.command, status, reason)
+}
 
 func (d *Dispatcher) deliver(execID, command string, status pb.CwaCommandResultStatus, reason string) {
 	d.sink.DeliverResult(&pb.CwaCommandResult{

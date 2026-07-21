@@ -11,6 +11,8 @@ WorkingDirectory=/etc/crusoe/crusoe_watch_agent
 ExecStart=@@EXEC_START@@
 ExecStop=@@EXEC_STOP@@
 TimeoutStartSec=0
+# Must exceed the heartbeat shutdown budget (internal/heartbeat/heartbeat.go).
+TimeoutStopSec=30
 Restart=always
 RestartSec=5
 

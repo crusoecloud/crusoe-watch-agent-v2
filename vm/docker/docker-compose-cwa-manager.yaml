@@ -11,3 +11,5 @@ services:
       - /etc/crusoe/secrets/.monitoring-token
     network_mode: host
     restart: always
+    # Must exceed the heartbeat shutdown budget (internal/heartbeat/heartbeat.go).
+    stop_grace_period: 30s

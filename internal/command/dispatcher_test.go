@@ -187,7 +187,7 @@ func TestDispatch_Timeout(t *testing.T) {
 	assert.Contains(t, r.GetReason(), "timed out")
 }
 
-func TestInterrupt(t *testing.T) {
+func TestInterrupt_LongRunningIsInterruptedImmediately(t *testing.T) {
 	sink := newFakeSink()
 	d := NewDispatcher(sink, discardLogger())
 
@@ -201,7 +201,14 @@ func TestInterrupt(t *testing.T) {
 	d.Dispatch(context.Background(), cmd("exec-1", "report.bug"))
 	<-h.started
 
-	d.Interrupt()
+	// A generous grace must NOT be spent on a long-running command: it is
+	// cancelled immediately, so Interrupt returns far sooner than the grace.
+	start := time.Now()
+	d.Interrupt(time.Minute)
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, 5*time.Second,
+		"long-running command must be interrupted immediately, not waited on for the grace window")
 
 	r := sink.get("exec-1")
 	require.NotNil(t, r)
@@ -210,4 +217,59 @@ func TestInterrupt(t *testing.T) {
 	// After shutdown, further dispatches are ignored.
 	d.Dispatch(context.Background(), cmd("exec-2", "report.bug"))
 	assert.Nil(t, sink.get("exec-2"))
+}
+
+func TestInterrupt_InstantCommandFinishesWithinGrace(t *testing.T) {
+	sink := newFakeSink()
+	d := NewDispatcher(sink, discardLogger())
+
+	h := &fakeHandler{
+		timeout: Instant,
+		started: make(chan struct{}),
+		block:   make(chan struct{}),
+	}
+	d.Register("config.apply", h)
+
+	d.Dispatch(context.Background(), cmd("exec-1", "config.apply"))
+	<-h.started
+
+	// Let the handler finish just after Interrupt begins waiting.
+	go func() { close(h.block) }()
+
+	d.Interrupt(time.Second)
+
+	r := sink.get("exec-1")
+	require.NotNil(t, r)
+	assert.Equal(t, pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_SUCCEEDED, r.GetStatus(),
+		"an instant command that finishes within grace reports its real result")
+}
+
+func TestInterrupt_InstantCommandExceedingGraceIsInterrupted(t *testing.T) {
+	sink := newFakeSink()
+	d := NewDispatcher(sink, discardLogger())
+
+	h := &fakeHandler{
+		timeout: Instant,
+		started: make(chan struct{}),
+		block:   make(chan struct{}), // never closed; only ctx cancel unblocks
+	}
+	d.Register("config.apply", h)
+
+	d.Dispatch(context.Background(), cmd("exec-1", "config.apply"))
+	<-h.started
+
+	// Handler never completes on its own, so Interrupt must wait out the full
+	// grace window before giving up and reporting INTERRUPTED.
+	const grace = 200 * time.Millisecond
+
+	start := time.Now()
+	d.Interrupt(grace)
+	elapsed := time.Since(start)
+
+	assert.GreaterOrEqual(t, elapsed, grace,
+		"instant command must be given the full grace window to finish before being interrupted")
+
+	r := sink.get("exec-1")
+	require.NotNil(t, r)
+	assert.Equal(t, pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_INTERRUPTED, r.GetStatus())
 }
