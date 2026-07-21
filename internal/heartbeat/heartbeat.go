@@ -80,7 +80,7 @@ func (l *Loop) Register(ctx context.Context) (string, error) {
 	req := &pb.RegisterCwaAgentRequest{
 		VmId:           l.identity.VMID,
 		InstallType:    l.identity.InstallType,
-		Version:        version.Version,
+		Version:        version.Agent(),
 		CapabilityList: capabilities(),
 		Location:       l.identity.Region,
 	}
@@ -153,6 +153,7 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 	req := &pb.CwaAgentHeartbeatRequest{
 		AgentId:           l.identity.AgentID,
 		InstallType:       l.identity.InstallType,
+		Version:           version.Agent(),
 		CapabilityList:    capabilities(),
 		AgentStatus:       deriveAgentStatus(components),
 		Components:        components,

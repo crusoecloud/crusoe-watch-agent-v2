@@ -82,6 +82,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: AGENT_VERSION
+              value: {{ .Chart.AppVersion | quote }}
             - name: CWA_STATE_DIR
               value: /var/lib/cwa-manager
             - name: CRUSOE_MONITORING_TOKEN
