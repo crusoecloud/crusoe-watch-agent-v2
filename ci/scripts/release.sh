@@ -63,24 +63,31 @@ publish_vm() {
         "$script"
     rm -f "$key"
 
-    # Build the cwa-manager binary for native-mode installs.
-    log "Building cwa-manager-linux-amd64"
-    local binary="${RENDER_OUT}/cwa-manager-linux-amd64"
-    ( cd "$WORK" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-        -ldflags "-X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${NEW_VERSION}'" \
-        -o "$binary" \
-        ./cmd/cwa-manager ) || die "go build cwa-manager failed"
+    # Build native-mode binaries for both host architectures and add them as
+    # release assets. NVIDIA hosts are amd64 except GB200, which are arm64.
+    local -a assets=(
+        "${script}#crusoe_watch_agent.sh"
+        "${script}.bundle#crusoe_watch_agent.sh.bundle"
+        "${RENDER_OUT}/VERSION#VERSION"
+    )
+    local ldflags="-X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${NEW_VERSION}'"
+    local arch cmd out
+    for arch in amd64 arm64; do
+        for cmd in cwa-manager report-runner; do
+            out="${RENDER_OUT}/${cmd}-linux-${arch}"
+            log "Building ${cmd}-linux-${arch}"
+            ( cd "$WORK" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
+                -ldflags "$ldflags" \
+                -o "$out" \
+                "./cmd/${cmd}" ) || die "go build ${cmd} (${arch}) failed"
+            assets+=("${out}#${cmd}-linux-${arch}")
+        done
+    done
 
     local notes_file
     notes_file=$(generate_notes "$NEW_TAG")
 
     log "Creating GitHub Release ${NEW_TAG}"
-    local -a assets=(
-        "${script}#crusoe_watch_agent.sh"
-        "${script}.bundle#crusoe_watch_agent.sh.bundle"
-        "${binary}#cwa-manager-linux-amd64"
-        "${RENDER_OUT}/VERSION#VERSION"
-    )
     # Compose + systemd + config files travel with the script as assets so a
     # downloader doesn't need to clone the repo.
     for f in "${RENDER_OUT}/docker/"*.yaml \

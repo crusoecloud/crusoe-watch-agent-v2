@@ -13,12 +13,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/bugreport"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/command"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/health"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/heartbeat"
@@ -34,6 +36,7 @@ var errMissingMonitoringToken = errors.New("CRUSOE_MONITORING_TOKEN is not set")
 const (
 	defaultCoordinatorAddr = "cwa-coordinator.crusoecloud.com:443"
 	monitoringTokenEnv     = "CRUSOE_MONITORING_TOKEN"
+	nodeNameEnv            = "NODE_NAME"
 	retryDelay             = 30 * time.Second
 	retryJitter            = 30 * time.Second
 
@@ -134,7 +137,9 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 
 	hc := health.NewCollector(logger, ident.InstallType)
 	loop := heartbeat.NewLoop(ident, hc, conn, logger)
-	loop.SetDispatcher(buildDispatcher(loop, deps, logger))
+	uploadURL := "https://" + strings.TrimSuffix(coordAddr, ":443") + "/upload"
+	uploader := bugreport.NewHTTPUploader(uploadURL, token, ident.VMID, os.Getenv(nodeNameEnv))
+	loop.SetDispatcher(buildDispatcher(loop, deps, uploader, logger))
 	heartbeatLoop(ctx, coordAddr, ident, loop, resolver, logger)
 	logger.Info("cwa-manager shutdown complete")
 
@@ -183,11 +188,19 @@ func startDataPlane(ctx context.Context, deps command.Deps, logger *slog.Logger)
 }
 
 // buildDispatcher wires the command dispatcher with all command handlers.
-func buildDispatcher(loop *heartbeat.Loop, deps command.Deps, logger *slog.Logger) *command.Dispatcher {
+func buildDispatcher(
+	loop *heartbeat.Loop, deps command.Deps, uploader command.Uploader, logger *slog.Logger,
+) *command.Dispatcher {
 	disp := command.NewDispatcher(loop, logger)
 	disp.Register(command.ConfigApplyCommand, command.NewConfigApply(deps))
 	disp.Register(command.IngestionBlockCommand, command.NewIngestionBlock(deps, true))
 	disp.Register(command.IngestionUnblockCommand, command.NewIngestionBlock(deps, false))
+
+	// report.bug is only registered when a platform generator could be built;
+	// otherwise the agent runs degraded and the command is acked as FAILED.
+	if gen := buildGenerator(deps, logger); gen != nil {
+		disp.Register(command.ReportBugCommand, command.NewReportBug(gen, uploader))
+	}
 
 	return disp
 }

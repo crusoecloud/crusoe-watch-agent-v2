@@ -141,6 +141,9 @@ func (d *Dispatcher) run(ctx context.Context, inf *inflightCmd, cmd *pb.CwaComma
 		status, reason = failedStatus, err.Error()
 	}
 
+	d.logger.Info("command completed",
+		"command", cmd.GetCommand(), "execution_id", inf.id, "status", status, "reason", reason)
+
 	d.deliverOnce(inf, status, reason)
 }
 

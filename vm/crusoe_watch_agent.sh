@@ -197,13 +197,15 @@ ensure_docker() {
 ###############################################################################
 # Component installers
 ###############################################################################
-install_cwa_manager() {
-    local src=""
+# Installs a native-mode Go binary to INSTALL_DIR. $1 = binary name; the release
+# asset is <name>-linux-<arch> for the host arch (amd64 or arm64), with a fallback.
+install_release_binary() {
+    local name="$1" src=""
 
     # Dev fallback: pick up a locally-built binary if present.
     for candidate in \
-        "${SCRIPT_DIR}/cwa-manager" \
-        "${SCRIPT_DIR}/../dist/cwa-manager"; do
+        "${SCRIPT_DIR}/${name}" \
+        "${SCRIPT_DIR}/../dist/${name}"; do
         if [[ -f "$candidate" ]]; then
             src="$candidate"
             break
@@ -211,20 +213,22 @@ install_cwa_manager() {
     done
 
     if [[ -z "$src" ]]; then
-        local url="${GITHUB_RELEASE_URL}/cwa-manager-linux-amd64"
-        status "Downloading cwa-manager from ${url}..."
+        local arch
+        arch=$(dpkg --print-architecture)
+        local url="${GITHUB_RELEASE_URL}/${name}-linux-${arch}"
+        status "Downloading ${name} from ${url}..."
         local tmp
         tmp=$(mktemp)
         if wget -q -O "$tmp" "$url"; then
             src="$tmp"
         else
             rm -f "$tmp"
-            error_exit "Failed to download cwa-manager. Place binary next to the script or check network."
+            error_exit "Failed to download ${name}. Place binary next to the script or check network."
         fi
     fi
 
-    status "Installing cwa-manager to ${INSTALL_DIR}/cwa-manager"
-    install -m 0755 "$src" "${INSTALL_DIR}/cwa-manager"
+    status "Installing ${name} to ${INSTALL_DIR}/${name}"
+    install -m 0755 "$src" "${INSTALL_DIR}/${name}"
     if [[ "$src" == /tmp/* ]]; then rm -f "$src"; fi
 }
 
@@ -350,7 +354,9 @@ install_dcgm_exporter_native() {
     fi
     if $NEED_GO; then
         status "Installing Go 1.26 from official tarball."
-        local GO_TAR="go1.26.0.linux-amd64.tar.gz"
+        local go_arch
+        go_arch=$(dpkg --print-architecture)
+        local GO_TAR="go1.26.0.linux-${go_arch}.tar.gz"
         wget -q -O "/tmp/$GO_TAR" "https://go.dev/dl/$GO_TAR" || error_exit "Failed to download Go."
         rm -rf /usr/local/go
         tar -C /usr/local -xzf "/tmp/$GO_TAR" || error_exit "Failed to extract Go."
@@ -578,6 +584,12 @@ install_systemd_units() {
         fi
     fi
 
+    # Report runner (native): the bug-report collector service (NVIDIA-only).
+    if [[ "$INSTALL_MODE" == "native" && "$GPU_TYPE" == "nvidia" ]]; then
+        install_unit "cwa-report-runner.service" \
+            "${INSTALL_DIR}/report-runner"
+    fi
+
     # AMD exporter (Docker only, no placeholders)
     if [[ "$GPU_TYPE" == "amd" ]]; then
         install_unit "crusoe-amd-exporter.service"
@@ -699,7 +711,9 @@ do_install() {
 
     # Docker mode runs cwa-manager as a container (see install_systemd_units).
     if [[ "$INSTALL_MODE" == "native" ]]; then
-        install_cwa_manager
+        install_release_binary cwa-manager
+        # report-runner collects GPU bug reports; native mode is NVIDIA-only.
+        [[ "$GPU_TYPE" == "nvidia" ]] && install_release_binary report-runner
     fi
 
     # Install Vector.
@@ -745,6 +759,7 @@ do_install() {
     # Exporters before Vector, so its first scrapes find them listening.
     local services=()
     [[ "$GPU_TYPE" == "nvidia" ]] && services+=("crusoe-dcgm-exporter.service")
+    [[ "$INSTALL_MODE" == "native" && "$GPU_TYPE" == "nvidia" ]] && services+=("cwa-report-runner.service")
     [[ "$GPU_TYPE" == "amd" ]]    && services+=("crusoe-amd-exporter.service")
     [[ "$CME_ENABLED" == "true" ]] && services+=("crusoe-metrics-exporter.service")
     services+=("crusoe-watch-agent.service")
@@ -772,6 +787,7 @@ do_uninstall() {
     status "Stopping and disabling services..."
     local all_services=(
         cwa-manager.service
+        cwa-report-runner.service
         crusoe-watch-agent.service
         crusoe-dcgm-exporter.service
         crusoe-amd-exporter.service
@@ -804,6 +820,7 @@ do_uninstall() {
         rm -f "${SYSTEMCTL_DIR}/${svc}"
     done
     rm -f "${INSTALL_DIR}/cwa-manager"
+    rm -f "${INSTALL_DIR}/report-runner"
     rm -f "${VECTOR_CONFIG}"
     rm -rf "${CONFIG_DIR}"
     rm -rf /var/lib/vector

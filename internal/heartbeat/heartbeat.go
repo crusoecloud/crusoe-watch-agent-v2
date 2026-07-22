@@ -38,6 +38,7 @@ func capabilities() []string {
 		"config_apply",
 		"ingestion_block",
 		"ingestion_unblock",
+		"report_bug",
 	}
 }
 

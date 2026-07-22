@@ -1,0 +1,17 @@
+[Unit]
+Description=CWA Report Runner - GPU bug-report collector
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/crusoe/crusoe_watch_agent/.env
+WorkingDirectory=/etc/crusoe/crusoe_watch_agent
+ExecStart=@@EXEC_START@@
+ExecStop=@@EXEC_STOP@@
+TimeoutStartSec=0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
