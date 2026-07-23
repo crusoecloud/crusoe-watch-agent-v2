@@ -44,6 +44,7 @@ const (
 	logsEndpointFile     = ".logs-endpoint"
 	metricsEndpointFile  = ".metrics-endpoint"
 	ingestionBlockedFile = ".ingestion-blocked"
+	commandStoreDir      = ".commands" // per-execution crash-recovery records
 )
 
 // bearerToken sends `authorization: Bearer <CRUSOE_MONITORING_TOKEN>` on every RPC.
@@ -140,6 +141,10 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	uploadURL := "https://" + strings.TrimSuffix(coordAddr, ":443") + "/upload"
 	uploader := bugreport.NewHTTPUploader(uploadURL, token, ident.VMID, os.Getenv(nodeNameEnv))
 	loop.SetDispatcher(buildDispatcher(loop, deps, uploader, logger))
+
+	// Layer 2: recover commands a hard stop interrupted, before the loop starts.
+	command.RecoverInterrupted(deps.Store, loop, logger)
+
 	heartbeatLoop(ctx, coordAddr, ident, loop, resolver, logger)
 	logger.Info("cwa-manager shutdown complete")
 
@@ -162,6 +167,7 @@ func buildDeps(ident *identity.Identity, vmCfg vector.VMConfig) command.Deps {
 		InstallType:      ident.InstallType,
 		VMCfg:            vmCfg,
 		VMConfigPath:     getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
+		Store:            command.NewExecStore(filepath.Join(stateDir, commandStoreDir)),
 		LogsStatePath:    logsPath,
 		MetricsStatePath: metricsPath,
 		BlockedStatePath: blockedPath,
@@ -191,7 +197,7 @@ func startDataPlane(ctx context.Context, deps command.Deps, logger *slog.Logger)
 func buildDispatcher(
 	loop *heartbeat.Loop, deps command.Deps, uploader command.Uploader, logger *slog.Logger,
 ) *command.Dispatcher {
-	disp := command.NewDispatcher(loop, logger)
+	disp := command.NewDispatcher(loop, deps.Store, logger)
 	disp.Register(command.ConfigApplyCommand, command.NewConfigApply(deps))
 	disp.Register(command.IngestionBlockCommand, command.NewIngestionBlock(deps, true))
 	disp.Register(command.IngestionUnblockCommand, command.NewIngestionBlock(deps, false))

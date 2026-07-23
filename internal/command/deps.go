@@ -34,6 +34,9 @@ type Deps struct {
 	VMConfigPath string          // where the VM Vector config is written
 	Watcher      Reloader        // non-nil on K8s
 
+	// Store records in-flight command executions for crash recovery.
+	Store *ExecStore
+
 	// Persisted control-plane.
 	LogsStatePath    string // config.apply logs base URL (file content)
 	MetricsStatePath string // config.apply metrics base URL (file content)

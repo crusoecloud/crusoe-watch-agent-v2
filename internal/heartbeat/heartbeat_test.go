@@ -115,7 +115,7 @@ func (stubHandler) Run(context.Context, map[string]string) error { return nil }
 
 func TestHandleCommand_DelegatesToDispatcher(t *testing.T) {
 	l := newTestLoop()
-	disp := command.NewDispatcher(l, slog.Default())
+	disp := command.NewDispatcher(l, nil, slog.Default())
 	disp.Register("config.apply", stubHandler{})
 	l.SetDispatcher(disp)
 
@@ -250,7 +250,7 @@ func TestShutdown_FlushesPendingResultsInFinalHeartbeat(t *testing.T) {
 func TestShutdown_InterruptsInflightAndFlushesInterrupted(t *testing.T) {
 	l := newShutdownLoop()
 
-	disp := command.NewDispatcher(l, slog.Default())
+	disp := command.NewDispatcher(l, nil, slog.Default())
 	h := &blockingHandler{started: make(chan struct{})}
 	disp.Register("report.bug", h)
 	l.SetDispatcher(disp)

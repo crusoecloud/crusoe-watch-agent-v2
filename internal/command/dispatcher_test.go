@@ -78,7 +78,7 @@ func discardLogger() *slog.Logger {
 func newTestDispatcher(t *testing.T, sink ResultSink) *Dispatcher {
 	t.Helper()
 
-	return NewDispatcher(sink, discardLogger())
+	return NewDispatcher(sink, nil, discardLogger())
 }
 
 func cmd(id, name string) *pb.CwaCommand {
@@ -100,6 +100,32 @@ func TestDispatch_RunsHandlerAndDelivers(t *testing.T) {
 	assert.Equal(t, pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_SUCCEEDED, r.GetStatus())
 	assert.NotNil(t, r.GetCompletedAt())
 	assert.Equal(t, int32(1), h.runs.Load())
+}
+
+func TestDispatch_RecordsInProgressThenClears(t *testing.T) {
+	sink := newFakeSink()
+	store := NewExecStore(t.TempDir())
+	d := NewDispatcher(sink, store, discardLogger())
+
+	h := &fakeHandler{timeout: Instant, started: make(chan struct{}), block: make(chan struct{})}
+	d.Register("report.bug", h)
+
+	d.Dispatch(context.Background(), cmd("exec-1", "report.bug"))
+	<-h.started // handler running: the in-progress record must exist
+
+	records, err := store.List()
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, "exec-1", records[0].ExecutionID)
+	assert.Equal(t, ExecStatusInProgress, records[0].Status)
+
+	close(h.block)
+	require.Eventually(t, func() bool { return sink.get("exec-1") != nil }, time.Second, 5*time.Millisecond)
+
+	// The result is only delivered after the record is cleared.
+	records, err = store.List()
+	require.NoError(t, err)
+	assert.Empty(t, records, "record must be cleared on completion")
 }
 
 func TestDispatch_HandlerErrorIsFailed(t *testing.T) {
@@ -189,7 +215,7 @@ func TestDispatch_Timeout(t *testing.T) {
 
 func TestInterrupt_LongRunningIsInterruptedImmediately(t *testing.T) {
 	sink := newFakeSink()
-	d := NewDispatcher(sink, discardLogger())
+	d := NewDispatcher(sink, nil, discardLogger())
 
 	h := &fakeHandler{
 		timeout: LongRunning,
@@ -221,7 +247,7 @@ func TestInterrupt_LongRunningIsInterruptedImmediately(t *testing.T) {
 
 func TestInterrupt_InstantCommandFinishesWithinGrace(t *testing.T) {
 	sink := newFakeSink()
-	d := NewDispatcher(sink, discardLogger())
+	d := NewDispatcher(sink, nil, discardLogger())
 
 	h := &fakeHandler{
 		timeout: Instant,
@@ -246,7 +272,7 @@ func TestInterrupt_InstantCommandFinishesWithinGrace(t *testing.T) {
 
 func TestInterrupt_InstantCommandExceedingGraceIsInterrupted(t *testing.T) {
 	sink := newFakeSink()
-	d := NewDispatcher(sink, discardLogger())
+	d := NewDispatcher(sink, nil, discardLogger())
 
 	h := &fakeHandler{
 		timeout: Instant,

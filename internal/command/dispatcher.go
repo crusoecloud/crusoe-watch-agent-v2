@@ -38,6 +38,12 @@ type ResultSink interface {
 	DeliverResult(*pb.CwaCommandResult)
 }
 
+// ExecRecorder persists in-flight command executions for crash recovery.
+type ExecRecorder interface {
+	Begin(execID, command string) error
+	Complete(execID string) error
+}
+
 type inflightCmd struct {
 	id          string
 	command     string
@@ -52,6 +58,7 @@ type inflightCmd struct {
 type Dispatcher struct {
 	handlers map[string]Handler
 	sink     ResultSink
+	recorder ExecRecorder
 	logger   *slog.Logger
 
 	mu           sync.Mutex
@@ -59,11 +66,13 @@ type Dispatcher struct {
 	shuttingDown bool
 }
 
-// NewDispatcher creates a Dispatcher delivering results to sink.
-func NewDispatcher(sink ResultSink, logger *slog.Logger) *Dispatcher {
+// NewDispatcher creates a Dispatcher delivering results to sink and recording
+// in-flight executions to recorder for crash recovery.
+func NewDispatcher(sink ResultSink, recorder ExecRecorder, logger *slog.Logger) *Dispatcher {
 	return &Dispatcher{
 		handlers: make(map[string]Handler),
 		sink:     sink,
+		recorder: recorder,
 		logger:   logger,
 		inflight: make(map[string]*inflightCmd),
 	}
@@ -125,6 +134,14 @@ func (d *Dispatcher) run(ctx context.Context, inf *inflightCmd, cmd *pb.CwaComma
 	defer close(inf.done)
 
 	d.logger.Info("executing command", "command", cmd.GetCommand(), "execution_id", inf.id)
+
+	// Record the execution before it starts (Best effort, store failure must not stop the command from running).
+	if d.recorder != nil {
+		if err := d.recorder.Begin(inf.id, inf.command); err != nil {
+			d.logger.Warn("failed to record command start for crash recovery",
+				"execution_id", inf.id, "error", err)
+		}
+	}
 
 	err := handler.Run(ctx, cmd.GetParameters())
 
@@ -203,6 +220,14 @@ func (d *Dispatcher) deliverOnce(inf *inflightCmd, status pb.CwaCommandResultSta
 	inf.delivered = true
 	delete(d.inflight, inf.id)
 	d.mu.Unlock()
+
+	// Clear the crash-recovery record before the result reaches the heartbeat.
+	if d.recorder != nil {
+		if err := d.recorder.Complete(inf.id); err != nil {
+			d.logger.Warn("failed to clear command crash-recovery record",
+				"execution_id", inf.id, "error", err)
+		}
+	}
 
 	d.deliver(inf.id, inf.command, status, reason)
 }
