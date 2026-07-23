@@ -1,4 +1,7 @@
-FROM golang:1.26-alpine AS builder
+# Pin the builder to the native build host (not the target arch): Go cross-compiles,
+# so `go mod download`/git run natively instead of under QEMU, which crashes on large
+# private-module fetches (index-pack "Bad address") when emulating arm64.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache 'git>=2.47'
 
@@ -12,7 +15,9 @@ RUN --mount=type=secret,id=netrc,target=/root/.netrc \
 
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -ldflags "-X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${VERSION}'" \
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${VERSION}'" \
     -o /cwa-manager ./cmd/cwa-manager
 
 FROM alpine:3.21

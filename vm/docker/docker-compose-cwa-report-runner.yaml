@@ -1,0 +1,26 @@
+services:
+  cwa-report-runner:
+    image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/report-runner:${REPORT_RUNNER_VERSION}
+    container_name: cwa-report-runner
+    hostname: cwa-report-runner
+    # nvidia-bug-report.sh needs GPU/driver access plus host diagnostics.
+    # GPU access comes from the nvidia runtime below.
+    cap_drop: [ALL]
+    cap_add: [SYS_ADMIN, SYSLOG]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    pids_limit: 1024
+    mem_limit: 2g
+    volumes:
+      # Shared with cwa-manager: the collector writes the archive here and the manager reads + uploads it.
+      - /etc/crusoe/bug-reports:/etc/crusoe/bug-reports
+      # dmidecode reads the DMI tables from sysfs.
+      - /sys/firmware/dmi:/sys/firmware/dmi:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: always

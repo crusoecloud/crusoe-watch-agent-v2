@@ -1,0 +1,30 @@
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+
+RUN apk add --no-cache 'git>=2.47'
+
+ARG CI_SERVER_HOST
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=secret,id=netrc,target=/root/.netrc \
+    go env -w "GOPRIVATE=${CI_SERVER_HOST}" && \
+    go mod download
+
+COPY . .
+ARG VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${VERSION}'" \
+    -o /report-runner ./cmd/report-runner
+
+# nvidia-bug-report.sh ships with the NVIDIA driver userspace (nvidia-utils).
+# NVIDIA_DRIVER_BRANCH must match the host driver major; GPU access at runtime is
+# provided by the nvidia container runtime, not baked into the image.
+FROM nvcr.io/nvidia/cuda:12.8.0-base-ubuntu24.04
+ARG NVIDIA_DRIVER_BRANCH=565
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        "nvidia-utils-${NVIDIA_DRIVER_BRANCH}" \
+        pciutils usbutils dmidecode kmod util-linux procps iproute2 gzip \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /report-runner /usr/local/bin/report-runner
+ENTRYPOINT ["/usr/local/bin/report-runner"]

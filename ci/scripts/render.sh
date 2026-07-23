@@ -53,6 +53,7 @@ deps_get() {
 # the source has a placeholder with no corresponding pin.
 load_deps() {
     CWA_MANAGER=$(deps_get cwa-manager)
+    REPORT_RUNNER=$(deps_get report-runner)
     VECTOR=$(deps_get vector)
     CRUSOE_METRICS_EXPORTER=$(deps_get crusoe-metrics-exporter)
     AMD_EXPORTER=$(deps_get amd-exporter)
@@ -60,7 +61,7 @@ load_deps() {
     DCGM_2204=$(deps_get dcgm-exporter-ubuntu2204)
     DCGM_2404=$(deps_get dcgm-exporter-ubuntu2404)
     TOKEN_JOB=$(deps_get token-job)
-    for var in CWA_MANAGER VECTOR CRUSOE_METRICS_EXPORTER AMD_EXPORTER \
+    for var in CWA_MANAGER REPORT_RUNNER VECTOR CRUSOE_METRICS_EXPORTER AMD_EXPORTER \
                DCGM_2004 DCGM_2204 DCGM_2404 TOKEN_JOB; do
         [[ -n "${!var}" ]] || die "missing pin in dependencies.yaml for ${var}"
     done
@@ -105,6 +106,7 @@ render_vm() {
     substitute_file "$dst" \
         AGENT_VERSION                       "$agent_version" \
         CWA_MANAGER_VERSION                 "$CWA_MANAGER" \
+        REPORT_RUNNER_VERSION               "$REPORT_RUNNER" \
         VECTOR_VERSION                      "$VECTOR" \
         CRUSOE_METRICS_EXPORTER_VERSION     "$CRUSOE_METRICS_EXPORTER" \
         AMD_EXPORTER_VERSION                "$AMD_EXPORTER" \

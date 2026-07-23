@@ -14,7 +14,7 @@ func buildGenerator(deps command.Deps, logger *slog.Logger) command.Generator {
 	case pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD:
 		return bugreport.NewRunnerClient(getEnvOrDefault(bugreport.EnvSocketPath, bugreport.DefaultSocketPath))
 	case pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER:
-		// TODO: Docker bug report support (report-runner sidecar container).
+		return bugreport.NewRunnerClient(getEnvOrDefault(bugreport.EnvSocketPath, bugreport.DefaultSocketPath))
 	case pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES, pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED:
 		// TODO: K8s bug report support.
 	}

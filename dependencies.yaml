@@ -12,6 +12,10 @@
 # Tag format: YYYY.MM.DD-<short-sha>.
 cwa-manager: "2026.07.14-8887e284"
 
+# report-runner: docker-mode bug-report sidecar (NVIDIA + AMD images share this pin).
+# Tag format: YYYY.MM.DD-<short-sha>.
+report-runner: "dev"
+
 ###############################################################################
 # External components — upstream/vendored versions.
 ###############################################################################
@@ -27,7 +31,7 @@ vector: "0.55.0"
 crusoe-metrics-exporter: "0.2.4"
 
 # AMD device-metrics-exporter (docker only).
-amd-exporter: "v1.4.0"
+amd-exporter: "v1.5.0"
 
 # NVIDIA dcgm-exporter (docker only).
 dcgm-exporter-ubuntu2004: "4.3.1-4.4.0-ubi9"

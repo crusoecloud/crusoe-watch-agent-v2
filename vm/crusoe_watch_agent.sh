@@ -14,10 +14,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Version pins are stamped at release time from dependencies.yaml.
 AGENT_VERSION="@@AGENT_VERSION@@"
 CWA_MANAGER_VERSION="@@CWA_MANAGER_VERSION@@"
+REPORT_RUNNER_VERSION="@@REPORT_RUNNER_VERSION@@"
 VECTOR_VERSION="@@VECTOR_VERSION@@"
 CME_VERSION="@@CRUSOE_METRICS_EXPORTER_VERSION@@"
 AMD_EXPORTER_VERSION="@@AMD_EXPORTER_VERSION@@"
-for v in AGENT_VERSION CWA_MANAGER_VERSION VECTOR_VERSION CME_VERSION AMD_EXPORTER_VERSION; do
+for v in AGENT_VERSION CWA_MANAGER_VERSION REPORT_RUNNER_VERSION VECTOR_VERSION CME_VERSION AMD_EXPORTER_VERSION; do
     case "${!v}" in @@*@@) printf -v "$v" '%s' "dev" ;; esac
 done
 
@@ -60,6 +61,7 @@ INSTALL_MODE="docker"   # "docker" or "native"
 CME_ENABLED=true
 MONITORING_TOKEN=""
 INGRESS_URL=""
+DCGM_EXPORTER_SKIP="false"   # set in dcgm_setup; leaves an existing Docker exporter untouched
 
 ###############################################################################
 # Helpers
@@ -68,6 +70,7 @@ status()     { echo "==> $1"; }
 error_exit() { echo "ERROR: $1" >&2; exit 1; }
 
 command_exists() { command -v "$1" &>/dev/null; }
+service_exists() { systemctl list-unit-files --no-legend "$1" 2>/dev/null | grep -q .; }
 
 # Returns 0 (true) if $1 < $2 using version sort.
 version_lt() {
@@ -310,11 +313,20 @@ dcgm_install() {
 
 dcgm_setup() {
     status "Setting up NVIDIA DCGM..."
+
+    # In Docker mode, leave an exporter deployed by a previous install running untouched on a plain re-install.
+    if [[ "$INSTALL_MODE" == "docker" && "${CWA_UPGRADE:-}" != "1" ]] \
+        && service_exists "crusoe-dcgm-exporter.service"; then
+        DCGM_EXPORTER_SKIP="true"
+        status "crusoe-dcgm-exporter.service already present; leaving it running (run 'upgrade' to redeploy)."
+    fi
+
     dcgm_install
     download_file "vm/config/dcp-metrics-included.csv" "${CONFIG_DIR}/dcp-metrics-included.csv"
 
     if [[ "$INSTALL_MODE" == "docker" ]]; then
-        download_file "vm/docker/docker-compose-dcgm-exporter.yaml" "${CONFIG_DIR}/docker-compose-dcgm-exporter.yaml"
+        [[ "$DCGM_EXPORTER_SKIP" == "true" ]] \
+            || download_file "vm/docker/docker-compose-dcgm-exporter.yaml" "${CONFIG_DIR}/docker-compose-dcgm-exporter.yaml"
     else
         install_dcgm_exporter_native
     fi
@@ -467,6 +479,7 @@ TELEMETRY_INGRESS_ENDPOINT='${cms_url}/ingest'
 LOGS_INGRESS_ENDPOINT='${cms_url}/logs/ingest'
 AGENT_VERSION='${AGENT_VERSION}'
 CWA_MANAGER_VERSION='${CWA_MANAGER_VERSION}'
+REPORT_RUNNER_VERSION='${REPORT_RUNNER_VERSION}'
 CME_ENABLED='${CME_ENABLED}'
 EOF
 
@@ -575,9 +588,13 @@ install_systemd_units() {
     # DCGM exporter
     if [[ "$GPU_TYPE" == "nvidia" ]]; then
         if [[ "$INSTALL_MODE" == "docker" ]]; then
-            install_unit "crusoe-dcgm-exporter.service" \
-                "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-dcgm-exporter.yaml up" \
-                "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-dcgm-exporter.yaml down"
+            if [[ "$DCGM_EXPORTER_SKIP" == "true" ]]; then
+                status "Keeping existing crusoe-dcgm-exporter.service unit."
+            else
+                install_unit "crusoe-dcgm-exporter.service" \
+                    "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-dcgm-exporter.yaml up" \
+                    "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-dcgm-exporter.yaml down"
+            fi
         else
             install_unit "crusoe-dcgm-exporter.service" \
                 "/usr/bin/dcgm-exporter -f ${CONFIG_DIR}/dcp-metrics-included.csv -r localhost:5555 -a :${DCGM_EXPORTER_PORT}"
@@ -588,6 +605,19 @@ install_systemd_units() {
     if [[ "$INSTALL_MODE" == "native" && "$GPU_TYPE" == "nvidia" ]]; then
         install_unit "cwa-report-runner.service" \
             "${INSTALL_DIR}/report-runner"
+    fi
+
+    # Report runner (Docker): sidecar container that runs the vendor bug-report tool.
+    if [[ "$INSTALL_MODE" == "docker" ]]; then
+        local runner_compose=""
+        [[ "$GPU_TYPE" == "nvidia" ]] && runner_compose="docker-compose-cwa-report-runner.yaml"
+        [[ "$GPU_TYPE" == "amd" ]]    && runner_compose="docker-compose-cwa-report-runner-amd.yaml"
+        if [[ -n "$runner_compose" ]]; then
+            download_file "vm/docker/${runner_compose}" "${CONFIG_DIR}/${runner_compose}"
+            install_unit "cwa-report-runner.service" \
+                "/usr/bin/docker compose -f ${CONFIG_DIR}/${runner_compose} up" \
+                "/usr/bin/docker compose -f ${CONFIG_DIR}/${runner_compose} down"
+        fi
     fi
 
     # AMD exporter (Docker only, no placeholders)
@@ -758,8 +788,9 @@ do_install() {
 
     # Exporters before Vector, so its first scrapes find them listening.
     local services=()
-    [[ "$GPU_TYPE" == "nvidia" ]] && services+=("crusoe-dcgm-exporter.service")
+    [[ "$GPU_TYPE" == "nvidia" && "$DCGM_EXPORTER_SKIP" != "true" ]] && services+=("crusoe-dcgm-exporter.service")
     [[ "$INSTALL_MODE" == "native" && "$GPU_TYPE" == "nvidia" ]] && services+=("cwa-report-runner.service")
+    [[ "$INSTALL_MODE" == "docker" && ( "$GPU_TYPE" == "nvidia" || "$GPU_TYPE" == "amd" ) ]] && services+=("cwa-report-runner.service")
     [[ "$GPU_TYPE" == "amd" ]]    && services+=("crusoe-amd-exporter.service")
     [[ "$CME_ENABLED" == "true" ]] && services+=("crusoe-metrics-exporter.service")
     services+=("crusoe-watch-agent.service")

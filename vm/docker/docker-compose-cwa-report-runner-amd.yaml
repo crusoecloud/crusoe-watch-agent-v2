@@ -1,0 +1,22 @@
+services:
+  cwa-report-runner:
+    image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/report-runner-amd:${REPORT_RUNNER_VERSION}
+    container_name: cwa-report-runner
+    hostname: cwa-report-runner
+    # rocm_techsupport.sh needs GPU access plus host diagnostics.
+    # Scoped caps + explicit device access avoid privileged: true.
+    cap_drop: [ALL]
+    cap_add: [SYS_ADMIN, SYSLOG]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    pids_limit: 1024
+    mem_limit: 2g
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    volumes:
+      # Shared with cwa-manager: the runner writes the archive here and the manager reads + uploads it.
+      - /etc/crusoe/bug-reports:/etc/crusoe/bug-reports
+      # dmidecode reads the DMI tables from sysfs.
+      - /sys/firmware/dmi:/sys/firmware/dmi:ro
+    restart: always

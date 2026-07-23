@@ -1,0 +1,40 @@
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+
+RUN apk add --no-cache 'git>=2.47'
+
+ARG CI_SERVER_HOST
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=secret,id=netrc,target=/root/.netrc \
+    go env -w "GOPRIVATE=${CI_SERVER_HOST}" && \
+    go mod download
+
+COPY . .
+ARG VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${VERSION}'" \
+    -o /report-runner ./cmd/report-runner
+
+# AMD ROCm userspace + rocm_techsupport.sh — AMD's official diagnostic script
+# (github.com/amddcgpuce/rocmtechsupport, MIT), pinned to a commit for reproducible
+# builds. amd64-only: ROCm packages and AMD GPU VMs are x86_64.
+FROM ubuntu:24.04
+ARG ROCM_TECHSUPPORT_SHA=39ae6002f3cfaac9a121efa999328bb4d6572bf6
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        wget ca-certificates gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && wget --https-only --tries=3 --timeout=30 -qO /tmp/rocm.gpg.key https://repo.radeon.com/rocm/rocm.gpg.key \
+    && gpg --dearmor -o /etc/apt/keyrings/rocm.gpg /tmp/rocm.gpg.key \
+    && rm -f /tmp/rocm.gpg.key \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.3 ubuntu main" \
+        > /etc/apt/sources.list.d/rocm.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        rocm-smi rocminfo pciutils lshw dmidecode kmod util-linux \
+    && wget --https-only --tries=3 --timeout=30 -qO /usr/bin/rocm_techsupport.sh \
+        "https://raw.githubusercontent.com/amddcgpuce/rocmtechsupport/${ROCM_TECHSUPPORT_SHA}/rocm_techsupport.sh" \
+    && chmod +x /usr/bin/rocm_techsupport.sh \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /report-runner /usr/local/bin/report-runner
+ENTRYPOINT ["/usr/local/bin/report-runner"]

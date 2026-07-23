@@ -1,26 +1,27 @@
-# Flow A — per-component build jobs.
+# Per-component build jobs.
 #
 # Each internal component lives in this repo and has a path-scoped build job
 # that fires on:
 #   - merge request pipelines touching the component's paths (gate)
 #   - main pipelines touching the component's paths (publish :date-sha)
 #
+# Concrete jobs set IMAGE + DOCKERFILE and their own path-scoped rules; the shared
+# build/login/push logic lives in .build-image.
+#
 # TODO: two-hop publishing (build to internal GitLab registry, promote to ghcr.io at release time).
 
-###############################################################################
-# cwa-manager — built from the repo-root Dockerfile.
-###############################################################################
-cwa-manager:build:
+.build-image:
   stage: build
   image: docker:27
   services:
     - docker:27-dind
   variables:
-    IMAGE: "ghcr.io/crusoecloud/crusoe-watch-agent-v2/cwa-manager"
+    # Overridable per job; amd64-only components (e.g. AMD ROCm) set PLATFORMS.
+    PLATFORMS: "linux/amd64,linux/arm64"
   before_script:
     - until docker info > /dev/null 2>&1; do sleep 1; done
     - echo "$GHCR_TOKEN" | docker login -u "$GHCR_USERNAME" --password-stdin ghcr.io
-    - docker buildx create --use --name cwa-manager-builder --driver docker-container
+    - docker buildx create --use --driver docker-container
   script:
     - |
       # Date-SHA tag is the only tag this job publishes. The release job is
@@ -28,16 +29,25 @@ cwa-manager:build:
       DATE_TAG="$(date -u +%Y.%m.%d)-${CI_COMMIT_SHORT_SHA}"
       printf 'machine %s login gitlab-ci-token password %s\n' "${CI_SERVER_HOST}" "${CI_JOB_TOKEN}" > /tmp/netrc
       docker buildx build \
-        --platform linux/amd64,linux/arm64 \
+        --platform "${PLATFORMS}" \
         --push \
         --secret id=netrc,src=/tmp/netrc \
         --build-arg "CI_SERVER_HOST=${CI_SERVER_HOST}" \
         --build-arg "VERSION=${DATE_TAG}" \
         --tag "${IMAGE}:${DATE_TAG}" \
-        -f Dockerfile \
+        -f "${DOCKERFILE}" \
         .
       rm -f /tmp/netrc
       echo "Published ${IMAGE}:${DATE_TAG}"
+
+###############################################################################
+# cwa-manager — built from the repo-root Dockerfile.
+###############################################################################
+cwa-manager:build:
+  extends: .build-image
+  variables:
+    IMAGE: "ghcr.io/crusoecloud/crusoe-watch-agent-v2/cwa-manager"
+    DOCKERFILE: Dockerfile
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -52,6 +62,51 @@ cwa-manager:build:
         - Dockerfile
         - Makefile
         - cmd/cwa-manager/**/*
+        - internal/**/*
+        - go.mod
+        - go.sum
+
+###############################################################################
+# report-runner (NVIDIA) — docker-mode bug-report sidecar, nvidia-bug-report.sh.
+###############################################################################
+report-runner:build:
+  extends: .build-image
+  variables:
+    IMAGE: "ghcr.io/crusoecloud/crusoe-watch-agent-v2/report-runner"
+    DOCKERFILE: cmd/report-runner/Dockerfile.nvidia
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - cmd/report-runner/**/*
+        - internal/**/*
+        - go.mod
+        - go.sum
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - cmd/report-runner/**/*
+        - internal/**/*
+        - go.mod
+        - go.sum
+
+###############################################################################
+# report-runner-amd — docker-mode bug-report sidecar, rocm_techsupport.sh.
+###############################################################################
+report-runner-amd:build:
+  extends: .build-image
+  variables:
+    IMAGE: "ghcr.io/crusoecloud/crusoe-watch-agent-v2/report-runner-amd"
+    DOCKERFILE: cmd/report-runner/Dockerfile.amd
+    PLATFORMS: "linux/amd64"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - cmd/report-runner/**/*
+        - internal/**/*
+        - go.mod
+        - go.sum
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - cmd/report-runner/**/*
         - internal/**/*
         - go.mod
         - go.sum
