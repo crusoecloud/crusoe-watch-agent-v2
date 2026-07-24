@@ -176,8 +176,6 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 		return fmt.Errorf("stream send: %w", err)
 	}
 
-	l.logger.Info("heartbeat sent", "agent_id", req.GetAgentId())
-
 	return nil
 }
 
@@ -229,17 +227,23 @@ func (l *Loop) receiveLoop(ctx context.Context, stream pb.CwaAgent_CwaAgentHeart
 }
 
 // TODO: Set CWA_AGENT_STATUS_UPGRADE_IN_PROGRESS when upgrade dispatch is implemented.
-func deriveAgentStatus(c *pb.CwaComponentsHealth) pb.CwaAgentStatus {
+func deriveAgentStatus(compHealth *pb.CwaComponentsHealth) pb.CwaAgentStatus {
 	healthy := pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY
 
-	if c.GetCwaManager().GetStatus() == healthy &&
-		c.GetVector().GetStatus() == healthy &&
-		c.GetCwaUpdater().GetStatus() == healthy {
+	degraded := compHealth.GetCwaManager().GetStatus() != healthy ||
+		compHealth.GetVector().GetStatus() != healthy ||
+		compHealth.GetCwaUpdater().GetStatus() != healthy
 
-		return pb.CwaAgentStatus_CWA_AGENT_STATUS_HEALTHY
+	// report_runner is absent on hosts that don't run it, so fold in only when present.
+	if rr := compHealth.GetReportRunner(); rr != nil && rr.GetStatus() != healthy {
+		degraded = true
 	}
 
-	return pb.CwaAgentStatus_CWA_AGENT_STATUS_DEGRADED
+	if degraded {
+		return pb.CwaAgentStatus_CWA_AGENT_STATUS_DEGRADED
+	}
+
+	return pb.CwaAgentStatus_CWA_AGENT_STATUS_HEALTHY
 }
 
 func (l *Loop) handleCommand(ctx context.Context, cmd *pb.CwaCommand) {

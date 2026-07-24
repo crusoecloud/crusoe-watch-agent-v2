@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
 )
 
 // This file defines the report-runner protocol and both ends: RunnerClient (cwa-manager)
@@ -23,6 +24,9 @@ import (
 
 // collectPath is the HTTP route the manager calls to trigger a collection.
 const collectPath = "/collect"
+
+// healthPath is the HTTP route the manager polls for the runner's health and version.
+const healthPath = "/health"
 
 // socketPerm restricts the runner socket to its owner.
 // The manager and the runner both run as root and share the mount.
@@ -42,6 +46,11 @@ type CollectRequest struct {
 type CollectResponse struct {
 	Path  string `json:"path,omitempty"`
 	Error string `json:"error,omitempty"`
+}
+
+// HealthResponse is the /health body. A successful response is itself the liveness signal.
+type HealthResponse struct {
+	Version string `json:"version"`
 }
 
 // runnerError carries a failure reported by the runner back to the manager verbatim.
@@ -105,6 +114,32 @@ func (c *RunnerClient) Generate(ctx context.Context, gpu vector.GPUType, eventID
 	return out.Path, nil
 }
 
+// Health polls the report-runner's /health route and returns its version.
+func (c *RunnerClient) Health(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://report-runner"+healthPath, nil)
+	if err != nil {
+		return "", CodeInternal.Errorf("building health request: %w", err)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", CodeInternal.Errorf("reaching report-runner: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", CodeInternal.Errorf("report-runner health returned status %d", resp.StatusCode)
+	}
+
+	var out HealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", CodeInternal.Errorf("decoding health response: %w", err)
+	}
+
+	return out.Version, nil
+}
+
 // reportGenerator produces a report archive; *ToolGenerator implements it.
 type reportGenerator interface {
 	Generate(ctx context.Context, gpu vector.GPUType, eventID string) (string, error)
@@ -145,6 +180,7 @@ func (s *RunnerServer) Serve(ctx context.Context, socketPath string) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(collectPath, s.handleCollect)
+	mux.HandleFunc(healthPath, s.handleHealth)
 	srv := &http.Server{Handler: mux, ReadHeaderTimeout: readHeaderTimeout}
 
 	go func() {
@@ -185,6 +221,22 @@ func (s *RunnerServer) handleCollect(writer http.ResponseWriter, request *http.R
 
 	s.logger.Info("bug report collected", "event_id", req.EventID, "path", path)
 	s.respond(writer, http.StatusOK, CollectResponse{Path: path})
+}
+
+// handleHealth returns the runner's version. cwa-manager polls it for the heartbeat.
+func (s *RunnerServer) handleHealth(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet {
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(writer).Encode(HealthResponse{Version: version.Version}); err != nil {
+		s.logger.Error("writing health response", "err", err)
+	}
 }
 
 func (s *RunnerServer) respond(writer http.ResponseWriter, status int, body CollectResponse) {

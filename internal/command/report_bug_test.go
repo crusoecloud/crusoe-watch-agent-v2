@@ -15,10 +15,11 @@ import (
 )
 
 type fakeGenerator struct {
-	path   string
-	err    error
-	gpu    vector.GPUType
-	called bool
+	path      string
+	err       error
+	healthErr error
+	gpu       vector.GPUType
+	called    bool
 }
 
 func (f *fakeGenerator) Generate(_ context.Context, gpu vector.GPUType, _ string) (string, error) {
@@ -26,6 +27,10 @@ func (f *fakeGenerator) Generate(_ context.Context, gpu vector.GPUType, _ string
 	f.gpu = gpu
 
 	return f.path, f.err
+}
+
+func (f *fakeGenerator) Health(context.Context) (string, error) {
+	return "v-test", f.healthErr
 }
 
 type fakeUploader struct {
@@ -96,6 +101,18 @@ func TestReportBug_NoGPU(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "CWA-BR-5010") // no-GPU code carried in the reason
 	assert.False(t, gen.called)
+	assert.False(t, up.called)
+}
+
+func TestReportBug_UnreachableRunnerSkipsCollection(t *testing.T) {
+	gen := &fakeGenerator{healthErr: errors.New("dial failed")}
+	up := &fakeUploader{}
+	h := reportBugFor(gen, up, vector.GPUNvidia)
+
+	err := h.Run(context.Background(), map[string]string{ParamEventID: "evt-1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CWA-BR-5001") // script-unavailable code carried in the reason
+	assert.False(t, gen.called, "collection must not run when the preflight fails")
 	assert.False(t, up.called)
 }
 

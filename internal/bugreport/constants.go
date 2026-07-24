@@ -21,14 +21,19 @@ const (
 // command result reason, where the coordinator parses the "CWA-BR-<digits>" token back out.
 type Code string
 
-// Bug-report failure codes.
+// Bug-report failure codes (from v1).
 const (
-	CodeScriptUnavailable Code = "CWA-BR-5001" // bug-report tool not installed on the host
-	CodeScriptFailed      Code = "CWA-BR-5003" // tool ran but exited non-zero
-	CodeNoOutput          Code = "CWA-BR-5006" // tool succeeded but produced no archive
-	CodeUploadFailed      Code = "CWA-BR-5009" // archive upload failed after retries
-	CodeNoGPU             Code = "CWA-BR-5010" // no supported GPU on this host
-	CodeInternal          Code = "CWA-BR-5099" // unexpected internal error
+	CodeScriptUnavailable  Code = "CWA-BR-5001" // bug-report tool unavailable, or report-runner unreachable
+	CodeScriptTimedOut     Code = "CWA-BR-5002" // tool execution timed out
+	CodeScriptFailed       Code = "CWA-BR-5003" // tool ran but exited non-zero
+	CodeDriverPodNotFound  Code = "CWA-BR-5004" // NVIDIA driver pod not found (K8s)
+	CodeExecError          Code = "CWA-BR-5005" // error executing the bug-report tool
+	CodeNoOutput           Code = "CWA-BR-5006" // tool succeeded but produced no archive
+	CodeDownloadFailed     Code = "CWA-BR-5007" // unexpected error downloading the report
+	CodeCollectionTimedOut Code = "CWA-BR-5008" // report generation timed out
+	CodeUploadFailed       Code = "CWA-BR-5009" // archive upload failed after retries
+	CodeNoGPU              Code = "CWA-BR-5010" // no supported GPU on this host (v2 only)
+	CodeInternal           Code = "CWA-BR-5099" // unexpected internal error
 )
 
 // Errorf returns an error tagged with the code: "CWA-BR-NNNN: <message>". A %w verb

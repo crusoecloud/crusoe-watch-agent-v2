@@ -73,6 +73,26 @@ func TestDeriveAgentStatus(t *testing.T) {
 			components: &pb.CwaComponentsHealth{},
 			expected:   pb.CwaAgentStatus_CWA_AGENT_STATUS_DEGRADED,
 		},
+		{
+			name: "report-runner present and healthy",
+			components: &pb.CwaComponentsHealth{
+				CwaManager:   &pb.CwaManagerHealth{Status: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY},
+				Vector:       &pb.CwaVectorHealth{Status: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY},
+				CwaUpdater:   &pb.CwaUpdaterHealth{Status: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY},
+				ReportRunner: &pb.CwaReportRunnerHealth{Status: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY},
+			},
+			expected: pb.CwaAgentStatus_CWA_AGENT_STATUS_HEALTHY,
+		},
+		{
+			name: "report-runner unhealthy degrades agent",
+			components: &pb.CwaComponentsHealth{
+				CwaManager:   &pb.CwaManagerHealth{Status: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY},
+				Vector:       &pb.CwaVectorHealth{Status: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY},
+				CwaUpdater:   &pb.CwaUpdaterHealth{Status: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY},
+				ReportRunner: &pb.CwaReportRunnerHealth{Status: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNHEALTHY},
+			},
+			expected: pb.CwaAgentStatus_CWA_AGENT_STATUS_DEGRADED,
+		},
 	}
 
 	for _, tt := range tests {
@@ -220,7 +240,7 @@ func (h *blockingHandler) Run(ctx context.Context, _ map[string]string) error {
 func newShutdownLoop() *Loop {
 	return &Loop{
 		identity:       &identity.Identity{AgentID: "agent-test"},
-		health:         health.NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD),
+		health:         health.NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD, nil),
 		logger:         slog.Default(),
 		pendingResults: make(map[string]*pb.CwaCommandResult),
 	}

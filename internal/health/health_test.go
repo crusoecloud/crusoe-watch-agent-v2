@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,14 @@ import (
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
+
+// fakeReportRunner is a reportRunnerChecker the test controls.
+type fakeReportRunner struct {
+	ver string
+	err error
+}
+
+func (f fakeReportRunner) Health(context.Context) (string, error) { return f.ver, f.err }
 
 func newTestCollector(vectorHealthURL, vectorMetricsURL, updaterURL string, isK8s bool) *Collector {
 	return &Collector{
@@ -33,7 +42,7 @@ func TestNewCollector_EnvOverrides(t *testing.T) {
 	t.Setenv("VECTOR_METRICS_PORT", "2222")
 	t.Setenv("CWA_UPDATER_PORT", "3333")
 
-	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER)
+	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER, nil)
 
 	assert.Equal(t, "http://localhost:1111/health", c.vectorHealthURL)
 	assert.Equal(t, "http://localhost:2222/metrics", c.vectorMetricsURL)
@@ -42,7 +51,7 @@ func TestNewCollector_EnvOverrides(t *testing.T) {
 }
 
 func TestNewCollector_K8sDetection(t *testing.T) {
-	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES)
+	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES, nil)
 	assert.True(t, c.isK8s)
 }
 
@@ -51,7 +60,7 @@ func TestNewCollector_Defaults(t *testing.T) {
 	t.Setenv("VECTOR_METRICS_PORT", "")
 	t.Setenv("CWA_UPDATER_PORT", "")
 
-	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER)
+	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER, nil)
 
 	assert.Equal(t, "http://localhost:8686/health", c.vectorHealthURL)
 	assert.Equal(t, "http://localhost:9598/metrics", c.vectorMetricsURL)
@@ -398,6 +407,34 @@ func TestCollectCwaUpdaterThrottled_K8sThrottles(t *testing.T) {
 	assert.Equal(t, 3, callCount, "K8s mode should throttle to every 5th tick")
 }
 
+func TestCollectReportRunner(t *testing.T) {
+	t.Run("omitted when not expected", func(t *testing.T) {
+		c := newTestCollector("", "", "", false) // nil reportRunner
+		assert.Nil(t, c.collectReportRunner(context.Background()))
+	})
+
+	t.Run("healthy with version", func(t *testing.T) {
+		c := newTestCollector("", "", "", false)
+		c.reportRunner = fakeReportRunner{ver: "v2.5"}
+
+		h := c.collectReportRunner(context.Background())
+		require.NotNil(t, h)
+		assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY, h.GetStatus())
+		assert.Equal(t, "v2.5", h.GetVersion())
+		require.NotNil(t, h.GetLastSeen())
+	})
+
+	t.Run("unknown when unreachable", func(t *testing.T) {
+		c := newTestCollector("", "", "", false)
+		c.reportRunner = fakeReportRunner{err: errors.New("dial failed")}
+
+		h := c.collectReportRunner(context.Background())
+		require.NotNil(t, h)
+		assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNKNOWN, h.GetStatus())
+		assert.Nil(t, h.GetLastSeen(), "last_seen left unset when unreachable")
+	})
+}
+
 func TestCollect_ReturnsAllComponents(t *testing.T) {
 	healthSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -421,6 +458,7 @@ func TestCollect_ReturnsAllComponents(t *testing.T) {
 	require.NotNil(t, h.GetCwaManager())
 	require.NotNil(t, h.GetVector())
 	require.NotNil(t, h.GetCwaUpdater())
+	assert.Nil(t, h.GetReportRunner(), "report_runner omitted when not deployed")
 }
 
 func TestCollect_IncrementsTickCount(t *testing.T) {

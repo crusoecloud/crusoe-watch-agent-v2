@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
 )
 
 // fakeGen is a reportGenerator whose behavior the test controls.
@@ -134,6 +135,38 @@ func TestRunnerServer_RejectsMalformedJSON(t *testing.T) {
 	var out CollectResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
 	assert.Contains(t, out.Error, "invalid request")
+}
+
+func TestRunnerClient_Health(t *testing.T) {
+	client := startRunner(t, &fakeGen{})
+
+	ver, err := client.Health(context.Background())
+	require.NoError(t, err)
+
+	// The runner reports its compiled-in version (default "dev" under test).
+	assert.Equal(t, version.Version, ver)
+}
+
+func TestRunnerClient_Health_Unreachable(t *testing.T) {
+	// Point at a socket that was never bound so the dial fails.
+	client := NewRunnerClient(filepath.Join(t.TempDir(), "absent.sock"))
+
+	_, err := client.Health(context.Background())
+	require.Error(t, err)
+}
+
+func TestRunnerServer_HealthRejectsNonGET(t *testing.T) {
+	socket := serveRunner(t, &fakeGen{})
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://report-runner"+healthPath, nil)
+	require.NoError(t, err)
+
+	resp, err := socketClient(socket).Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	// /health is read-only, so only GET is allowed.
+	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 }
 
 func TestRunnerClient_PropagatesFailureVerbatim(t *testing.T) {

@@ -102,13 +102,8 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 		return fmt.Errorf("resolving identity: %w", err)
 	}
 
-	logger.Info("identity resolved",
-		"vm_id", ident.VMID,
-		"install_type", ident.InstallType.String(),
-		"agent_id", ident.AgentID,
-		"region", ident.Region,
-		"project_id", ident.ProjectID,
-	)
+	logger.Info("identity resolved", "vm_id", ident.VMID, "install_type", ident.InstallType.String(),
+		"agent_id", ident.AgentID, "region", ident.Region)
 
 	deps := buildDeps(ident, vmCfg)
 
@@ -136,8 +131,16 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 		}
 	}()
 
-	hc := health.NewCollector(logger, ident.InstallType)
-	loop := heartbeat.NewLoop(ident, hc, conn, logger)
+	// Poll report-runner only where it's deployed. Elsewhere pass nil to omit it.
+	var healthCollector *health.Collector
+	if reportRunnerExpected(ident.InstallType, vmCfg.GPUType) {
+		socket := getEnvOrDefault(bugreport.EnvSocketPath, bugreport.DefaultSocketPath)
+		healthCollector = health.NewCollector(logger, ident.InstallType, bugreport.NewRunnerClient(socket))
+	} else {
+		healthCollector = health.NewCollector(logger, ident.InstallType, nil)
+	}
+
+	loop := heartbeat.NewLoop(ident, healthCollector, conn, logger)
 	uploadURL := "https://" + strings.TrimSuffix(coordAddr, ":443") + "/upload"
 	uploader := bugreport.NewHTTPUploader(uploadURL, token, ident.VMID, os.Getenv(nodeNameEnv))
 	loop.SetDispatcher(buildDispatcher(loop, deps, uploader, logger))
@@ -149,6 +152,20 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	logger.Info("cwa-manager shutdown complete")
 
 	return nil
+}
+
+// reportRunnerExpected reports whether the report-runner bug-report collector is deployed on this host.
+func reportRunnerExpected(installType pb.CwaInstallType, gpu vector.GPUType) bool {
+	switch installType {
+	case pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD:
+		return gpu == vector.GPUNvidia
+	case pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER:
+		return gpu == vector.GPUNvidia || gpu == vector.GPUAMD
+	case pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES, pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED:
+		return false
+	default:
+		return false
+	}
 }
 
 // buildDeps assembles command.Deps, restoring the last-applied endpoints and

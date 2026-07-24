@@ -28,8 +28,10 @@ const (
 )
 
 // Generator runs a vendor bug-report tool and returns the path to the report archive it produced.
+// Health preflights the report-runner so Run can fail fast when it's down.
 type Generator interface {
 	Generate(ctx context.Context, gpu vector.GPUType, eventID string) (string, error)
+	Health(ctx context.Context) (string, error)
 }
 
 // Uploader sends the report archive at path (tagged with eventID) to the coordinator.
@@ -64,6 +66,12 @@ func (r *ReportBug) Run(ctx context.Context, params map[string]string) error {
 	gpu := r.detectGPU()
 	if gpu == vector.GPUNone {
 		return bugreport.CodeNoGPU.Errorf("no supported GPU detected on this host")
+	}
+
+	// Preflight the report-runner and fail fast if it's unreachable or unhealthy,
+	// rather than attempting a collection that cannot succeed.
+	if _, err := r.generator.Health(ctx); err != nil {
+		return bugreport.CodeScriptUnavailable.Errorf("report-runner unavailable: %w", err)
 	}
 
 	eventID := params[ParamEventID]

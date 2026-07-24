@@ -21,6 +21,11 @@ import (
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
+// reportRunnerChecker polls the report-runner's /health route, returning its version.
+type reportRunnerChecker interface {
+	Health(ctx context.Context) (string, error)
+}
+
 const (
 	defaultVectorAPIPort     = "8686"
 	defaultVectorMetricsPort = "9598"
@@ -45,6 +50,7 @@ type Collector struct {
 	tickCount         int
 	updaterPollOffset int // random offset so DaemonSet pods don't all poll on the same tick
 	cachedUpdater     *pb.CwaUpdaterHealth
+	reportRunner      reportRunnerChecker // nil when report-runner isn't deployed here
 }
 
 func cryptoRandIntn(n int) int {
@@ -64,8 +70,9 @@ func getEnvOrDefault(key, def string) string {
 	return def
 }
 
-// NewCollector creates a health Collector.
-func NewCollector(logger *slog.Logger, installType pb.CwaInstallType) *Collector {
+// NewCollector creates a health Collector. Pass a nil reportRunner where
+// report-runner isn't deployed (see collectReportRunner).
+func NewCollector(logger *slog.Logger, installType pb.CwaInstallType, reportRunner reportRunnerChecker) *Collector {
 	vectorPort := getEnvOrDefault("VECTOR_API_PORT", defaultVectorAPIPort)
 	vectorMetricsPort := getEnvOrDefault("VECTOR_METRICS_PORT", defaultVectorMetricsPort)
 	updaterPort := getEnvOrDefault("CWA_UPDATER_PORT", defaultCwaUpdaterPort)
@@ -78,6 +85,7 @@ func NewCollector(logger *slog.Logger, installType pb.CwaInstallType) *Collector
 		updaterHealthURL:  "http://localhost:" + updaterPort + "/health",
 		isK8s:             installType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES,
 		updaterPollOffset: cryptoRandIntn(k8sUpdaterPollInterval),
+		reportRunner:      reportRunner,
 	}
 }
 
@@ -86,9 +94,34 @@ func (c *Collector) Collect(ctx context.Context) *pb.CwaComponentsHealth {
 	c.tickCount++
 
 	return &pb.CwaComponentsHealth{
-		CwaManager: c.collectCwaManager(),
-		Vector:     c.collectVector(ctx),
-		CwaUpdater: c.collectCwaUpdaterThrottled(ctx),
+		CwaManager:   c.collectCwaManager(),
+		Vector:       c.collectVector(ctx),
+		CwaUpdater:   c.collectCwaUpdaterThrottled(ctx),
+		ReportRunner: c.collectReportRunner(ctx),
+	}
+}
+
+// collectReportRunner polls the report-runner over its unix socket. It returns nil
+// (component omitted) when report-runner isn't deployed, HEALTHY with version and
+// last_seen when it answers, and UNKNOWN when unreachable.
+func (c *Collector) collectReportRunner(ctx context.Context) *pb.CwaReportRunnerHealth {
+	if c.reportRunner == nil {
+		return nil
+	}
+
+	ver, err := c.reportRunner.Health(ctx)
+	if err != nil {
+		c.logger.Debug("report-runner health check failed", "error", err)
+
+		return &pb.CwaReportRunnerHealth{
+			Status: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNKNOWN,
+		}
+	}
+
+	return &pb.CwaReportRunnerHealth{
+		Status:   pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY,
+		Version:  ver,
+		LastSeen: timestamppb.Now(),
 	}
 }
 
