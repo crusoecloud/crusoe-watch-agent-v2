@@ -39,6 +39,7 @@ func startK8sWatcher(
 	logger *slog.Logger,
 	logsEndpoint, metricsEndpoint string,
 	ingestionBlocked bool,
+	rateLimits map[string]int,
 ) *watcher.Watcher {
 	nodeName, err := watcher.ResolveNodeName()
 	if err != nil {
@@ -66,6 +67,7 @@ func startK8sWatcher(
 	k8sCfg.LogsEndpoint = logsEndpoint
 	k8sCfg.MetricsEndpoint = metricsEndpoint
 	k8sCfg.IngestionBlocked = ingestionBlocked
+	k8sCfg.RateLimits = rateLimits
 
 	configWatcher := watcher.New(watcher.Config{
 		NodeName:   nodeName,

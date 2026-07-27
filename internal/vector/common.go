@@ -55,12 +55,13 @@ func WriteConfigFile(path string, data []byte) error {
 // ---------------------------------------------------------------------------
 
 const (
-	scrapeIntervalSecs  = 60
-	scrapeTimeoutSecs   = 50
-	logBatchMaxBytes    = 100000
-	metricBatchMaxBytes = 500000
-	requestTimeoutSecs  = 15
-	diskBufferMaxSize   = 268435488 // 256 MiB
+	scrapeIntervalSecs    = 60
+	scrapeTimeoutSecs     = 50
+	logBatchMaxBytes      = 100000
+	metricBatchMaxBytes   = 500000
+	requestTimeoutSecs    = 15
+	diskBufferMaxSize     = 268435488 // 256 MiB
+	rateLimitDurationSecs = 60        // window: rate_limit_num is requests per minute
 )
 
 // ---------------------------------------------------------------------------
@@ -169,6 +170,39 @@ func removeExternalSinks(sinks map[string]any) {
 		if name != internalMetricsExporterSinkName {
 			delete(sinks, name)
 		}
+	}
+}
+
+// RateLimitAll is the sink key in a rate-limit map that sets the default cap for every sink.
+const RateLimitAll = "*"
+
+// applyRateLimit caps forwarding sinks at the requests-per-minute given in limits (sink name → cap).
+func applyRateLimit(sinks map[string]any, limits map[string]int) {
+	if len(limits) == 0 {
+		return
+	}
+
+	for name, sink := range sinks {
+		rate, ok := limits[name]
+		if !ok {
+			rate = limits[RateLimitAll]
+		}
+		if rate <= 0 {
+			continue
+		}
+
+		s, isMap := sink.(map[string]any)
+		if !isMap {
+			continue
+		}
+
+		req, hasRequest := s["request"].(map[string]any)
+		if !hasRequest {
+			continue
+		}
+
+		req["rate_limit_num"] = rate
+		req["rate_limit_duration_secs"] = rateLimitDurationSecs
 	}
 }
 

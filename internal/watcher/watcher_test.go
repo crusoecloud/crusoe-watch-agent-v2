@@ -69,12 +69,12 @@ func testNode() *corev1.Node {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "test-node",
 			Labels: map[string]string{
-				"crusoe.ai/instance.id":          "vm-abc-123",
-				"crusoe.ai/nodepool.id":          "nodepool-1",
+				"crusoe.ai/instance.id":            "vm-abc-123",
+				"crusoe.ai/nodepool.id":            "nodepool-1",
 				"beta.kubernetes.io/instance-type": "gpu-a100",
-				"crusoe.ai/pod.id":               "pod-xyz",
-				"crusoe.ai/project.id":           "project-1",
-				"kubernetes.io/hostname":         "test-node",
+				"crusoe.ai/pod.id":                 "pod-xyz",
+				"crusoe.ai/project.id":             "project-1",
+				"kubernetes.io/hostname":           "test-node",
 			},
 		},
 	}
@@ -307,6 +307,50 @@ func TestWatcher_SetIngestionBlocked(t *testing.T) {
 	sinks = readSinks()
 	assert.Contains(t, sinks, "cms_gateway_node_metrics")
 	assert.Contains(t, sinks, "crusoe_ingest")
+}
+
+func TestWatcher_SetRateLimits(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "vector.yaml")
+
+	client := fake.NewSimpleClientset(testNode())
+	k8sCfg := testK8sCfg()
+	k8sCfg.NodeLabels = vector.NodeLabels{VMID: "vm-1", Hostname: "test-node"}
+
+	w := New(Config{
+		NodeName:   "test-node",
+		ConfigPath: configPath,
+		K8sCfg:     k8sCfg,
+		Logger:     testLogger(),
+	}, client)
+
+	w.podInformer = newFakeInformer()
+	w.cmInformer = newFakeInformer()
+
+	readSinks := func() map[string]any {
+		data, err := os.ReadFile(configPath)
+		require.NoError(t, err)
+
+		var parsed map[string]any
+		require.NoError(t, yaml.Unmarshal(data, &parsed))
+
+		return parsed["sinks"].(map[string]any)
+	}
+
+	// Set: the caps are stored on the watcher, so the reconcile it triggers (and
+	// every later data-plane reconcile) writes a rate-limited config.
+	w.SetRateLimits(map[string]int{vector.RateLimitAll: 100})
+	w.reconcile()
+
+	req := readSinks()["cms_gateway_node_metrics"].(map[string]any)["request"].(map[string]any)
+	assert.Equal(t, 100, req["rate_limit_num"])
+
+	// An empty map clears the caps.
+	w.SetRateLimits(nil)
+	w.reconcile()
+
+	req = readSinks()["cms_gateway_node_metrics"].(map[string]any)["request"].(map[string]any)
+	assert.NotContains(t, req, "rate_limit_num")
 }
 
 func TestWatcher_ReconcileWithConfigMap(t *testing.T) {

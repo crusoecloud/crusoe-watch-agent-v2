@@ -14,10 +14,12 @@ import (
 )
 
 type fakeReloader struct {
-	logs       string
-	metrics    string
-	blocked    bool
-	blockedSet bool
+	logs          string
+	metrics       string
+	blocked       bool
+	blockedSet    bool
+	rateLimits    map[string]int
+	rateLimitsSet bool
 }
 
 func (f *fakeReloader) SetIngestionEndpoints(logs, metrics string) {
@@ -28,6 +30,11 @@ func (f *fakeReloader) SetIngestionEndpoints(logs, metrics string) {
 func (f *fakeReloader) SetIngestionBlocked(blocked bool) {
 	f.blocked = blocked
 	f.blockedSet = true
+}
+
+func (f *fakeReloader) SetRateLimits(limits map[string]int) {
+	f.rateLimits = limits
+	f.rateLimitsSet = true
 }
 
 func vmSinks(t *testing.T, path string) map[string]any {
@@ -51,11 +58,12 @@ func testDeps(t *testing.T) Deps {
 	dir := t.TempDir()
 
 	return Deps{
-		InstallType:      pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER,
-		VMConfigPath:     filepath.Join(dir, "vector.yaml"),
-		LogsStatePath:    filepath.Join(dir, ".logs-endpoint"),
-		MetricsStatePath: filepath.Join(dir, ".metrics-endpoint"),
-		BlockedStatePath: filepath.Join(dir, ".ingestion-blocked"),
+		InstallType:        pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER,
+		VMConfigPath:       filepath.Join(dir, "vector.yaml"),
+		LogsStatePath:      filepath.Join(dir, ".logs-endpoint"),
+		MetricsStatePath:   filepath.Join(dir, ".metrics-endpoint"),
+		BlockedStatePath:   filepath.Join(dir, ".ingestion-blocked"),
+		RateLimitStatePath: filepath.Join(dir, ".rate-limit"),
 	}
 }
 

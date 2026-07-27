@@ -55,6 +55,11 @@ type VMConfig struct {
 	// IngestionBlocked, when true (from ingestion.block), strips every sink
 	// except the local internal-metrics exporter so nothing is forwarded off-host.
 	IngestionBlocked bool
+
+	// RateLimits (from rate_limit.set) maps a sink name to its forwarding cap in
+	// requests per minute; the RateLimitAll key sets the default for sinks
+	// without their own entry. Empty leaves Vector's default (unlimited).
+	RateLimits map[string]int
 }
 
 // GenerateVMBase returns the static VM base config: data_dir, api, all sources
@@ -122,6 +127,7 @@ func ApplyVM(baseCfg map[string]any, cfg VMConfig) {
 	}
 
 	applyEndpointOverrides(sinks, cfg)
+	applyRateLimit(sinks, cfg.RateLimits)
 
 	if cfg.IngestionBlocked {
 		removeExternalSinks(sinks)

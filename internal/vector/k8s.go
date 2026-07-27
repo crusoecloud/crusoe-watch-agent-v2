@@ -117,6 +117,11 @@ type K8sConfig struct {
 	// except the local internal-metrics exporter so nothing is forwarded off-host.
 	IngestionBlocked bool
 
+	// RateLimits (from rate_limit.set) maps a sink name to its forwarding cap in
+	// requests per minute; the RateLimitAll key sets the default for sinks
+	// without their own entry. Empty leaves Vector's default (unlimited).
+	RateLimits map[string]int
+
 	NodeLabels NodeLabels
 }
 
@@ -193,6 +198,8 @@ func ApplyK8s(baseCfg map[string]any, pods []ClassifiedPod, cmData map[string]st
 	sinks := ensureMap(baseCfg, "sinks")
 
 	buildDynamicConfig(sources, transforms, sinks, pods, cmData, cfg)
+
+	applyRateLimit(sinks, cfg.RateLimits)
 
 	if cfg.IngestionBlocked {
 		removeExternalSinks(sinks)

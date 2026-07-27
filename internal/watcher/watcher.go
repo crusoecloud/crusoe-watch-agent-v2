@@ -239,6 +239,19 @@ func (w *Watcher) SetIngestionBlocked(blocked bool) {
 	w.triggerReconcile()
 }
 
+// SetRateLimits applies control-plane forwarding rate limits (from
+// rate_limit.set commands): limits maps a sink name to its cap in requests per
+// minute, with the vector.RateLimitAll key as the default for unlisted sinks.
+// The map is stored on the watcher so it survives subsequent data-plane reconciles.
+func (w *Watcher) SetRateLimits(limits map[string]int) {
+	w.mu.Lock()
+	w.cfg.K8sCfg.RateLimits = limits
+	w.mu.Unlock()
+
+	w.logger.Info("forwarding rate limits updated", "limits", limits)
+	w.triggerReconcile()
+}
+
 // snapshotCfg returns a copy of the K8s config under the lock, so reconciles
 // observe a consistent view even while the control-plane setters mutate it.
 func (w *Watcher) snapshotCfg() vector.K8sConfig {

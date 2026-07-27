@@ -1,6 +1,7 @@
 package command
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -24,6 +25,7 @@ var (
 type Reloader interface {
 	SetIngestionEndpoints(logs, metrics string)
 	SetIngestionBlocked(blocked bool)
+	SetRateLimits(limits map[string]int)
 }
 
 // Deps wires command handlers to platform-specific machinery.
@@ -38,16 +40,20 @@ type Deps struct {
 	Store *ExecStore
 
 	// Persisted control-plane.
-	LogsStatePath    string // config.apply logs base URL (file content)
-	MetricsStatePath string // config.apply metrics base URL (file content)
-	BlockedStatePath string // ingestion.block marker (file presence)
+	LogsStatePath      string // config.apply logs base URL (file content)
+	MetricsStatePath   string // config.apply metrics base URL (file content)
+	BlockedStatePath   string // ingestion.block marker (file presence)
+	RateLimitStatePath string // rate_limit.set sink→cap map (JSON file content)
 }
 
 // apply routes a state change to the platform-specific machinery: on K8s the
 // watcher folds it into every subsequent reconcile; on VMs the Vector config
 // is regenerated with the full control-plane state and atomically rewritten
 // for --watch-config to pick up.
-func (d Deps) apply(applyK8s func(Reloader), vmLogs, vmMetrics string, vmBlocked bool) error {
+func (d Deps) apply(
+	applyK8s func(Reloader),
+	vmLogs, vmMetrics string, vmBlocked bool, vmRateLimits map[string]int,
+) error {
 	switch d.InstallType {
 	case pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES:
 		if d.Watcher == nil {
@@ -62,6 +68,7 @@ func (d Deps) apply(applyK8s func(Reloader), vmLogs, vmMetrics string, vmBlocked
 		vmCfg.LogsEndpoint = vmLogs
 		vmCfg.MetricsEndpoint = vmMetrics
 		vmCfg.IngestionBlocked = vmBlocked
+		vmCfg.RateLimits = vmRateLimits
 
 		out, err := vector.GenerateVM(vmCfg)
 		if err != nil {
@@ -99,4 +106,30 @@ func LoadIngestionBlocked(path string) bool {
 	_, err := os.Stat(path)
 
 	return err == nil
+}
+
+// LoadRateLimits reads the persisted rate_limit.set map (sink name → requests
+// per minute; the vector.RateLimitAll key is the fleet-wide default).
+func LoadRateLimits(path string) map[string]int {
+	limits := map[string]int{}
+	if path == "" {
+		return limits
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return limits
+	}
+
+	if err := json.Unmarshal(data, &limits); err != nil {
+		return map[string]int{}
+	}
+
+	for name, rate := range limits {
+		if rate <= 0 {
+			delete(limits, name)
+		}
+	}
+
+	return limits
 }

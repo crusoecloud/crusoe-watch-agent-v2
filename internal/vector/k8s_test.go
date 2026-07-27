@@ -12,7 +12,6 @@ import (
 // Helpers
 // ---------------------------------------------------------------------------
 
-
 func testK8sConfig() K8sConfig {
 	return K8sConfig{
 		DCGM: ExporterConfig{
@@ -526,6 +525,42 @@ func TestApplyK8sIngestionBlocked(t *testing.T) {
 	assert.Contains(t, sources, "dcgm_exporter_scrape")
 	assert.Contains(t, sources, "kube_state_metrics_scrape")
 	assert.Contains(t, sources, "svc_x_1_scrape")
+}
+
+func TestApplyK8sRateLimit(t *testing.T) {
+	pods := []ClassifiedPod{
+		{Name: "ksm-1", IP: "10.0.0.3", Type: PodTypeKSM},
+	}
+	k8sCfg := testK8sConfig()
+	k8sCfg.RateLimits = map[string]int{RateLimitAll: 100}
+	cfg := buildAndParse(t, pods, nil, k8sCfg)
+
+	sinks := getSinks(cfg)
+
+	// The RateLimitAll default caps every external forwarding sink — static, cluster, and log.
+	for _, name := range []string{"cms_gateway_node_metrics", "kube_state_metrics_sink", "crusoe_ingest"} {
+		req := sinks[name].(map[string]any)["request"].(map[string]any)
+		assert.Equal(t, 100, req["rate_limit_num"], name)
+		assert.Equal(t, 60, req["rate_limit_duration_secs"], name)
+	}
+
+	// The local internal-metrics exporter has no request block and is untouched.
+	assert.NotContains(t, sinks["internal_metrics_exporter"].(map[string]any), "request")
+}
+
+func TestApplyK8sRateLimitPerSink(t *testing.T) {
+	pods := []ClassifiedPod{
+		{Name: "ksm-1", IP: "10.0.0.3", Type: PodTypeKSM},
+	}
+	k8sCfg := testK8sConfig()
+	k8sCfg.RateLimits = map[string]int{"kube_state_metrics_sink": 25}
+	cfg := buildAndParse(t, pods, nil, k8sCfg)
+
+	sinks := getSinks(cfg)
+
+	// Only the named sink is capped; the node-metrics sink is left unlimited.
+	assert.Equal(t, 25, sinks["kube_state_metrics_sink"].(map[string]any)["request"].(map[string]any)["rate_limit_num"])
+	assert.NotContains(t, sinks["cms_gateway_node_metrics"].(map[string]any)["request"].(map[string]any), "rate_limit_num")
 }
 
 // ---------------------------------------------------------------------------

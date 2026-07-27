@@ -41,6 +41,7 @@ func (b *IngestionBlock) Run(_ context.Context, _ map[string]string) error {
 	return b.deps.apply(
 		func(w Reloader) { w.SetIngestionBlocked(b.blocked) },
 		LoadEndpoint(b.deps.LogsStatePath), LoadEndpoint(b.deps.MetricsStatePath), b.blocked,
+		LoadRateLimits(b.deps.RateLimitStatePath),
 	)
 }
 

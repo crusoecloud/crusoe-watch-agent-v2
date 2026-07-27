@@ -56,6 +56,7 @@ func (c *ConfigApply) Run(_ context.Context, params map[string]string) error {
 	return c.deps.apply(
 		func(w Reloader) { w.SetIngestionEndpoints(logs, metrics) },
 		logs, metrics, LoadIngestionBlocked(c.deps.BlockedStatePath),
+		LoadRateLimits(c.deps.RateLimitStatePath),
 	)
 }
 

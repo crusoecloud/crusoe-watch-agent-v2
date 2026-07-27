@@ -97,6 +97,51 @@ func TestGenerateVM_PartialEndpointOverride(t *testing.T) {
 	assert.Equal(t, "${TELEMETRY_INGRESS_ENDPOINT}", sk["cms_gateway"].(map[string]any)["endpoint"])
 }
 
+func TestGenerateVM_RateLimit(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{GPUType: GPUNvidia, EnableCME: true, RateLimits: map[string]int{RateLimitAll: 100}})
+
+	// The RateLimitAll default caps every external forwarding sink.
+	sk := sinks(cfg)
+	for _, name := range []string{"crusoe_ingest", "cms_gateway", "cms_gateway_cme"} {
+		req := sk[name].(map[string]any)["request"].(map[string]any)
+		assert.Equal(t, 100, req["rate_limit_num"], name)
+		assert.Equal(t, 60, req["rate_limit_duration_secs"], name)
+	}
+
+	// The local internal-metrics exporter has no request block and is untouched.
+	assert.NotContains(t, sk["internal_metrics_exporter"].(map[string]any), "request")
+}
+
+func TestGenerateVM_RateLimitPerSink(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{
+		GPUType:   GPUNvidia,
+		EnableCME: true,
+		RateLimits: map[string]int{
+			RateLimitAll:    100,
+			"crusoe_ingest": 10,
+		},
+	})
+
+	sk := sinks(cfg)
+	// The named sink gets its own cap; the rest fall back to the default.
+	assert.Equal(t, 10, sk["crusoe_ingest"].(map[string]any)["request"].(map[string]any)["rate_limit_num"])
+	assert.Equal(t, 100, sk["cms_gateway"].(map[string]any)["request"].(map[string]any)["rate_limit_num"])
+
+	// With no default, only the named sink is capped.
+	cfg = parsedVM(t, VMConfig{GPUType: GPUNvidia, EnableCME: true, RateLimits: map[string]int{"crusoe_ingest": 10}})
+	sk = sinks(cfg)
+	assert.Equal(t, 10, sk["crusoe_ingest"].(map[string]any)["request"].(map[string]any)["rate_limit_num"])
+	assert.NotContains(t, sk["cms_gateway"].(map[string]any)["request"].(map[string]any), "rate_limit_num")
+}
+
+func TestGenerateVM_NoRateLimitByDefault(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{})
+
+	// With no override, sinks carry no rate-limit cap (Vector default: unlimited).
+	req := sinks(cfg)["crusoe_ingest"].(map[string]any)["request"].(map[string]any)
+	assert.NotContains(t, req, "rate_limit_num")
+}
+
 func TestGenerateVM_IngestionBlocked(t *testing.T) {
 	cfg := parsedVM(t, VMConfig{
 		GPUType:          GPUNvidia,

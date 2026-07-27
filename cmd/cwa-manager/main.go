@@ -44,6 +44,7 @@ const (
 	logsEndpointFile     = ".logs-endpoint"
 	metricsEndpointFile  = ".metrics-endpoint"
 	ingestionBlockedFile = ".ingestion-blocked"
+	rateLimitFile        = ".rate-limit.json"
 	commandStoreDir      = ".commands" // per-execution crash-recovery records
 )
 
@@ -175,19 +176,22 @@ func buildDeps(ident *identity.Identity, vmCfg vector.VMConfig) command.Deps {
 	logsPath := filepath.Join(stateDir, logsEndpointFile)
 	metricsPath := filepath.Join(stateDir, metricsEndpointFile)
 	blockedPath := filepath.Join(stateDir, ingestionBlockedFile)
+	rateLimitPath := filepath.Join(stateDir, rateLimitFile)
 
 	vmCfg.LogsEndpoint = command.LoadEndpoint(logsPath)
 	vmCfg.MetricsEndpoint = command.LoadEndpoint(metricsPath)
 	vmCfg.IngestionBlocked = command.LoadIngestionBlocked(blockedPath)
+	vmCfg.RateLimits = command.LoadRateLimits(rateLimitPath)
 
 	return command.Deps{
-		InstallType:      ident.InstallType,
-		VMCfg:            vmCfg,
-		VMConfigPath:     getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
-		Store:            command.NewExecStore(filepath.Join(stateDir, commandStoreDir)),
-		LogsStatePath:    logsPath,
-		MetricsStatePath: metricsPath,
-		BlockedStatePath: blockedPath,
+		InstallType:        ident.InstallType,
+		VMCfg:              vmCfg,
+		VMConfigPath:       getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
+		Store:              command.NewExecStore(filepath.Join(stateDir, commandStoreDir)),
+		LogsStatePath:      logsPath,
+		MetricsStatePath:   metricsPath,
+		BlockedStatePath:   blockedPath,
+		RateLimitStatePath: rateLimitPath,
 	}
 }
 
@@ -197,7 +201,8 @@ func startDataPlane(ctx context.Context, deps command.Deps, logger *slog.Logger)
 	switch deps.InstallType {
 	case pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES:
 		return startK8sWatcher(
-			ctx, logger, deps.VMCfg.LogsEndpoint, deps.VMCfg.MetricsEndpoint, deps.VMCfg.IngestionBlocked,
+			ctx, logger, deps.VMCfg.LogsEndpoint, deps.VMCfg.MetricsEndpoint,
+			deps.VMCfg.IngestionBlocked, deps.VMCfg.RateLimits,
 		)
 	case pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER, pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD:
 		if err := writeVMConfig(deps.VMCfg, deps.VMConfigPath); err != nil {
@@ -218,6 +223,7 @@ func buildDispatcher(
 	disp.Register(command.ConfigApplyCommand, command.NewConfigApply(deps))
 	disp.Register(command.IngestionBlockCommand, command.NewIngestionBlock(deps, true))
 	disp.Register(command.IngestionUnblockCommand, command.NewIngestionBlock(deps, false))
+	disp.Register(command.RateLimitSetCommand, command.NewRateLimitSet(deps))
 
 	// report.bug is only registered when a platform generator could be built;
 	// otherwise the agent runs degraded and the command is acked as FAILED.

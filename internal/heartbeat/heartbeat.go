@@ -39,6 +39,7 @@ func capabilities() []string {
 		"ingestion_block",
 		"ingestion_unblock",
 		"report_bug",
+		"rate_limit",
 	}
 }
 
