@@ -52,6 +52,15 @@ func vmSinks(t *testing.T, path string) map[string]any {
 	return sinks
 }
 
+// runErr runs h and returns only its error; the result payload is asserted
+// directly where a command produces one (see config_get_test.go).
+func runErr(t *testing.T, h Handler, params map[string]string) error {
+	t.Helper()
+	_, err := h.Run(context.Background(), params)
+
+	return err
+}
+
 // testDeps returns VM deps with config and state paths in a temp dir.
 func testDeps(t *testing.T) Deps {
 	t.Helper()
@@ -71,7 +80,7 @@ func TestConfigApply_VM_BaseEndpoint(t *testing.T) {
 	deps := testDeps(t)
 	h := NewConfigApply(deps)
 
-	err := h.Run(context.Background(), map[string]string{
+	err := runErr(t, h, map[string]string{
 		ParamIngestionEndpoint: "https://cms.example.com",
 	})
 	require.NoError(t, err)
@@ -91,7 +100,7 @@ func TestConfigApply_VM_SeparateEndpoints(t *testing.T) {
 	deps := testDeps(t)
 	h := NewConfigApply(deps)
 
-	err := h.Run(context.Background(), map[string]string{
+	err := runErr(t, h, map[string]string{
 		ParamLogsEndpoint:    "https://logs.example.com",
 		ParamMetricsEndpoint: "https://metrics.example.com",
 	})
@@ -109,7 +118,7 @@ func TestConfigApply_VM_SpecificWinsOverBase(t *testing.T) {
 	deps := testDeps(t)
 	h := NewConfigApply(deps)
 
-	err := h.Run(context.Background(), map[string]string{
+	err := runErr(t, h, map[string]string{
 		ParamIngestionEndpoint: "https://cms.example.com",
 		ParamLogsEndpoint:      "https://logs.example.com",
 	})
@@ -129,7 +138,7 @@ func TestConfigApply_VM_PartialUpdateKeepsOtherEndpoint(t *testing.T) {
 	h := NewConfigApply(deps)
 
 	// This apply only updates logs; metrics must keep its last-applied value.
-	err := h.Run(context.Background(), map[string]string{
+	err := runErr(t, h, map[string]string{
 		ParamLogsEndpoint: "https://logs.example.com",
 	})
 	require.NoError(t, err)
@@ -148,7 +157,7 @@ func TestConfigApply_VM_PreservesIngestionBlock(t *testing.T) {
 
 	h := NewConfigApply(deps)
 
-	err := h.Run(context.Background(), map[string]string{
+	err := runErr(t, h, map[string]string{
 		ParamIngestionEndpoint: "https://cms.example.com",
 	})
 	require.NoError(t, err)
@@ -167,7 +176,7 @@ func TestConfigApply_MissingEndpointFails(t *testing.T) {
 		InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER,
 	})
 
-	err := h.Run(context.Background(), map[string]string{})
+	err := runErr(t, h, map[string]string{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), ParamIngestionEndpoint)
 }
@@ -183,7 +192,7 @@ func TestConfigApply_VM_WriteFailure(t *testing.T) {
 		VMConfigPath: filepath.Join(notADir, "vector.yaml"),
 	})
 
-	err := h.Run(context.Background(), map[string]string{
+	err := runErr(t, h, map[string]string{
 		ParamIngestionEndpoint: "https://cms.example.com",
 	})
 	assert.Error(t, err)
@@ -197,7 +206,7 @@ func TestConfigApply_K8s(t *testing.T) {
 		Watcher:     rel,
 	})
 
-	err := h.Run(context.Background(), map[string]string{
+	err := runErr(t, h, map[string]string{
 		ParamIngestionEndpoint: "https://cms.example.com",
 		ParamMetricsEndpoint:   "https://metrics.example.com",
 	})
@@ -211,7 +220,7 @@ func TestConfigApply_K8s_NoWatcher(t *testing.T) {
 		InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES,
 	})
 
-	err := h.Run(context.Background(), map[string]string{
+	err := runErr(t, h, map[string]string{
 		ParamIngestionEndpoint: "https://cms.example.com",
 	})
 	assert.Error(t, err)
@@ -222,7 +231,7 @@ func TestConfigApply_UnsupportedInstallType(t *testing.T) {
 		InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED,
 	})
 
-	err := h.Run(context.Background(), map[string]string{
+	err := runErr(t, h, map[string]string{
 		ParamIngestionEndpoint: "https://cms.example.com",
 	})
 	assert.Error(t, err)

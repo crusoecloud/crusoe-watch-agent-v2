@@ -62,32 +62,32 @@ func NewReportBug(generator Generator, uploader Uploader) *ReportBug {
 func (r *ReportBug) Timeout() time.Duration { return LongRunning }
 
 // Run generates a GPU bug report and uploads it to the coordinator.
-func (r *ReportBug) Run(ctx context.Context, params map[string]string) error {
+func (r *ReportBug) Run(ctx context.Context, params map[string]string) (string, error) {
 	gpu := r.detectGPU()
 	if gpu == vector.GPUNone {
-		return bugreport.CodeNoGPU.Errorf("no supported GPU detected on this host")
+		return "", bugreport.CodeNoGPU.Errorf("no supported GPU detected on this host")
 	}
 
 	// Preflight the report-runner and fail fast if it's unreachable or unhealthy,
 	// rather than attempting a collection that cannot succeed.
 	if _, err := r.generator.Health(ctx); err != nil {
-		return bugreport.CodeScriptUnavailable.Errorf("report-runner unavailable: %w", err)
+		return "", bugreport.CodeScriptUnavailable.Errorf("report-runner unavailable: %w", err)
 	}
 
 	eventID := params[ParamEventID]
 
 	path, err := r.generator.Generate(ctx, gpu, eventID)
 	if err != nil {
-		return fmt.Errorf("generating bug report: %w", err)
+		return "", fmt.Errorf("generating bug report: %w", err)
 	}
 
 	defer func() { _ = os.Remove(path) }()
 
 	if err := r.uploadWithRetry(ctx, path, eventID); err != nil {
-		return fmt.Errorf("uploading bug report: %w", err)
+		return "", fmt.Errorf("uploading bug report: %w", err)
 	}
 
-	return nil
+	return "", nil
 }
 
 // uploadWithRetry uploads the archive, retrying transient failures up to maxUploadAttempts.

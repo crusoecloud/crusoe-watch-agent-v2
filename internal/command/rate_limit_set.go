@@ -44,10 +44,10 @@ func (r *RateLimitSet) Timeout() time.Duration { return Instant }
 // Run parses the requested rate and target sink, merges it into the persisted
 // sink→cap map, then applies the merged map to the running data plane. A rate of
 // zero removes the target's entry; an absent sink targets the fleet-wide default.
-func (r *RateLimitSet) Run(_ context.Context, params map[string]string) error {
+func (r *RateLimitSet) Run(_ context.Context, params map[string]string) (string, error) {
 	rate, err := strconv.Atoi(params[ParamRateLimitNum])
 	if err != nil || rate < 0 {
-		return errInvalidRateLimit
+		return "", errInvalidRateLimit
 	}
 
 	target := params[ParamRateLimitSink]
@@ -63,10 +63,10 @@ func (r *RateLimitSet) Run(_ context.Context, params map[string]string) error {
 	}
 
 	if err := persistRateLimits(r.deps.RateLimitStatePath, limits); err != nil {
-		return err
+		return "", err
 	}
 
-	return r.deps.apply(
+	return "", r.deps.apply(
 		func(w Reloader) { w.SetRateLimits(limits) },
 		LoadEndpoint(r.deps.LogsStatePath), LoadEndpoint(r.deps.MetricsStatePath),
 		LoadIngestionBlocked(r.deps.BlockedStatePath), limits,

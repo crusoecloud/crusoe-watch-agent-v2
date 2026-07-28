@@ -26,10 +26,11 @@ const (
 var errCommandTimedOut = errors.New("command timed out")
 
 // Handler executes a single command. A nil error is reported as SUCCEEDED; a
-// non-nil error as FAILED with the error message as the reason.
+// non-nil error as FAILED with the error message as the reason. The returned
+// string is an optional command-defined result payload.
 type Handler interface {
 	Timeout() time.Duration
-	Run(ctx context.Context, params map[string]string) error
+	Run(ctx context.Context, params map[string]string) (string, error)
 }
 
 // ResultSink receives finished command results. heartbeat.Loop implements it by
@@ -108,7 +109,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, cmd *pb.CwaCommand) {
 	if !ok {
 		d.mu.Unlock()
 		d.logger.Warn("unknown command", "command", cmd.GetCommand(), "execution_id", execID)
-		d.deliver(execID, cmd.GetCommand(), failedStatus, "unknown command: "+cmd.GetCommand())
+		d.deliver(execID, cmd.GetCommand(), failedStatus, "unknown command: "+cmd.GetCommand(), "")
 
 		return
 	}
@@ -143,7 +144,7 @@ func (d *Dispatcher) run(ctx context.Context, inf *inflightCmd, cmd *pb.CwaComma
 		}
 	}
 
-	err := handler.Run(ctx, cmd.GetParameters())
+	result, err := handler.Run(ctx, cmd.GetParameters())
 
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return
@@ -155,13 +156,13 @@ func (d *Dispatcher) run(ctx context.Context, inf *inflightCmd, cmd *pb.CwaComma
 
 	status, reason := succeededStatus, ""
 	if err != nil {
-		status, reason = failedStatus, err.Error()
+		status, reason, result = failedStatus, err.Error(), ""
 	}
 
 	d.logger.Info("command completed",
 		"command", cmd.GetCommand(), "execution_id", inf.id, "status", status, "reason", reason)
 
-	d.deliverOnce(inf, status, reason)
+	d.deliverOnce(inf, status, reason, result)
 }
 
 // Interrupt handles in-flight commands on graceful shutdown (SIGTERM).
@@ -185,7 +186,7 @@ func (d *Dispatcher) Interrupt(grace time.Duration) {
 		if inf.longRunning {
 			// Long-running commands cannot finish within the grace window, so interrupt them immediately.
 			inf.cancel()
-			d.deliverOnce(inf, interruptedStatus, "interrupted by agent shutdown")
+			d.deliverOnce(inf, interruptedStatus, "interrupted by agent shutdown", "")
 
 			continue
 		}
@@ -196,7 +197,7 @@ func (d *Dispatcher) Interrupt(grace time.Duration) {
 			// run() delivered the command's real result.
 		case <-graceCtx.Done():
 			inf.cancel()
-			d.deliverOnce(inf, interruptedStatus, "interrupted by agent shutdown")
+			d.deliverOnce(inf, interruptedStatus, "interrupted by agent shutdown", "")
 		}
 	}
 }
@@ -210,7 +211,7 @@ const (
 
 // deliverOnce delivers a terminal result for inf exactly once, coordinating the
 // normal-completion path (run) with the shutdown path (Interrupt).
-func (d *Dispatcher) deliverOnce(inf *inflightCmd, status pb.CwaCommandResultStatus, reason string) {
+func (d *Dispatcher) deliverOnce(inf *inflightCmd, status pb.CwaCommandResultStatus, reason, result string) {
 	d.mu.Lock()
 	if inf.delivered {
 		d.mu.Unlock()
@@ -229,15 +230,16 @@ func (d *Dispatcher) deliverOnce(inf *inflightCmd, status pb.CwaCommandResultSta
 		}
 	}
 
-	d.deliver(inf.id, inf.command, status, reason)
+	d.deliver(inf.id, inf.command, status, reason, result)
 }
 
-func (d *Dispatcher) deliver(execID, command string, status pb.CwaCommandResultStatus, reason string) {
+func (d *Dispatcher) deliver(execID, command string, status pb.CwaCommandResultStatus, reason, result string) {
 	d.sink.DeliverResult(&pb.CwaCommandResult{
 		ExecutionId: execID,
 		Command:     command,
 		Status:      status,
 		Reason:      reason,
+		Result:      result,
 		CompletedAt: timestamppb.Now(),
 	})
 }

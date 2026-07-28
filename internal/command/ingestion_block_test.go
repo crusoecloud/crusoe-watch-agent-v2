@@ -1,7 +1,6 @@
 package command
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,7 +15,7 @@ func TestIngestionBlock_VM(t *testing.T) {
 	deps := testDeps(t)
 	h := NewIngestionBlock(deps, true)
 
-	require.NoError(t, h.Run(context.Background(), nil))
+	require.NoError(t, runErr(t, h, nil))
 
 	// Only the local internal-metrics exporter survives a block, and the
 	// marker persists the state across restarts.
@@ -36,7 +35,7 @@ func TestIngestionUnblock_VM(t *testing.T) {
 
 	h := NewIngestionBlock(deps, false)
 
-	require.NoError(t, h.Run(context.Background(), nil))
+	require.NoError(t, runErr(t, h, nil))
 
 	// Sinks are restored, still carrying the persisted endpoint overrides,
 	// and the blocked marker is gone.
@@ -51,7 +50,7 @@ func TestIngestionUnblock_VM_NeverBlocked(t *testing.T) {
 	deps := testDeps(t)
 	h := NewIngestionBlock(deps, false)
 
-	require.NoError(t, h.Run(context.Background(), nil))
+	require.NoError(t, runErr(t, h, nil))
 
 	sinks := vmSinks(t, deps.VMConfigPath)
 	assert.Contains(t, sinks, "crusoe_ingest")
@@ -67,7 +66,7 @@ func TestIngestionBlock_K8s(t *testing.T) {
 			BlockedStatePath: filepath.Join(t.TempDir(), ".ingestion-blocked"),
 		}, blocked)
 
-		require.NoError(t, h.Run(context.Background(), nil))
+		require.NoError(t, runErr(t, h, nil))
 		assert.True(t, rel.blockedSet)
 		assert.Equal(t, blocked, rel.blocked)
 	}
@@ -78,7 +77,7 @@ func TestIngestionBlock_K8s_NoWatcher(t *testing.T) {
 		InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES,
 	}, true)
 
-	assert.Error(t, h.Run(context.Background(), nil))
+	assert.Error(t, runErr(t, h, nil))
 }
 
 func TestIngestionBlock_UnsupportedInstallType(t *testing.T) {
@@ -86,7 +85,7 @@ func TestIngestionBlock_UnsupportedInstallType(t *testing.T) {
 		InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED,
 	}, true)
 
-	assert.Error(t, h.Run(context.Background(), nil))
+	assert.Error(t, runErr(t, h, nil))
 }
 
 func TestIngestionBlock_Timeout(t *testing.T) {

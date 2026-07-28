@@ -131,7 +131,7 @@ type stubHandler struct{}
 
 func (stubHandler) Timeout() time.Duration { return command.Instant }
 
-func (stubHandler) Run(context.Context, map[string]string) error { return nil }
+func (stubHandler) Run(context.Context, map[string]string) (string, error) { return "", nil }
 
 func TestHandleCommand_DelegatesToDispatcher(t *testing.T) {
 	l := newTestLoop()
@@ -228,11 +228,11 @@ type blockingHandler struct {
 
 func (blockingHandler) Timeout() time.Duration { return command.LongRunning }
 
-func (h *blockingHandler) Run(ctx context.Context, _ map[string]string) error {
+func (h *blockingHandler) Run(ctx context.Context, _ map[string]string) (string, error) {
 	h.startOnce.Do(func() { close(h.started) })
 	<-ctx.Done()
 
-	return ctx.Err()
+	return "", ctx.Err()
 }
 
 // newShutdownLoop builds a Loop with the real collaborators shutdown() touches

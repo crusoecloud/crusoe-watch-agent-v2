@@ -36,6 +36,7 @@ func capabilities() []string {
 	return []string{
 		"heartbeat",
 		"config_apply",
+		"config_get",
 		"ingestion_block",
 		"ingestion_unblock",
 		"report_bug",
@@ -54,6 +55,22 @@ type Loop struct {
 	// pendingResults holds command results that are re-sent on every heartbeat
 	// until the coordinator stops echoing the corresponding command.
 	pendingResults map[string]*pb.CwaCommandResult
+
+	// lastHealth is the health reported in the previous heartbeat, used to log
+	// only when statuses change rather than on every tick. Touched solely by
+	// sendHeartbeat, which has a single sequential caller.
+	lastHealth healthSnapshot
+	haveHealth bool
+}
+
+// healthSnapshot captures the statuses reported in a heartbeat so the loop can
+// log transitions instead of the full status set every 30s.
+type healthSnapshot struct {
+	agent        pb.CwaAgentStatus
+	cwaManager   pb.CwaComponentStatus
+	vector       pb.CwaComponentStatus
+	cwaUpdater   pb.CwaComponentStatus
+	reportRunner pb.CwaComponentStatus
 }
 
 // SetDispatcher wires the command dispatcher. The loop is constructed before
@@ -177,7 +194,45 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 		return fmt.Errorf("stream send: %w", err)
 	}
 
+	l.logger.Debug("heartbeat sent", "agent_id", req.GetAgentId())
+
+	l.logHealthChange(healthSnapshot{
+		agent:        req.GetAgentStatus(),
+		cwaManager:   components.GetCwaManager().GetStatus(),
+		vector:       components.GetVector().GetStatus(),
+		cwaUpdater:   components.GetCwaUpdater().GetStatus(),
+		reportRunner: components.GetReportRunner().GetStatus(),
+	})
+
 	return nil
+}
+
+// logHealthChange logs the reported health the first time and on every subsequent change.
+func (l *Loop) logHealthChange(snap healthSnapshot) {
+	if l.haveHealth && snap == l.lastHealth {
+		return
+	}
+
+	msg := "agent health changed"
+	if !l.haveHealth {
+		msg = "reporting agent health"
+	}
+
+	log := l.logger.Info
+	if snap.agent != pb.CwaAgentStatus_CWA_AGENT_STATUS_HEALTHY {
+		log = l.logger.Warn
+	}
+
+	log(msg,
+		"agent_status", snap.agent,
+		"cwa_manager_status", snap.cwaManager,
+		"vector_status", snap.vector,
+		"cwa_updater_status", snap.cwaUpdater,
+		"report_runner_status", snap.reportRunner,
+	)
+
+	l.lastHealth = snap
+	l.haveHealth = true
 }
 
 func (l *Loop) receiveLoop(ctx context.Context, stream pb.CwaAgent_CwaAgentHeartbeatClient) error {
@@ -263,6 +318,11 @@ func (l *Loop) handleCommand(ctx context.Context, cmd *pb.CwaCommand) {
 func (l *Loop) shutdown(ctx context.Context,
 	stream pb.CwaAgent_CwaAgentHeartbeatClient, streamCancel context.CancelFunc,
 ) {
+	l.logger.Info("heartbeat shutting down, draining commands",
+		"command_drain_grace", commandDrainGrace,
+		"heartbeat_flush_grace", heartbeatFlushGrace,
+	)
+
 	if l.dispatcher != nil {
 		l.dispatcher.Interrupt(commandDrainGrace)
 	}

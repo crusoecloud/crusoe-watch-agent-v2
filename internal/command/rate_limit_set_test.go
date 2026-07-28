@@ -1,7 +1,6 @@
 package command
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,7 +23,7 @@ func TestRateLimitSet_VM(t *testing.T) {
 	deps := testDeps(t)
 	h := NewRateLimitSet(deps)
 
-	require.NoError(t, h.Run(context.Background(), map[string]string{ParamRateLimitNum: "100"}))
+	require.NoError(t, runErr(t, h, map[string]string{ParamRateLimitNum: "100"}))
 
 	// With no sink named, every external forwarding sink is capped; the map persists.
 	sinks := vmSinks(t, deps.VMConfigPath)
@@ -39,7 +38,7 @@ func TestRateLimitSet_VM_SpecificSink(t *testing.T) {
 	deps := testDeps(t)
 	h := NewRateLimitSet(deps)
 
-	require.NoError(t, h.Run(context.Background(), map[string]string{
+	require.NoError(t, runErr(t, h, map[string]string{
 		ParamRateLimitNum:  "100",
 		ParamRateLimitSink: "crusoe_ingest",
 	}))
@@ -55,11 +54,11 @@ func TestRateLimitSet_VM_AccumulatesPerSink(t *testing.T) {
 	deps := testDeps(t)
 	h := NewRateLimitSet(deps)
 
-	require.NoError(t, h.Run(context.Background(), map[string]string{
+	require.NoError(t, runErr(t, h, map[string]string{
 		ParamRateLimitNum:  "100",
 		ParamRateLimitSink: "crusoe_ingest",
 	}))
-	require.NoError(t, h.Run(context.Background(), map[string]string{
+	require.NoError(t, runErr(t, h, map[string]string{
 		ParamRateLimitNum:  "50",
 		ParamRateLimitSink: "cms_gateway",
 	}))
@@ -77,8 +76,8 @@ func TestRateLimitSet_VM_DefaultPlusOverride(t *testing.T) {
 	h := NewRateLimitSet(deps)
 
 	// A fleet-wide default, then a tighter cap on one sink.
-	require.NoError(t, h.Run(context.Background(), map[string]string{ParamRateLimitNum: "100"}))
-	require.NoError(t, h.Run(context.Background(), map[string]string{
+	require.NoError(t, runErr(t, h, map[string]string{ParamRateLimitNum: "100"}))
+	require.NoError(t, runErr(t, h, map[string]string{
 		ParamRateLimitNum:  "10",
 		ParamRateLimitSink: "crusoe_ingest",
 	}))
@@ -96,7 +95,7 @@ func TestRateLimitSet_VM_ZeroRemovesTarget(t *testing.T) {
 		[]byte(`{"*":100,"crusoe_ingest":10}`), 0o600))
 
 	h := NewRateLimitSet(deps)
-	require.NoError(t, h.Run(context.Background(), map[string]string{
+	require.NoError(t, runErr(t, h, map[string]string{
 		ParamRateLimitNum:  "0",
 		ParamRateLimitSink: "crusoe_ingest",
 	}))
@@ -114,7 +113,7 @@ func TestRateLimitSet_VM_ZeroRemovesDefault(t *testing.T) {
 	require.NoError(t, os.WriteFile(deps.RateLimitStatePath, []byte(`{"*":100}`), 0o600))
 
 	h := NewRateLimitSet(deps)
-	require.NoError(t, h.Run(context.Background(), map[string]string{ParamRateLimitNum: "0"}))
+	require.NoError(t, runErr(t, h, map[string]string{ParamRateLimitNum: "0"}))
 
 	// Zero with no sink clears the default: no sink keeps a cap.
 	sinks := vmSinks(t, deps.VMConfigPath)
@@ -131,7 +130,7 @@ func TestRateLimitSet_VM_PreservesEndpoints(t *testing.T) {
 	require.NoError(t, os.WriteFile(deps.MetricsStatePath, []byte("https://metrics.example.com\n"), 0o600))
 
 	h := NewRateLimitSet(deps)
-	require.NoError(t, h.Run(context.Background(), map[string]string{ParamRateLimitNum: "50"}))
+	require.NoError(t, runErr(t, h, map[string]string{ParamRateLimitNum: "50"}))
 
 	// The rewritten config keeps the persisted endpoint overrides and adds the cap.
 	sinks := vmSinks(t, deps.VMConfigPath)
@@ -150,7 +149,7 @@ func TestRateLimitSet_InvalidParam(t *testing.T) {
 		{ParamRateLimitNum: "abc"},
 		{ParamRateLimitNum: "-5"},
 	} {
-		err := h.Run(context.Background(), val)
+		err := runErr(t, h, val)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), ParamRateLimitNum)
 	}
@@ -165,7 +164,7 @@ func TestRateLimitSet_K8s(t *testing.T) {
 		RateLimitStatePath: filepath.Join(t.TempDir(), ".rate-limit.json"),
 	})
 
-	require.NoError(t, h.Run(context.Background(), map[string]string{
+	require.NoError(t, runErr(t, h, map[string]string{
 		ParamRateLimitNum:  "25",
 		ParamRateLimitSink: "cms_gateway_node_metrics",
 	}))
@@ -178,7 +177,7 @@ func TestRateLimitSet_K8s_NoWatcher(t *testing.T) {
 		InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES,
 	})
 
-	assert.Error(t, h.Run(context.Background(), map[string]string{ParamRateLimitNum: "25"}))
+	assert.Error(t, runErr(t, h, map[string]string{ParamRateLimitNum: "25"}))
 }
 
 func TestRateLimitSet_UnsupportedInstallType(t *testing.T) {
@@ -186,7 +185,7 @@ func TestRateLimitSet_UnsupportedInstallType(t *testing.T) {
 		InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED,
 	})
 
-	assert.Error(t, h.Run(context.Background(), map[string]string{ParamRateLimitNum: "25"}))
+	assert.Error(t, runErr(t, h, map[string]string{ParamRateLimitNum: "25"}))
 }
 
 func TestRateLimitSet_Timeout(t *testing.T) {

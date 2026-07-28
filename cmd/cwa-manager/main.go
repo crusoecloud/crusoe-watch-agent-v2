@@ -221,6 +221,7 @@ func buildDispatcher(
 ) *command.Dispatcher {
 	disp := command.NewDispatcher(loop, deps.Store, logger)
 	disp.Register(command.ConfigApplyCommand, command.NewConfigApply(deps))
+	disp.Register(command.ConfigGetCommand, command.NewConfigGet(deps))
 	disp.Register(command.IngestionBlockCommand, command.NewIngestionBlock(deps, true))
 	disp.Register(command.IngestionUnblockCommand, command.NewIngestionBlock(deps, false))
 	disp.Register(command.RateLimitSetCommand, command.NewRateLimitSet(deps))

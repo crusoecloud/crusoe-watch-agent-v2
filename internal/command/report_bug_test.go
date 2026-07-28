@@ -74,7 +74,7 @@ func TestReportBug_Success(t *testing.T) {
 	up := &fakeUploader{}
 	h := reportBugFor(gen, up, vector.GPUNvidia)
 
-	require.NoError(t, h.Run(context.Background(), map[string]string{ParamEventID: "evt-1"}))
+	require.NoError(t, runErr(t, h, map[string]string{ParamEventID: "evt-1"}))
 
 	// The detected GPU reaches the generator, the produced report is uploaded with
 	// its event ID, and it is removed once uploaded.
@@ -88,7 +88,7 @@ func TestReportBug_PassesAMDGPU(t *testing.T) {
 	gen := &fakeGenerator{path: filepath.Join(t.TempDir(), "absent.tar.gz")}
 	h := reportBugFor(gen, &fakeUploader{}, vector.GPUAMD)
 
-	require.NoError(t, h.Run(context.Background(), map[string]string{ParamEventID: "evt-1"}))
+	require.NoError(t, runErr(t, h, map[string]string{ParamEventID: "evt-1"}))
 	assert.Equal(t, vector.GPUAMD, gen.gpu)
 }
 
@@ -97,7 +97,7 @@ func TestReportBug_NoGPU(t *testing.T) {
 	up := &fakeUploader{}
 	h := reportBugFor(gen, up, vector.GPUNone)
 
-	err := h.Run(context.Background(), map[string]string{})
+	err := runErr(t, h, map[string]string{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "CWA-BR-5010") // no-GPU code carried in the reason
 	assert.False(t, gen.called)
@@ -109,7 +109,7 @@ func TestReportBug_UnreachableRunnerSkipsCollection(t *testing.T) {
 	up := &fakeUploader{}
 	h := reportBugFor(gen, up, vector.GPUNvidia)
 
-	err := h.Run(context.Background(), map[string]string{ParamEventID: "evt-1"})
+	err := runErr(t, h, map[string]string{ParamEventID: "evt-1"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "CWA-BR-5001") // script-unavailable code carried in the reason
 	assert.False(t, gen.called, "collection must not run when the preflight fails")
@@ -121,7 +121,7 @@ func TestReportBug_GenerateFailsSkipsUpload(t *testing.T) {
 	up := &fakeUploader{}
 	h := reportBugFor(gen, up, vector.GPUNvidia)
 
-	require.Error(t, h.Run(context.Background(), map[string]string{}))
+	require.Error(t, runErr(t, h, map[string]string{}))
 	assert.False(t, up.called)
 }
 
@@ -133,7 +133,7 @@ func TestReportBug_UploadFails(t *testing.T) {
 	up := &fakeUploader{err: errors.New("503")}
 	h := reportBugFor(gen, up, vector.GPUNvidia)
 
-	require.Error(t, h.Run(context.Background(), map[string]string{}))
+	require.Error(t, runErr(t, h, map[string]string{}))
 
 	// Every attempt was made before giving up, and the report is still cleaned up.
 	assert.Equal(t, maxUploadAttempts, up.calls)
@@ -148,7 +148,7 @@ func TestReportBug_PermanentUploadFailureNotRetried(t *testing.T) {
 	up := &fakeUploader{err: fmt.Errorf("coordinator rejected: %w", bugreport.ErrUploadPermanent)}
 	h := reportBugFor(gen, up, vector.GPUNvidia)
 
-	require.Error(t, h.Run(context.Background(), map[string]string{}))
+	require.Error(t, runErr(t, h, map[string]string{}))
 
 	// A permanent rejection fails fast (one attempt) and still cleans up the report.
 	assert.Equal(t, 1, up.calls)
@@ -163,7 +163,7 @@ func TestReportBug_UploadRetriesThenSucceeds(t *testing.T) {
 	up := &fakeUploader{failFirst: maxUploadAttempts - 1} // fail then succeed on the last try
 	h := reportBugFor(gen, up, vector.GPUNvidia)
 
-	require.NoError(t, h.Run(context.Background(), map[string]string{}))
+	require.NoError(t, runErr(t, h, map[string]string{}))
 
 	// A transient failure didn't waste the collection — it retried and uploaded.
 	assert.Equal(t, maxUploadAttempts, up.calls)

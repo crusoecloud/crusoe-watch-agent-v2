@@ -36,24 +36,24 @@ func (c *ConfigApply) Timeout() time.Duration { return Instant }
 
 // Run applies new ingestion endpoints. It persists them first (so a restart
 // converges toward them) then applies them to the running data plane.
-func (c *ConfigApply) Run(_ context.Context, params map[string]string) error {
+func (c *ConfigApply) Run(_ context.Context, params map[string]string) (string, error) {
 	if params[ParamIngestionEndpoint] == "" &&
 		params[ParamLogsEndpoint] == "" && params[ParamMetricsEndpoint] == "" {
 
-		return errMissingEndpoint
+		return "", errMissingEndpoint
 	}
 
 	logs, metrics := c.resolveEndpoints(params)
 
 	if err := persistEndpoint(c.deps.LogsStatePath, logs); err != nil {
-		return err
+		return "", err
 	}
 
 	if err := persistEndpoint(c.deps.MetricsStatePath, metrics); err != nil {
-		return err
+		return "", err
 	}
 
-	return c.deps.apply(
+	return "", c.deps.apply(
 		func(w Reloader) { w.SetIngestionEndpoints(logs, metrics) },
 		logs, metrics, LoadIngestionBlocked(c.deps.BlockedStatePath),
 		LoadRateLimits(c.deps.RateLimitStatePath),

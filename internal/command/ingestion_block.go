@@ -31,14 +31,14 @@ func NewIngestionBlock(deps Deps, blocked bool) *IngestionBlock {
 func (b *IngestionBlock) Timeout() time.Duration { return Instant }
 
 // Run persists the blocked state first then applies it to the running data plane.
-func (b *IngestionBlock) Run(_ context.Context, _ map[string]string) error {
+func (b *IngestionBlock) Run(_ context.Context, _ map[string]string) (string, error) {
 	if b.deps.BlockedStatePath != "" {
 		if err := persistBlocked(b.deps.BlockedStatePath, b.blocked); err != nil {
-			return err
+			return "", err
 		}
 	}
 
-	return b.deps.apply(
+	return "", b.deps.apply(
 		func(w Reloader) { w.SetIngestionBlocked(b.blocked) },
 		LoadEndpoint(b.deps.LogsStatePath), LoadEndpoint(b.deps.MetricsStatePath), b.blocked,
 		LoadRateLimits(b.deps.RateLimitStatePath),

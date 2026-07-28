@@ -43,6 +43,7 @@ func (f *fakeSink) get(id string) *pb.CwaCommandResult {
 // fakeHandler is a controllable Handler.
 type fakeHandler struct {
 	timeout time.Duration
+	result  string
 	err     error
 	runs    atomic.Int32
 
@@ -53,7 +54,7 @@ type fakeHandler struct {
 
 func (h *fakeHandler) Timeout() time.Duration { return h.timeout }
 
-func (h *fakeHandler) Run(ctx context.Context, _ map[string]string) error {
+func (h *fakeHandler) Run(ctx context.Context, _ map[string]string) (string, error) {
 	h.runs.Add(1)
 
 	if h.started != nil {
@@ -64,11 +65,11 @@ func (h *fakeHandler) Run(ctx context.Context, _ map[string]string) error {
 		select {
 		case <-h.block:
 		case <-ctx.Done():
-			return errors.New("cancelled")
+			return "", errors.New("cancelled")
 		}
 	}
 
-	return h.err
+	return h.result, h.err
 }
 
 func discardLogger() *slog.Logger {
@@ -131,7 +132,9 @@ func TestDispatch_RecordsInProgressThenClears(t *testing.T) {
 func TestDispatch_HandlerErrorIsFailed(t *testing.T) {
 	sink := newFakeSink()
 	d := newTestDispatcher(t, sink)
-	d.Register("config.apply", &fakeHandler{timeout: Instant, err: errors.New("boom")})
+	// A handler that returns both a payload and an error: the error wins, and the
+	// payload must be dropped (result is only meaningful on SUCCEEDED).
+	d.Register("config.apply", &fakeHandler{timeout: Instant, result: "stale", err: errors.New("boom")})
 
 	d.Dispatch(context.Background(), cmd("exec-1", "config.apply"))
 
@@ -140,6 +143,21 @@ func TestDispatch_HandlerErrorIsFailed(t *testing.T) {
 	r := sink.get("exec-1")
 	assert.Equal(t, pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_FAILED, r.GetStatus())
 	assert.Equal(t, "boom", r.GetReason())
+	assert.Empty(t, r.GetResult(), "a failed command must not deliver a result payload")
+}
+
+func TestDispatch_HandlerResultIsDelivered(t *testing.T) {
+	sink := newFakeSink()
+	d := newTestDispatcher(t, sink)
+	d.Register("config.get", &fakeHandler{timeout: Instant, result: `{"k":"v"}`})
+
+	d.Dispatch(context.Background(), cmd("exec-1", "config.get"))
+
+	require.Eventually(t, func() bool { return sink.get("exec-1") != nil }, time.Second, 5*time.Millisecond)
+
+	r := sink.get("exec-1")
+	assert.Equal(t, pb.CwaCommandResultStatus_CWA_COMMAND_RESULT_STATUS_SUCCEEDED, r.GetStatus())
+	assert.Equal(t, `{"k":"v"}`, r.GetResult(), "a successful command's payload must reach the coordinator")
 }
 
 func TestDispatch_UnknownCommandStillAcked(t *testing.T) {
