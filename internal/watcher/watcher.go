@@ -34,7 +34,7 @@ var errCacheSyncFailed = errors.New("timed out waiting for informer cache sync")
 const (
 	nodeLabelVMID         = "crusoe.ai/instance.id"
 	nodeLabelNodepoolID   = "crusoe.ai/nodepool.id"
-	nodeLabelInstanceType = "beta.kubernetes.io/instance-type"
+	nodeLabelInstanceType = "node.kubernetes.io/instance-type"
 	nodeLabelPodID        = "crusoe.ai/pod.id"
 	nodeLabelProjectID    = "crusoe.ai/project.id"
 	nodeLabelHostname     = "kubernetes.io/hostname"

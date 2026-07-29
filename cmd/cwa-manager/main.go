@@ -108,7 +108,13 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 
 	deps := buildDeps(ident, vmCfg)
 
-	if configWatcher := startDataPlane(ctx, deps, logger); configWatcher != nil {
+	// On K8s, build the in-cluster client once and share it between the config watcher and the bug-report generator.
+	var k8sRT *k8sRuntime
+	if ident.InstallType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
+		k8sRT = newK8sRuntime(logger)
+	}
+
+	if configWatcher := startDataPlane(ctx, deps, k8sRT, logger); configWatcher != nil {
 		deps.Watcher = configWatcher
 	}
 
@@ -132,19 +138,10 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 		}
 	}()
 
-	// Poll report-runner only where it's deployed. Elsewhere pass nil to omit it.
-	var healthCollector *health.Collector
-	if reportRunnerExpected(ident.InstallType, vmCfg.GPUType) {
-		socket := getEnvOrDefault(bugreport.EnvSocketPath, bugreport.DefaultSocketPath)
-		healthCollector = health.NewCollector(logger, ident.InstallType, bugreport.NewRunnerClient(socket))
-	} else {
-		healthCollector = health.NewCollector(logger, ident.InstallType, nil)
-	}
-
-	loop := heartbeat.NewLoop(ident, healthCollector, conn, logger)
+	loop := heartbeat.NewLoop(ident, newHealthCollector(ident, vmCfg.GPUType, logger), conn, logger)
 	uploadURL := "https://" + strings.TrimSuffix(coordAddr, ":443") + "/upload"
 	uploader := bugreport.NewHTTPUploader(uploadURL, token, ident.VMID, os.Getenv(nodeNameEnv))
-	loop.SetDispatcher(buildDispatcher(loop, deps, uploader, logger))
+	loop.SetDispatcher(buildDispatcher(loop, deps, k8sRT, uploader, logger))
 
 	// Layer 2: recover commands a hard stop interrupted, before the loop starts.
 	command.RecoverInterrupted(deps.Store, loop, logger)
@@ -153,6 +150,18 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	logger.Info("cwa-manager shutdown complete")
 
 	return nil
+}
+
+// newHealthCollector builds the heartbeat health collector, polling the report-runner
+// only on hosts where it's deployed and passing nil to omit it elsewhere.
+func newHealthCollector(ident *identity.Identity, gpu vector.GPUType, logger *slog.Logger) *health.Collector {
+	if !reportRunnerExpected(ident.InstallType, gpu) {
+		return health.NewCollector(logger, ident.InstallType, nil)
+	}
+
+	socket := getEnvOrDefault(bugreport.EnvSocketPath, bugreport.DefaultSocketPath)
+
+	return health.NewCollector(logger, ident.InstallType, bugreport.NewRunnerClient(socket))
 }
 
 // reportRunnerExpected reports whether the report-runner bug-report collector is deployed on this host.
@@ -197,10 +206,16 @@ func buildDeps(ident *identity.Identity, vmCfg vector.VMConfig) command.Deps {
 
 // startDataPlane writes the VM Vector config at startup, or on K8s launches
 // the watcher (returned for command wiring) that regenerates it continuously.
-func startDataPlane(ctx context.Context, deps command.Deps, logger *slog.Logger) *watcher.Watcher {
+func startDataPlane(
+	ctx context.Context, deps command.Deps, k8sRT *k8sRuntime, logger *slog.Logger,
+) *watcher.Watcher {
 	switch deps.InstallType {
 	case pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES:
-		return startK8sWatcher(
+		if k8sRT == nil {
+			return nil
+		}
+
+		return k8sRT.startWatcher(
 			ctx, logger, deps.VMCfg.LogsEndpoint, deps.VMCfg.MetricsEndpoint,
 			deps.VMCfg.IngestionBlocked, deps.VMCfg.RateLimits,
 		)
@@ -217,7 +232,7 @@ func startDataPlane(ctx context.Context, deps command.Deps, logger *slog.Logger)
 
 // buildDispatcher wires the command dispatcher with all command handlers.
 func buildDispatcher(
-	loop *heartbeat.Loop, deps command.Deps, uploader command.Uploader, logger *slog.Logger,
+	loop *heartbeat.Loop, deps command.Deps, k8sRT *k8sRuntime, uploader command.Uploader, logger *slog.Logger,
 ) *command.Dispatcher {
 	disp := command.NewDispatcher(loop, deps.Store, logger)
 	disp.Register(command.ConfigApplyCommand, command.NewConfigApply(deps))
@@ -228,8 +243,8 @@ func buildDispatcher(
 
 	// report.bug is only registered when a platform generator could be built;
 	// otherwise the agent runs degraded and the command is acked as FAILED.
-	if gen := buildGenerator(deps, logger); gen != nil {
-		disp.Register(command.ReportBugCommand, command.NewReportBug(gen, uploader))
+	if gen, opts := buildGenerator(deps, k8sRT, logger); gen != nil {
+		disp.Register(command.ReportBugCommand, command.NewReportBug(gen, uploader, opts...))
 	}
 
 	return disp

@@ -1,0 +1,92 @@
+{{- /*
+report-runner DaemonSets for bundled-driver GPU nodes (NVIDIA GB200 + AMD).
+*/ -}}
+{{- range $vendor := list "nvidia" "amd" }}
+{{- $cfg := index $.Values.reportRunner $vendor }}
+{{- if $cfg.enabled }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "cwa.fullname" $ }}-report-runner-{{ $vendor }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "cwa.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: report-runner
+spec:
+  selector:
+    matchLabels:
+      {{- include "cwa.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: report-runner-{{ $vendor }}
+  template:
+    metadata:
+      labels:
+        {{- include "cwa.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: report-runner-{{ $vendor }}
+    spec:
+      # The runner talks only to cwa-manager over the socket; it needs no API access.
+      automountServiceAccountToken: false
+      # nvidia-bug-report.sh / rocm_techsupport.sh inspect host processes and driver state.
+      hostPID: true
+      {{- with $cfg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $cfg.instanceTypes }}
+      # Deploy only on the bundled-driver SKUs the collection router (K8sBundledDriver) uses.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values:
+                      {{- toYaml . | nindent 22 }}
+      {{- end }}
+      tolerations:
+        {{- toYaml $.Values.tolerations | nindent 8 }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: report-runner
+          image: "{{ $cfg.image }}:{{ $cfg.tag }}"
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: AGENT_VERSION
+              value: {{ $.Chart.AppVersion | quote }}
+          # Host GPU/driver access for the bundled vendor diagnostic tool.
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: bug-report-shared
+              mountPath: {{ $.Values.bugReport.socketMountPath | default "/etc/crusoe/bug-reports" }}
+            - name: host-dev
+              mountPath: /dev
+            - name: host-sys
+              mountPath: /sys
+              readOnly: true
+          resources:
+            {{- toYaml $.Values.reportRunner.resources | nindent 12 }}
+      volumes:
+        # Shared with cwa-manager: the runner writes the socket + archive here, cwa-manager
+        # dials the socket and reads the archive to upload it.
+        - name: bug-report-shared
+          hostPath:
+            path: {{ $.Values.bugReport.socketHostPath }}
+            type: DirectoryOrCreate
+        - name: host-dev
+          hostPath:
+            path: /dev
+            type: Directory
+        - name: host-sys
+          hostPath:
+            path: /sys
+            type: Directory
+{{- end }}
+{{- end }}

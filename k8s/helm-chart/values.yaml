@@ -89,6 +89,36 @@ customMetrics:
 logs:
   enabled: true
 
+# Bug-report (report.bug command) settings.
+bugReport:
+  driverNamespace: nvidia-gpu-operator
+  socketHostPath: /var/lib/cwa/bug-reports
+
+# report-runner: the agent-owned bug-report collector for bundled-driver GPU nodes.
+reportRunner:
+  nvidia:
+    # Enable on bundled-NVIDIA (GB200) nodes.
+    enabled: true
+    image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/report-runner
+    tag: "@@REPORT_RUNNER_VERSION@@"
+    # Render nodeAffinity In on SKUs with driver on host.
+    instanceTypes:
+      - gb200-186gb-nvl-ib.4x
+      - gb200-186gb-nvl.4x
+  amd:
+    enabled: true
+    image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/report-runner-amd
+    tag: "@@REPORT_RUNNER_VERSION@@"
+    nodeSelector:
+      feature.node.kubernetes.io/amd-gpu: "true"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+
 # Proxy settings (optional).
 proxy:
   enabled: false

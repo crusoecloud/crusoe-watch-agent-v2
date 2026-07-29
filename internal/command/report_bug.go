@@ -48,14 +48,29 @@ type ReportBug struct {
 	retryDelay time.Duration
 }
 
+// ReportBugOption customizes a ReportBug handler.
+type ReportBugOption func(*ReportBug)
+
+// WithGPUDetector overrides how the handler classifies the host GPU. K8s uses this to
+// probe the host sysfs cwa-manager mounts at /host/sys rather than its own container /sys.
+func WithGPUDetector(detect func() vector.GPUType) ReportBugOption {
+	return func(r *ReportBug) { r.detectGPU = detect }
+}
+
 // NewReportBug creates a report.bug handler.
-func NewReportBug(generator Generator, uploader Uploader) *ReportBug {
-	return &ReportBug{
+func NewReportBug(generator Generator, uploader Uploader, opts ...ReportBugOption) *ReportBug {
+	handler := &ReportBug{
 		generator:  generator,
 		uploader:   uploader,
 		detectGPU:  vector.DetectGPU,
 		retryDelay: defaultUploadRetryDelay,
 	}
+
+	for _, opt := range opts {
+		opt(handler)
+	}
+
+	return handler
 }
 
 // Timeout returns the long-running class: bug report collection can take several minutes.

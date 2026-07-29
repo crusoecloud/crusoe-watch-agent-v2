@@ -9,11 +9,19 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/bugreport"
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/command"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/watcher"
 )
 
 const defaultVectorConfigPath = "/etc/crusoe/vector/vector.yaml"
+
+// hostSysModuleDir is the host sysfs cwa-manager mounts for K8s GPU detection.
+const hostSysModuleDir = "/host/sys/module"
+
+// defaultDriverNamespace is where the NVIDIA GPU Operator runs its driver pods.
+const defaultDriverNamespace = "nvidia-gpu-operator"
 
 // Default exporter ports and scrape intervals matching production v1 deployment.
 const (
@@ -31,37 +39,49 @@ const (
 	defaultCustomMetricsScrape = 30
 )
 
-// startK8sWatcher creates an in-cluster Kubernetes client and launches the
-// Vector config watcher in a background goroutine. If client creation fails,
-// it logs the error and returns — the agent continues in degraded mode.
-func startK8sWatcher(
-	ctx context.Context,
-	logger *slog.Logger,
-	logsEndpoint, metricsEndpoint string,
-	ingestionBlocked bool,
-	rateLimits map[string]int,
-) *watcher.Watcher {
+// k8sRuntime holds the in-cluster client built once at startup and shared by the
+// Vector config watcher and the bug-report generator (both need the API and node identity).
+type k8sRuntime struct {
+	client   kubernetes.Interface
+	restCfg  *rest.Config
+	nodeName string
+}
+
+// newK8sRuntime builds the in-cluster client and resolves the node name.
+// It returns nil on any failure so the agent can continue in degraded mode.
+func newK8sRuntime(logger *slog.Logger) *k8sRuntime {
 	nodeName, err := watcher.ResolveNodeName()
 	if err != nil {
-		logger.Error("failed to resolve node name, k8s watcher disabled", "error", err)
+		logger.Error("failed to resolve node name, k8s runtime disabled", "error", err)
 
 		return nil
 	}
 
 	restCfg, err := rest.InClusterConfig()
 	if err != nil {
-		logger.Error("failed to create in-cluster config, k8s watcher disabled", "error", err)
+		logger.Error("failed to create in-cluster config, k8s runtime disabled", "error", err)
 
 		return nil
 	}
 
 	client, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		logger.Error("failed to create kubernetes client, k8s watcher disabled", "error", err)
+		logger.Error("failed to create kubernetes client, k8s runtime disabled", "error", err)
 
 		return nil
 	}
 
+	return &k8sRuntime{client: client, restCfg: restCfg, nodeName: nodeName}
+}
+
+// startWatcher launches the Vector config watcher in a background goroutine.
+func (r *k8sRuntime) startWatcher(
+	ctx context.Context,
+	logger *slog.Logger,
+	logsEndpoint, metricsEndpoint string,
+	ingestionBlocked bool,
+	rateLimits map[string]int,
+) *watcher.Watcher {
 	k8sCfg := buildK8sConfig()
 	// Seed the persisted control-plane state so the first reconcile carries it.
 	k8sCfg.LogsEndpoint = logsEndpoint
@@ -70,11 +90,11 @@ func startK8sWatcher(
 	k8sCfg.RateLimits = rateLimits
 
 	configWatcher := watcher.New(watcher.Config{
-		NodeName:   nodeName,
+		NodeName:   r.nodeName,
 		ConfigPath: getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
 		K8sCfg:     k8sCfg,
 		Logger:     logger,
-	}, client)
+	}, r.client)
 
 	go func() {
 		if runErr := configWatcher.Run(ctx); runErr != nil && ctx.Err() == nil {
@@ -82,9 +102,23 @@ func startK8sWatcher(
 		}
 	}()
 
-	logger.Info("k8s watcher launched", "node", nodeName)
+	logger.Info("k8s watcher launched", "node", r.nodeName)
 
 	return configWatcher
+}
+
+// buildK8sGenerator wires the report.bug generator for K8s: operator-exec into the driver
+// pod for GPU Operator NVIDIA nodes, and the bundled-driver host report-runner (over a
+// unix socket) for AMD and GB200 nodes. The router picks per node at collection time.
+func (r *k8sRuntime) buildK8sGenerator() command.Generator {
+	gpu := vector.DetectGPUAt(hostSysModuleDir)
+	outputDir := getEnvOrDefault(bugreport.EnvReportDir, bugreport.DefaultReportDir)
+	driverNS := getEnvOrDefault("NVIDIA_DRIVER_NAMESPACE", defaultDriverNamespace)
+
+	exec := bugreport.NewExecGenerator(r.client, r.restCfg, outputDir, r.nodeName, driverNS)
+	runner := bugreport.NewRunnerClient(getEnvOrDefault(bugreport.EnvSocketPath, bugreport.DefaultSocketPath))
+
+	return bugreport.NewK8sGenerator(r.client, exec, runner, r.nodeName, gpu)
 }
 
 func buildK8sConfig() vector.K8sConfig {

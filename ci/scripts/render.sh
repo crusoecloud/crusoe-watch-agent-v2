@@ -147,9 +147,10 @@ render_k8s() {
         CHART_VERSION       "$chart_version" \
         CHART_APP_VERSION   "$chart_version"
     substitute_file "$values" \
-        CWA_MANAGER_VERSION "$cwa_manager_version" \
-        VECTOR_VERSION      "$VECTOR" \
-        TOKEN_JOB_VERSION   "$TOKEN_JOB"
+        CWA_MANAGER_VERSION   "$cwa_manager_version" \
+        REPORT_RUNNER_VERSION "$REPORT_RUNNER" \
+        VECTOR_VERSION        "$VECTOR" \
+        TOKEN_JOB_VERSION     "$TOKEN_JOB"
 
     assert_no_placeholders "$chart"
     assert_no_placeholders "$values"

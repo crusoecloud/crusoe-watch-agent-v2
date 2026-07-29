@@ -71,7 +71,7 @@ func testNode() *corev1.Node {
 			Labels: map[string]string{
 				"crusoe.ai/instance.id":            "vm-abc-123",
 				"crusoe.ai/nodepool.id":            "nodepool-1",
-				"beta.kubernetes.io/instance-type": "gpu-a100",
+				"node.kubernetes.io/instance-type": "gpu-a100",
 				"crusoe.ai/pod.id":                 "pod-xyz",
 				"crusoe.ai/project.id":             "project-1",
 				"kubernetes.io/hostname":           "test-node",

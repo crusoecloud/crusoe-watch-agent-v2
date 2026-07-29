@@ -142,6 +142,8 @@ spec:
               value: {{ .Values.customMetrics.defaultScrape | quote }}
             - name: LOGS_ENABLED
               value: {{ .Values.logs.enabled | quote }}
+            - name: NVIDIA_DRIVER_NAMESPACE
+              value: {{ .Values.bugReport.driverNamespace | quote }}
             {{- if .Values.proxy.enabled }}
             - name: HTTP_PROXY
               value: {{ .Values.proxy.http | quote }}
@@ -161,6 +163,10 @@ spec:
               readOnly: true
             - name: cwa-state
               mountPath: /var/lib/cwa-manager
+            # Shared with the report-runner DaemonSet on bundled-driver GPU nodes: the
+            # runner writes the socket + archive here, cwa-manager dials it and uploads.
+            - name: bug-report-shared
+              mountPath: {{ .Values.bugReport.socketMountPath | default "/etc/crusoe/bug-reports" }}
           resources:
             {{- toYaml .Values.resources.cwaManager | nindent 12 }}
 
@@ -196,4 +202,10 @@ spec:
         - name: cwa-state
           hostPath:
             path: /var/lib/cwa-manager
+            type: DirectoryOrCreate
+        # Shared with the report-runner DaemonSet (bundled-driver GPU nodes) for the
+        # bug-report socket and archive. Empty/unused on GPU Operator and CPU nodes.
+        - name: bug-report-shared
+          hostPath:
+            path: {{ .Values.bugReport.socketHostPath }}
             type: DirectoryOrCreate

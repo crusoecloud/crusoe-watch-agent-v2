@@ -24,6 +24,11 @@ func DetectGPU() GPUType {
 	return detectGPU("/sys/module")
 }
 
+// DetectGPUAt classifies the GPU by probing loaded kernel modules under caller-supplied sysfs root.
+func DetectGPUAt(sysModuleDir string) GPUType {
+	return detectGPU(sysModuleDir)
+}
+
 func detectGPU(sysModuleDir string) GPUType {
 	if _, err := os.Stat(filepath.Join(sysModuleDir, "nvidia")); err == nil {
 		return GPUNvidia
