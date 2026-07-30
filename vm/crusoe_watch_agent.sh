@@ -41,8 +41,6 @@ SYSTEMCTL_DIR="/etc/systemd/system"
 DCGM_EXPORTER_PORT=9400
 AMD_EXPORTER_PORT=5000
 CME_PORT=9500
-CME_VERSION="0.2.4"
-CME_BIN="/usr/local/bin/crusoe-metrics-exporter"
 
 # dcgm-exporter Docker image by Ubuntu version.
 declare -A DCGM_EXPORTER_VERSION_MAP=(
@@ -426,7 +424,7 @@ install_metrics_exporter_native() {
     status "Installing crusoe-metrics-exporter binary and systemd unit."
     tar -xzf "${tmpdir}/${tarball}" -C "$tmpdir"
     local stage="${tmpdir}/crusoe-metrics-exporter-${CME_VERSION}-linux-${arch}"
-    install -m 0755 "${stage}/crusoe-metrics-exporter" "$CME_BIN"
+    install -m 0755 "${stage}/crusoe-metrics-exporter" "${INSTALL_DIR}/crusoe-metrics-exporter"
     install -m 0644 "${stage}/crusoe-metrics-exporter.service" "$SYSTEMCTL_DIR/crusoe-metrics-exporter.service"
 
     rm -rf "$tmpdir"
@@ -870,7 +868,7 @@ do_uninstall() {
         systemctl disable nvidia-dcgm || true
         apt-get remove -y 'datacenter-gpu-manager-4-cuda*' || true
     fi
-    rm -f "$CME_BIN"
+    rm -f "${INSTALL_DIR}/crusoe-metrics-exporter"
 
     systemctl daemon-reload
 

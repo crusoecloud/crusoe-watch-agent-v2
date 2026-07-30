@@ -56,6 +56,7 @@ func TestGenerateVM_CPUOnly(t *testing.T) {
 	assert.Contains(t, src, "journald_logs")
 	assert.Contains(t, src, "vector_internal_logs")
 	assert.Contains(t, src, "cwa_manager_logs")
+	assert.Contains(t, src, "report_runner_logs")
 	assert.NotContains(t, src, "dcgm_metrics")
 	assert.NotContains(t, src, "amd_metrics")
 	assert.NotContains(t, src, "crusoe_infra_metrics")
@@ -254,6 +255,7 @@ func TestGenerateVM_CommonTransformsPresent(t *testing.T) {
 		"parse_journald_logs",
 		"parse_internal_logs",
 		"parse_cwa_manager_logs",
+		"parse_report_runner_logs",
 		"enrich_logs",
 		"add_update_labels",
 		"filter_internal_metrics",
@@ -319,6 +321,7 @@ func TestGenerateVM_JournaldExcludesAgentUnits(t *testing.T) {
 	assert.Contains(t, units, "crusoe-watch-agent.service")
 	assert.Contains(t, units, "crusoe-watch-agent-native.service")
 	assert.Contains(t, units, "cwa-manager.service")
+	assert.Contains(t, units, "cwa-report-runner.service")
 }
 
 func TestGenerateVM_CwaManagerLogs(t *testing.T) {
@@ -338,6 +341,30 @@ func TestGenerateVM_CwaManagerLogs(t *testing.T) {
 
 	enrichInputs := xf["enrich_logs"].(map[string]any)["inputs"].([]any)
 	assert.Contains(t, enrichInputs, "parse_cwa_manager_logs")
+}
+
+func TestGenerateVM_ReportRunnerLogs(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{GPUType: GPUNone})
+	src := sources(cfg)
+
+	// Dedicated report-runner journald source exists.
+	runnerLogs := src["report_runner_logs"].(map[string]any)
+	assert.Equal(t, "journald", runnerLogs["type"])
+	includeUnits := runnerLogs["include_units"].([]any)
+	assert.Contains(t, includeUnits, "cwa-report-runner.service")
+
+	// Transform is wired into enrich_logs.
+	xf := transforms(cfg)
+	parseRunner := xf["parse_report_runner_logs"].(map[string]any)
+	assert.Equal(t, []any{"report_runner_logs"}, parseRunner["inputs"].([]any))
+
+	enrichInputs := xf["enrich_logs"].(map[string]any)["inputs"].([]any)
+	assert.Contains(t, enrichInputs, "parse_report_runner_logs")
+
+	// Shares cwa-manager's logfmt body, differing only in log_source.
+	source := parseRunner["source"].(string)
+	assert.Contains(t, source, `.log_source = "cwa-report-runner"`)
+	assert.Contains(t, source, ".level = downcase(string!(parsed.level))")
 }
 
 func TestGenerateVM_LogsEnvelopeContract(t *testing.T) {

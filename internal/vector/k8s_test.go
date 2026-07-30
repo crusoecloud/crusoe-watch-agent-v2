@@ -313,23 +313,29 @@ func TestApplyLogs(t *testing.T) {
 	assert.Contains(t, sources, "journald_logs")
 	assert.Contains(t, sources, "vector_internal_logs")
 	assert.Contains(t, sources, "cwa_manager_logs")
+	assert.Contains(t, sources, "report_runner_logs")
 
-	// cwa-manager logs read from container log files.
+	// cwa-manager and report-runner logs read from container log files.
 	cwaLogs := sources["cwa_manager_logs"].(map[string]any)
 	assert.Equal(t, "file", cwaLogs["type"])
+	runnerLogs := sources["report_runner_logs"].(map[string]any)
+	assert.Equal(t, "file", runnerLogs["type"])
+	assert.Contains(t, runnerLogs["include"].([]any), "/var/log/pods/*/report-runner/*.log")
 
 	transforms := getTransforms(cfg)
 	assert.Contains(t, transforms, "filter_journald_noise")
 	assert.Contains(t, transforms, "parse_journald_logs")
 	assert.Contains(t, transforms, "parse_internal_logs")
 	assert.Contains(t, transforms, "parse_cwa_manager_logs")
+	assert.Contains(t, transforms, "parse_report_runner_logs")
 	assert.Contains(t, transforms, "enrich_logs")
 
-	// Enrich logs converges three parsers (journald + internal + cwa-manager).
+	// Enrich logs converges four parsers (journald + internal + cwa-manager + report-runner).
 	enrich := transforms["enrich_logs"].(map[string]any)
 	inputs := enrich["inputs"].([]any)
-	assert.Len(t, inputs, 3)
+	assert.Len(t, inputs, 4)
 	assert.Contains(t, inputs, "parse_cwa_manager_logs")
+	assert.Contains(t, inputs, "parse_report_runner_logs")
 
 	sinks := getSinks(cfg)
 	assert.Contains(t, sinks, "crusoe_ingest")
@@ -378,6 +384,12 @@ func TestK8sLogsEnvelopeContract(t *testing.T) {
 	assert.Contains(t, cwaManager, ".level = downcase(string!(parsed.level))")
 	assert.NotContains(t, cwaManager, "del(.message)")
 	assert.NotContains(t, cwaManager, "del(.timestamp)")
+
+	// report-runner shares the same CRI-unwrap + logfmt body, differing only in log_source.
+	reportRunner := transforms["parse_report_runner_logs"].(map[string]any)["source"].(string)
+	assert.Contains(t, reportRunner, `.log_source = "cwa-report-runner"`)
+	assert.Contains(t, reportRunner, ".level = downcase(string!(parsed.level))")
+	assert.Contains(t, reportRunner, "parse_regex(msg,")
 
 	internal := transforms["parse_internal_logs"].(map[string]any)["source"].(string)
 	assert.Contains(t, internal, `.log_source = "crusoe-watch-agent"`)

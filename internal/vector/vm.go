@@ -81,14 +81,17 @@ func GenerateVMBase() map[string]any {
 	sources["internal_metrics"] = internalMetricsSource()
 	sources["journald_logs"] = journaldSource()
 	sources["vector_internal_logs"] = map[string]any{"type": "internal_logs"}
-	sources["cwa_manager_logs"] = cwaManagerLogsSource()
+	sources["cwa_manager_logs"] = journaldUnitSource("cwa-manager.service")
+	sources["report_runner_logs"] = journaldUnitSource("cwa-report-runner.service")
 
 	// Log transforms
 	transforms["parse_journald_logs"] = remapTransform([]string{"journald_logs"}, vrlParseJournaldLogs)
 	transforms["parse_internal_logs"] = remapTransform([]string{"vector_internal_logs"}, vrlParseInternalLogs)
 	transforms["parse_cwa_manager_logs"] = remapTransform([]string{"cwa_manager_logs"}, vrlParseCwaManagerLogs)
+	transforms["parse_report_runner_logs"] = remapTransform([]string{"report_runner_logs"}, vrlParseReportRunnerLogs)
 	transforms["enrich_logs"] = remapTransform(
-		[]string{"parse_journald_logs", "parse_internal_logs", "parse_cwa_manager_logs"}, vrlEnrichLogs)
+		[]string{"parse_journald_logs", "parse_internal_logs", "parse_cwa_manager_logs", "parse_report_runner_logs"},
+		vrlEnrichLogs)
 
 	// Metrics transforms (add_update_labels starts with host_metrics only; ApplyVM wires GPU)
 	transforms["add_update_labels"] = remapTransform([]string{"host_metrics"}, vrlAddUpdateLabels)
@@ -186,18 +189,19 @@ func journaldSource() map[string]any {
 			"crusoe-watch-agent.service",
 			"crusoe-watch-agent-native.service",
 			"cwa-manager.service",
+			"cwa-report-runner.service",
 		},
 	}
 }
 
-func cwaManagerLogsSource() map[string]any {
+// journaldUnitSource builds a dedicated journald source for a single agent unit.
+// since_now:false so first boot reads the unit's journal from the start and captures startup.
+func journaldUnitSource(unit string) map[string]any {
 	return map[string]any{
 		"type":              "journald",
 		"journal_directory": "/var/log/journal",
-		"since_now":         true,
-		"include_units": []string{
-			"cwa-manager.service",
-		},
+		"since_now":         false,
+		"include_units":     []string{unit},
 	}
 }
 

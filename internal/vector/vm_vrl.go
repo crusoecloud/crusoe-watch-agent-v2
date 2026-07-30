@@ -16,6 +16,13 @@ const vrlParseCwaManagerLogs = `
 log_line = string(.message) ?? ""
 ` + vrlParseCwaManagerBody
 
+// vrlParseReportRunnerLogs is the VM version: journald source → logfmt body.
+// report-runner shares cwa-manager's logfmt handler, so it reuses the same body.
+const vrlParseReportRunnerLogs = `
+.log_source = "cwa-report-runner"
+log_line = string(.message) ?? ""
+` + vrlParseCwaManagerBody
+
 // vrlEnrichLogs is the VM version of the envelope assembly.
 const vrlEnrichLogs = vrlEnrichLogsPrefix +
 	`{ "agent": "crusoe-watch-agent", "agent_version": "${AGENT_VERSION}" }` +

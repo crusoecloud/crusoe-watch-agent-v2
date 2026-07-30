@@ -510,13 +510,20 @@ func applyLogs(sources, transforms, sinks map[string]any, cfg K8sConfig) {
 		"include":   []string{"/var/log/pods/*/cwa-manager/*.log"},
 		"read_from": "beginning",
 	}
+	sources["report_runner_logs"] = map[string]any{
+		"type":      "file",
+		"include":   []string{"/var/log/pods/*/report-runner/*.log"},
+		"read_from": "beginning",
+	}
 
 	transforms["filter_journald_noise"] = filterTransform([]string{"journald_logs"}, vrlFilterJournaldNoise)
 	transforms["parse_journald_logs"] = remapTransform([]string{"filter_journald_noise"}, vrlParseJournaldLogsK8s)
 	transforms["parse_internal_logs"] = remapTransform([]string{"vector_internal_logs"}, vrlParseInternalLogs)
 	transforms["parse_cwa_manager_logs"] = remapTransform([]string{"cwa_manager_logs"}, vrlParseCwaManagerLogsK8s)
+	transforms["parse_report_runner_logs"] = remapTransform([]string{"report_runner_logs"}, vrlParseReportRunnerLogsK8s)
 	transforms["enrich_logs"] = remapTransform(
-		[]string{"parse_journald_logs", "parse_internal_logs", "parse_cwa_manager_logs"}, vrlEnrichLogsK8s)
+		[]string{"parse_journald_logs", "parse_internal_logs", "parse_cwa_manager_logs", "parse_report_runner_logs"},
+		vrlEnrichLogsK8s)
 
 	sinkConfig := map[string]any{
 		"type":        "http",

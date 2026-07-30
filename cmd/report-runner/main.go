@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	reportDir := getenv(bugreport.EnvReportDir, bugreport.DefaultReportDir)
 	socketPath := getenv(bugreport.EnvSocketPath, bugreport.DefaultSocketPath)

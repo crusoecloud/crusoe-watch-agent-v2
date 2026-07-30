@@ -39,11 +39,9 @@ if includes(klog_emitters, syslog_id) {
 }
 `
 
-// vrlParseCwaManagerLogsK8s is the K8s version: unwraps CRI log format, then
-// applies the shared logfmt parser body.
-const vrlParseCwaManagerLogsK8s = `
-.log_source = "cwa-manager"
-
+// vrlUnwrapCRIAndParseBody unwraps the CRI log wrapper and applies shared logfmt parser body.
+// Callers prepend a `.log_source = "..."` line to identify the emitter.
+const vrlUnwrapCRIAndParseBody = `
 msg = string(.message) ?? ""
 log_line = msg
 
@@ -57,6 +55,12 @@ if parsed_cri != null {
     log_line = string!(parsed_cri.log)
 }
 ` + vrlParseCwaManagerBody
+
+// vrlParseCwaManagerLogsK8s / vrlParseReportRunnerLogsK8s: both agent binaries
+// share the logfmt handler, so they differ only in log_source.
+const vrlParseCwaManagerLogsK8s = "\n.log_source = \"cwa-manager\"\n" + vrlUnwrapCRIAndParseBody
+
+const vrlParseReportRunnerLogsK8s = "\n.log_source = \"cwa-report-runner\"\n" + vrlUnwrapCRIAndParseBody
 
 // vrlEnrichLogsK8s is the K8s version of the envelope assembly. chart_version
 // is populated from AGENT_VERSION (helm AppVersion).
