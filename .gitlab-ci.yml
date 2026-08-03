@@ -57,7 +57,7 @@ variables:
   CI_IMAGE: "registry.gitlab.com/crusoeenergy/tools/go-ci-1.26"
   CI_IMAGE_TAG: "master"
 
-# Validates the Vector configs produced by `cwa-manager --dump-vector-config`.
+# Renders the VM and K8s Vector config variants and runs `vector validate` on each.
 vector:validate:
   stage: test
   image: ${CI_IMAGE}:${CI_IMAGE_TAG}
@@ -78,13 +78,34 @@ vector:validate:
         - .gitlab-ci.yml
         - cmd/cwa-manager/**/*
         - internal/vector/**/*
+        - ci/vector-config-dump/**/*
         - go.*
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
         - .gitlab-ci.yml
         - cmd/cwa-manager/**/*
         - internal/vector/**/*
+        - ci/vector-config-dump/**/*
         - go.*
+
+# Lints and template-renders the Helm chart.
+helm:lint:
+  stage: test
+  image: alpine/helm:3.16.2
+  script:
+    - cp -r k8s/helm-chart /tmp/chart
+    - sed -i 's/@@CHART_VERSION@@/0.0.0-ci/; s/@@CHART_APP_VERSION@@/0.0.0-ci/' /tmp/chart/Chart.yaml
+    - helm lint /tmp/chart
+    - helm template ci-check /tmp/chart >/dev/null
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - .gitlab-ci.yml
+        - k8s/helm-chart/**/*
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - .gitlab-ci.yml
+        - k8s/helm-chart/**/*
 
 tag_semver:
   rules:

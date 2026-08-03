@@ -76,7 +76,10 @@ vector-validate:
 	        echo "Validating $$name"; \
 	        vector validate --no-environment ${BUILDDIR}/vector-configs/$$name.yaml || exit 1; \
 	    done; \
-	 done'
+	 done; \
+	 go run ./ci/vector-config-dump --platform=k8s > ${BUILDDIR}/vector-configs/k8s.yaml; \
+	 echo "Validating k8s"; \
+	 vector validate --no-environment ${BUILDDIR}/vector-configs/k8s.yaml || exit 1'
 
 .PHONY: clean
 clean:
