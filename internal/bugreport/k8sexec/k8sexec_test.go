@@ -1,4 +1,4 @@
-package bugreport
+package k8sexec
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/bugreport"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
 )
@@ -115,7 +116,7 @@ func TestK8sGenerator_HealthOperatorAPIError(t *testing.T) {
 
 	_, err := gen.Health(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), string(CodeInternal))
+	assert.Contains(t, err.Error(), string(bugreport.CodeScriptUnavailable))
 }
 
 func TestK8sBundledDriver(t *testing.T) {
@@ -247,7 +248,7 @@ func TestExecGenerator_NoDriverPod(t *testing.T) {
 
 	_, err := gen.Generate(context.Background(), vector.GPUNvidia, "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), string(CodeDriverPodNotFound))
+	assert.Contains(t, err.Error(), string(bugreport.CodeDriverPodNotFound))
 }
 
 func TestExecGenerator_SkipsNonRunningPod(t *testing.T) {
@@ -255,7 +256,7 @@ func TestExecGenerator_SkipsNonRunningPod(t *testing.T) {
 
 	_, err := gen.Generate(context.Background(), vector.GPUNvidia, "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), string(CodeDriverPodNotFound))
+	assert.Contains(t, err.Error(), string(bugreport.CodeDriverPodNotFound))
 }
 
 func TestExecGenerator_ToolFailure(t *testing.T) {
@@ -264,7 +265,7 @@ func TestExecGenerator_ToolFailure(t *testing.T) {
 
 	_, err := gen.Generate(context.Background(), vector.GPUNvidia, "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), string(CodeExecError))
+	assert.Contains(t, err.Error(), string(bugreport.CodeExecError))
 }
 
 func TestExecGenerator_EmptyDownload(t *testing.T) {
@@ -273,7 +274,7 @@ func TestExecGenerator_EmptyDownload(t *testing.T) {
 
 	_, err := gen.Generate(context.Background(), vector.GPUNvidia, "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), string(CodeNoOutput))
+	assert.Contains(t, err.Error(), string(bugreport.CodeNoOutput))
 }
 
 func TestDriverContainer(t *testing.T) {

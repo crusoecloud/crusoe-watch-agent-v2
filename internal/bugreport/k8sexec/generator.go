@@ -1,4 +1,8 @@
-package bugreport
+// Package k8sexec implements the Kubernetes bug-report collection paths for cwa-manager:
+// exec into the GPU Operator driver pod, and route to the bundled-driver host runner. It
+// is split from internal/bugreport so that the report-runner binary (which only needs the
+// runner/tool path) does not link k8s.io/client-go.
+package k8sexec
 
 import (
 	"context"
@@ -8,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/bugreport"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
 )
@@ -21,6 +26,11 @@ type K8sGenerator struct {
 	client   kubernetes.Interface
 	nodeName string
 	gpu      vector.GPUType
+}
+
+// reportGenerator produces a report archive; *ExecGenerator implements it.
+type reportGenerator interface {
+	Generate(ctx context.Context, gpu vector.GPUType, eventID string) (string, error)
 }
 
 // runnerGenerator is the bundled-driver path: a report-runner reached over a socket.
@@ -84,7 +94,7 @@ func (g *K8sGenerator) Health(ctx context.Context) (string, error) {
 	}
 
 	if _, err := g.client.CoreV1().Nodes().Get(ctx, g.nodeName, metav1.GetOptions{}); err != nil {
-		return "", CodeScriptUnavailable.Errorf("kubernetes API unreachable: %w", err)
+		return "", bugreport.CodeScriptUnavailable.Errorf("kubernetes API unreachable: %w", err)
 	}
 
 	return version.Version, nil
@@ -108,7 +118,7 @@ func (g *K8sGenerator) bundled(ctx context.Context, gpu vector.GPUType) (bool, e
 func (g *K8sGenerator) instanceType(ctx context.Context) (string, error) {
 	node, err := g.client.CoreV1().Nodes().Get(ctx, g.nodeName, metav1.GetOptions{})
 	if err != nil {
-		return "", CodeInternal.Errorf("reading node %s: %w", g.nodeName, err)
+		return "", bugreport.CodeScriptUnavailable.Errorf("reading node %s: %w", g.nodeName, err)
 	}
 
 	return node.Labels[nodeLabelInstanceType], nil

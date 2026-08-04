@@ -1,4 +1,4 @@
-package bugreport
+package k8sexec
 
 import (
 	"bytes"
@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 	utilexec "k8s.io/client-go/util/exec"
 
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/bugreport"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
 )
 
@@ -81,15 +82,15 @@ func (g *ExecGenerator) Generate(ctx context.Context, _ vector.GPUType, eventID 
 
 	container, err := driverContainer(pod)
 	if err != nil {
-		return "", CodeExecError.Errorf("driver pod %s: %w", pod.Name, err)
+		return "", bugreport.CodeExecError.Errorf("driver pod %s: %w", pod.Name, err)
 	}
 
-	if err := os.MkdirAll(g.outputDir, dirPerm); err != nil {
-		return "", CodeInternal.Errorf("creating output dir: %w", err)
+	if err := os.MkdirAll(g.outputDir, bugreport.DirPerm); err != nil {
+		return "", bugreport.CodeInternal.Errorf("creating output dir: %w", err)
 	}
 
 	// nvidia-bug-report.sh appends .gz to --output-file.
-	remoteBase := filepath.Join(remoteReportDir, reportBase(g.nodeName+"-"+eventID, g.now())+".log")
+	remoteBase := filepath.Join(remoteReportDir, bugreport.ReportBase(g.nodeName+"-"+eventID, g.now())+".log")
 	remoteArchive := remoteBase + ".gz"
 
 	defer g.cleanupRemote(ctx, pod.Name, container, remoteArchive)
@@ -115,7 +116,7 @@ func (g *ExecGenerator) runTool(ctx context.Context, pod, container, remoteBase 
 	}
 
 	if !strings.Contains(out.String(), execMarker) {
-		return CodeNoOutput.Errorf("nvidia-bug-report.sh produced no report in pod %s: %q", pod, out.String())
+		return bugreport.CodeNoOutput.Errorf("nvidia-bug-report.sh produced no report in pod %s: %q", pod, out.String())
 	}
 
 	return nil
@@ -125,9 +126,9 @@ func (g *ExecGenerator) runTool(ctx context.Context, pod, container, remoteBase 
 func (g *ExecGenerator) download(ctx context.Context, pod, container, remotePath, name string) (string, error) {
 	local := filepath.Join(g.outputDir, name)
 
-	file, err := os.OpenFile(local, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, reportPerm)
+	file, err := os.OpenFile(local, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, bugreport.ReportPerm)
 	if err != nil {
-		return "", CodeInternal.Errorf("creating report file: %w", err)
+		return "", bugreport.CodeInternal.Errorf("creating report file: %w", err)
 	}
 
 	defer func() { _ = file.Close() }()
@@ -135,14 +136,14 @@ func (g *ExecGenerator) download(ctx context.Context, pod, container, remotePath
 	if err := g.executor.exec(ctx, g.driverNamespace, pod, container, file, "cat", remotePath); err != nil {
 		_ = os.Remove(local)
 
-		return "", CodeDownloadFailed.Errorf("downloading report from pod %s: %w", pod, err)
+		return "", bugreport.CodeDownloadFailed.Errorf("downloading report from pod %s: %w", pod, err)
 	}
 
 	info, err := file.Stat()
 	if err != nil || info.Size() == 0 {
 		_ = os.Remove(local)
 
-		return "", CodeNoOutput.Errorf("empty report downloaded from pod %s", pod)
+		return "", bugreport.CodeNoOutput.Errorf("empty report downloaded from pod %s", pod)
 	}
 
 	return local, nil
@@ -164,7 +165,7 @@ func (g *ExecGenerator) findDriverPod(ctx context.Context) (*corev1.Pod, error) 
 		LabelSelector: driverPodLabelSelector,
 	})
 	if err != nil {
-		return nil, CodeDriverPodNotFound.Errorf("listing driver pods: %w", err)
+		return nil, bugreport.CodeDriverPodNotFound.Errorf("listing driver pods: %w", err)
 	}
 
 	if pod := runningPod(byLabel.Items, ""); pod != nil {
@@ -173,14 +174,14 @@ func (g *ExecGenerator) findDriverPod(ctx context.Context) (*corev1.Pod, error) 
 
 	byNode, err := g.client.CoreV1().Pods(g.driverNamespace).List(ctx, metav1.ListOptions{FieldSelector: nodeField})
 	if err != nil {
-		return nil, CodeDriverPodNotFound.Errorf("listing driver pods: %w", err)
+		return nil, bugreport.CodeDriverPodNotFound.Errorf("listing driver pods: %w", err)
 	}
 
 	if pod := runningPod(byNode.Items, driverPodNamePrefix); pod != nil {
 		return pod, nil
 	}
 
-	return nil, CodeDriverPodNotFound.Errorf(
+	return nil, bugreport.CodeDriverPodNotFound.Errorf(
 		"no running NVIDIA driver pod on node %s in namespace %s", g.nodeName, g.driverNamespace)
 }
 
@@ -225,10 +226,10 @@ func shQuote(s string) string {
 func classifyExecErr(err error, stderr string) error {
 	var codeExit utilexec.CodeExitError
 	if errors.As(err, &codeExit) {
-		return CodeScriptFailed.Errorf("nvidia-bug-report.sh exited %d: %w: %s", codeExit.Code, err, stderr)
+		return bugreport.CodeScriptFailed.Errorf("nvidia-bug-report.sh exited %d: %w: %s", codeExit.Code, err, stderr)
 	}
 
-	return CodeExecError.Errorf("exec nvidia-bug-report.sh: %w: %s", err, stderr)
+	return bugreport.CodeExecError.Errorf("exec nvidia-bug-report.sh: %w: %s", err, stderr)
 }
 
 // spdyExecutor is the production podExecutor over an SPDY stream to the API server.

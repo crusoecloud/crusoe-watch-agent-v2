@@ -10,6 +10,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/bugreport"
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/bugreport/k8sexec"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/command"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/watcher"
@@ -115,10 +116,10 @@ func (r *k8sRuntime) buildK8sGenerator() command.Generator {
 	outputDir := getEnvOrDefault(bugreport.EnvReportDir, bugreport.DefaultReportDir)
 	driverNS := getEnvOrDefault("NVIDIA_DRIVER_NAMESPACE", defaultDriverNamespace)
 
-	exec := bugreport.NewExecGenerator(r.client, r.restCfg, outputDir, r.nodeName, driverNS)
+	exec := k8sexec.NewExecGenerator(r.client, r.restCfg, outputDir, r.nodeName, driverNS)
 	runner := bugreport.NewRunnerClient(getEnvOrDefault(bugreport.EnvSocketPath, bugreport.DefaultSocketPath))
 
-	return bugreport.NewK8sGenerator(r.client, exec, runner, r.nodeName, gpu)
+	return k8sexec.NewK8sGenerator(r.client, exec, runner, r.nodeName, gpu)
 }
 
 func buildK8sConfig() vector.K8sConfig {

@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	// dirPerm is the permission for the report output directory.
-	dirPerm = 0o750
-	// reportPerm is the permission for a generated report archive.
-	reportPerm = 0o640
+	// DirPerm is the permission for the report output directory.
+	DirPerm = 0o750
+	// ReportPerm is the permission for a generated report archive.
+	ReportPerm = 0o640
 	// nvidiaBugReportScript is the NVIDIA vendor tool (from nvidia-utils). It writes its own <output-file>.gz.
 	nvidiaBugReportScript = "/usr/bin/nvidia-bug-report.sh"
 	// rocmTechSupportScript is AMD's rocm_techsupport.sh. It writes the report to stdout.
@@ -77,11 +77,11 @@ func NewToolGenerator(outputDir string) *ToolGenerator {
 
 // Generate runs the vendor bug-report tool for gpu and returns the path to the archive.
 func (g *ToolGenerator) Generate(ctx context.Context, gpu vector.GPUType, eventID string) (string, error) {
-	if err := os.MkdirAll(g.outputDir, dirPerm); err != nil {
+	if err := os.MkdirAll(g.outputDir, DirPerm); err != nil {
 		return "", CodeInternal.Errorf("creating output dir: %w", err)
 	}
 
-	base := filepath.Join(g.outputDir, reportBase(eventID, g.now()))
+	base := filepath.Join(g.outputDir, ReportBase(eventID, g.now()))
 
 	switch gpu {
 	case vector.GPUNvidia:
@@ -114,7 +114,7 @@ func (g *ToolGenerator) nvidia(ctx context.Context, base string) (string, error)
 func (g *ToolGenerator) amd(ctx context.Context, base string) (string, error) {
 	report := base + ".log.gz"
 
-	file, err := os.OpenFile(report, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, reportPerm)
+	file, err := os.OpenFile(report, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, ReportPerm)
 	if err != nil {
 		return "", CodeInternal.Errorf("creating report file: %w", err)
 	}
@@ -151,9 +151,9 @@ var errUnsupportedGPU = errors.New("unsupported GPU type for bug report")
 // unsafeChars matches anything not allowed in a report filename.
 var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 
-// reportBase builds the report filename stem (no extension) for a collection.
+// ReportBase builds the report filename stem (no extension) for a collection.
 // The event ID (when present) and timestamp make it unique and traceable.
-func reportBase(eventID string, now time.Time) string {
+func ReportBase(eventID string, now time.Time) string {
 	stamp := now.UTC().Format("20060102-150405")
 	if eventID == "" {
 		return "bug-report-" + stamp

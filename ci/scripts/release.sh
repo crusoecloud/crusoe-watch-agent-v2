@@ -70,7 +70,7 @@ publish_vm() {
         "${script}.bundle#crusoe_watch_agent.sh.bundle"
         "${RENDER_OUT}/VERSION#VERSION"
     )
-    local ldflags="-X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${NEW_VERSION}'"
+    local ldflags="-s -w -X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${NEW_VERSION}'"
     local arch cmd out
     for arch in amd64 arm64; do
         for cmd in cwa-manager report-runner; do

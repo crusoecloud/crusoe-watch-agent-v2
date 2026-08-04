@@ -150,10 +150,10 @@ func TestToolGenerate_NoGPUUnsupported(t *testing.T) {
 func TestReportBase(t *testing.T) {
 	now := time.Date(2026, 7, 9, 12, 30, 0, 0, time.UTC)
 
-	assert.Equal(t, "bug-report-evt-1-20260709-123000", reportBase("evt-1", now))
-	assert.Equal(t, "bug-report-20260709-123000", reportBase("", now))
+	assert.Equal(t, "bug-report-evt-1-20260709-123000", ReportBase("evt-1", now))
+	assert.Equal(t, "bug-report-20260709-123000", ReportBase("", now))
 	// Unsafe characters in the event ID are neutralised.
-	assert.Equal(t, "bug-report-a_b_c-20260709-123000", reportBase("a/b c", now))
+	assert.Equal(t, "bug-report-a_b_c-20260709-123000", ReportBase("a/b c", now))
 }
 
 func TestToolGenerate_NoReportProduced(t *testing.T) {

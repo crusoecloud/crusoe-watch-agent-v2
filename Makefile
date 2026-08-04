@@ -2,7 +2,7 @@ PREFIX ?= $(shell pwd)
 MODULE := gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2
 
 BUILDDIR := ${PREFIX}/dist
-GO_LDFLAGS := -ldflags "-X '${MODULE}/internal/version.Version=$${CI_COMMIT_REF_NAME:-dev}'"
+GO_LDFLAGS := -ldflags "-s -w -X '${MODULE}/internal/version.Version=$${CI_COMMIT_REF_NAME:-dev}'"
 
 GOLANGCI_VERSION = v1.63.4
 GOTESTSUM_VERSION = v1.13.0
@@ -11,15 +11,20 @@ VECTOR_VERSION := $(shell grep '^vector:' dependencies.yaml | awk '{print $$2}' 
 GO_COVER_PACKAGES = $(shell go list ${MODULE}/... | grep -v -e '/ci/' | tr '\n' ',')
 
 .PHONY: build
-build: build-cwa-manager
+build: build-cwa-manager build-report-runner
 
 .PHONY: build-cwa-manager
 build-cwa-manager:
 	@go build -o ${BUILDDIR}/cwa-manager ${GO_LDFLAGS} ./cmd/cwa-manager
 
+.PHONY: build-report-runner
+build-report-runner:
+	@go build -o ${BUILDDIR}/report-runner ${GO_LDFLAGS} ./cmd/report-runner
+
 .PHONY: cross
 cross:
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ${BUILDDIR}/cwa-manager ${GO_LDFLAGS} ./cmd/cwa-manager
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ${BUILDDIR}/report-runner ${GO_LDFLAGS} ./cmd/report-runner
 
 .PHONY: test
 test:

@@ -160,7 +160,7 @@ func NewRunnerServer(gen reportGenerator, logger *slog.Logger) *RunnerServer {
 // Serve listens on the unix socket at socketPath until ctx is cancelled.
 func (s *RunnerServer) Serve(ctx context.Context, socketPath string) error {
 	// Ensure the socket dir exists before binding (otherwise created lazily on collection).
-	if err := os.MkdirAll(filepath.Dir(socketPath), dirPerm); err != nil {
+	if err := os.MkdirAll(filepath.Dir(socketPath), DirPerm); err != nil {
 		return CodeInternal.Errorf("creating socket dir: %w", err)
 	}
 
