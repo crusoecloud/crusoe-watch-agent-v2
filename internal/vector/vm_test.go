@@ -293,6 +293,17 @@ func TestGenerateVM_MetricsSinkConfig(t *testing.T) {
 	assert.Contains(t, inputs, "add_internal_labels")
 }
 
+func TestGenerateVM_InternalMetricsVersionLabel(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{GPUType: GPUNone})
+
+	// The agent version rides on Vector's internal metrics (incl. build_info)
+	// as a tag. VM/Docker uses agent_version, never helm_version.
+	src := transforms(cfg)["add_internal_labels"].(map[string]any)["source"].(string)
+	assert.Contains(t, src, `.tags.vm_id = "${VM_ID}"`)
+	assert.Contains(t, src, `.tags.agent_version = "${AGENT_VERSION}"`)
+	assert.NotContains(t, src, "helm_version")
+}
+
 func TestGenerateVM_ValidYAML(t *testing.T) {
 	variants := []VMConfig{
 		{GPUType: GPUNone},
@@ -376,8 +387,10 @@ func TestGenerateVM_LogsEnvelopeContract(t *testing.T) {
 	enrich := xf["enrich_logs"].(map[string]any)["source"].(string)
 	assert.Contains(t, enrich, ".payload = raw")
 	assert.Contains(t, enrich, `.crusoe = { "agent": "crusoe-watch-agent"`)
-	assert.Contains(t, enrich, `"agent_version": "${AGENT_VERSION}"`)
-	// chart_version and cluster_id are K8s envelope fields.
+	assert.Contains(t, enrich, `"crusoe_watch_version": "${AGENT_VERSION}"`)
+	// Version tag is unified across modes as crusoe_watch_version; legacy
+	// per-mode names must not leak. cluster_id is a K8s-only field.
+	assert.NotContains(t, enrich, `"agent_version"`)
 	assert.NotContains(t, enrich, `"chart_version"`)
 	assert.NotContains(t, enrich, `"cluster_id"`)
 	assert.Contains(t, enrich, ".log_source = cwa_log_source")

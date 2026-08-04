@@ -15,7 +15,7 @@ import (
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/watcher"
 )
 
-const defaultVectorConfigPath = "/etc/crusoe/vector/vector.yaml"
+const defaultVectorConfigPath = "/etc/crusoe/shared/vector.yaml"
 
 // hostSysModuleDir is the host sysfs cwa-manager mounts for K8s GPU detection.
 const hostSysModuleDir = "/host/sys/module"

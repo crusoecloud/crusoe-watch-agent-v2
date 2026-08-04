@@ -67,6 +67,7 @@ vector-validate:
 	 CRUSOE_PROJECT_ID=test-project \
 	 LOGS_INGRESS_ENDPOINT=https://example.com \
 	 TELEMETRY_INGRESS_ENDPOINT=https://example.com \
+	 VECTOR_VERSION=${VECTOR_VERSION} \
 	 VM_ID=test-vm \
 	 sh -c 'for gpu in none nvidia amd; do \
 	    for cme_flag in "" "--cme"; do \

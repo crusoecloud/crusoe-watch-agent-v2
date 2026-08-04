@@ -48,11 +48,15 @@ spec:
                   key: CRUSOE_MONITORING_TOKEN
             - name: AGENT_VERSION
               value: {{ .Chart.AppVersion | quote }}
+            - name: VECTOR_VERSION
+              value: {{ .Values.vector.tag | quote }}
+            - name: INSTALL_TYPE
+              value: "kubernetes"
           envFrom:
             - secretRef:
                 name: {{ .Values.existingSecret }}
           volumeMounts:
-            - name: vector-config
+            - name: crusoe-shared
               mountPath: /etc/vector
             - name: vector-data
               mountPath: /vector-data-dir
@@ -101,7 +105,7 @@ spec:
             - name: CMS_ENDPOINT
               value: {{ .Values.cmsEndpoint | quote }}
             - name: VECTOR_CONFIG_PATH
-              value: /etc/vector/vector.yaml
+              value: /etc/crusoe/shared/vector.yaml
             - name: DCGM_ENABLED
               value: {{ .Values.dcgm.enabled | quote }}
             - name: DCGM_PORT
@@ -156,8 +160,8 @@ spec:
             - secretRef:
                 name: {{ .Values.existingSecret }}
           volumeMounts:
-            - name: vector-config
-              mountPath: /etc/vector
+            - name: crusoe-shared
+              mountPath: /etc/crusoe/shared
             - name: host-sys
               mountPath: /host/sys
               readOnly: true
@@ -171,7 +175,7 @@ spec:
             {{- toYaml .Values.resources.cwaManager | nindent 12 }}
 
       volumes:
-        - name: vector-config
+        - name: crusoe-shared
           emptyDir: {}
         - name: vector-data
           hostPath:

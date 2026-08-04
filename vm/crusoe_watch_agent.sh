@@ -35,7 +35,7 @@ INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/crusoe/crusoe_watch_agent"
 SECRETS_DIR="/etc/crusoe/secrets"
 ENV_FILE="${CONFIG_DIR}/.env"
-VECTOR_CONFIG="/etc/crusoe/vector/vector.yaml"
+VECTOR_CONFIG="/etc/crusoe/shared/vector.yaml"
 SYSTEMCTL_DIR="/etc/systemd/system"
 
 DCGM_EXPORTER_PORT=9400
@@ -471,6 +471,11 @@ write_env_file() {
     mkdir -p "$CONFIG_DIR"
     status "Writing env file to ${ENV_FILE}"
 
+    # Telemetry install-type tag. Mirrors the proto enum sent to the coordinator:
+    # native systemd → "systemd", Docker → "docker". K8s ("kubernetes") is set in the daemonset.
+    local install_type="docker"
+    [[ "$INSTALL_MODE" == "native" ]] && install_type="systemd"
+
     cat > "$ENV_FILE" <<EOF
 VM_ID='${vm_id}'
 TELEMETRY_INGRESS_ENDPOINT='${cms_url}/ingest'
@@ -478,7 +483,9 @@ LOGS_INGRESS_ENDPOINT='${cms_url}/logs/ingest'
 AGENT_VERSION='${AGENT_VERSION}'
 CWA_MANAGER_VERSION='${CWA_MANAGER_VERSION}'
 REPORT_RUNNER_VERSION='${REPORT_RUNNER_VERSION}'
+VECTOR_VERSION='${VECTOR_VERSION}'
 CME_ENABLED='${CME_ENABLED}'
+INSTALL_TYPE='${install_type}'
 EOF
 
     # NODE_NAME mirrors the K8s downward-API var so cwa-manager can parse the
@@ -489,16 +496,12 @@ EOF
         echo "NODE_NAME='${detected_fqdn}'" >> "$ENV_FILE"
     fi
 
-    # Docker image pins (read by docker-compose at `up` time).
-    if [[ "$INSTALL_MODE" == "docker" ]]; then
-        echo "VECTOR_VERSION='${VECTOR_VERSION}-debian'" >> "$ENV_FILE"
-    fi
-
     # GPU-specific vars.
     if [[ "$GPU_TYPE" == "nvidia" ]]; then
         echo "DCGM_EXPORTER_PORT='${DCGM_EXPORTER_PORT}'" >> "$ENV_FILE"
         if [[ "$INSTALL_MODE" == "docker" ]]; then
-            local image_ver="${DCGM_EXPORTER_VERSION_MAP[$UBUNTU_VERSION]:-4.3.1-4.4.0-ubi9}"
+            local image_ver="${DCGM_EXPORTER_VERSION_MAP[$UBUNTU_VERSION]:-}"
+            [[ -n "$image_ver" ]] || error_exit "no dcgm-exporter image pinned for Ubuntu ${UBUNTU_VERSION}"
             echo "DCGM_EXPORTER_VERSION='${image_ver}'" >> "$ENV_FILE"
         fi
     elif [[ "$GPU_TYPE" == "amd" ]]; then
@@ -575,11 +578,11 @@ install_systemd_units() {
 
     # Vector
     if [[ "$INSTALL_MODE" == "docker" ]]; then
-        install_unit "crusoe-watch-agent.service" \
+        install_unit "cwa-vector.service" \
             "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-vector.yaml up" \
             "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-vector.yaml down"
     else
-        install_unit "crusoe-watch-agent.service" \
+        install_unit "cwa-vector.service" \
             "/usr/bin/vector --config ${VECTOR_CONFIG} --watch-config"
     fi
 
@@ -669,18 +672,19 @@ save_replay_args() {
 ###############################################################################
 # Returns 0 if any v1-only artifact is on disk.
 v1_installed() {
-    [[ -f "${CONFIG_DIR}/vector.yaml" \
+    [[ -f "${SYSTEMCTL_DIR}/crusoe-watch-agent.service" \
+       || -f "${CONFIG_DIR}/vector.yaml" \
        || -f "${SYSTEMCTL_DIR}/crusoe-log-collector.service" \
        || -f "${SYSTEMCTL_DIR}/crusoe-amd-log-collector.service" \
        || -f "${SYSTEMCTL_DIR}/crusoe-nvidia-log-collector.service" ]]
 }
 
-# Tear down v1 artifacts that v2 doesn't ship.
+# Tear down v1 artifacts that v2 won't replace in place.
 migrate_from_v1() {
     v1_installed || return 0
     status "v1 install detected — cleaning up."
 
-    for svc in crusoe-log-collector crusoe-amd-log-collector crusoe-nvidia-log-collector; do
+    for svc in crusoe-watch-agent crusoe-log-collector crusoe-amd-log-collector crusoe-nvidia-log-collector; do
         systemctl stop "${svc}.service" 2>/dev/null || true
         systemctl disable "${svc}.service" 2>/dev/null || true
         rm -f "${SYSTEMCTL_DIR}/${svc}.service"
@@ -791,7 +795,7 @@ do_install() {
     [[ "$INSTALL_MODE" == "docker" && ( "$GPU_TYPE" == "nvidia" || "$GPU_TYPE" == "amd" ) ]] && services+=("cwa-report-runner.service")
     [[ "$GPU_TYPE" == "amd" ]]    && services+=("crusoe-amd-exporter.service")
     [[ "$CME_ENABLED" == "true" ]] && services+=("crusoe-metrics-exporter.service")
-    services+=("crusoe-watch-agent.service")
+    services+=("cwa-vector.service")
 
     for svc in "${services[@]}"; do
         systemctl enable "$svc"
@@ -801,7 +805,7 @@ do_install() {
     echo ""
     status "Install complete. Check status:"
     echo "  systemctl status cwa-manager"
-    echo "  systemctl status crusoe-watch-agent"
+    echo "  systemctl status cwa-vector"
     [[ "$GPU_TYPE" == "nvidia" ]] && echo "  systemctl status crusoe-dcgm-exporter"
     [[ "$GPU_TYPE" == "amd" ]]    && echo "  systemctl status crusoe-amd-exporter"
     [[ "$CME_ENABLED" == "true" ]] && echo "  systemctl status crusoe-metrics-exporter"
@@ -817,7 +821,7 @@ do_uninstall() {
     local all_services=(
         cwa-manager.service
         cwa-report-runner.service
-        crusoe-watch-agent.service
+        cwa-vector.service
         crusoe-dcgm-exporter.service
         crusoe-amd-exporter.service
         crusoe-metrics-exporter.service
@@ -945,7 +949,7 @@ do_refresh_token() {
     write_token
     status "Token updated."
     echo "For the changes to take effect, restart the services:"
-    echo "  sudo systemctl restart crusoe-watch-agent"
+    echo "  sudo systemctl restart cwa-vector"
     echo "  sudo systemctl restart cwa-manager"
 }
 

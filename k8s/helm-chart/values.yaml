@@ -78,7 +78,7 @@ cme:
   port: 9500
   scrapeInterval: 60
   image: ghcr.io/crusoecloud/crusoe-metrics-exporter/crusoe-metrics-exporter
-  tag: "0.2.4"
+  tag: "@@CRUSOE_METRICS_EXPORTER_VERSION@@"
 
 customMetrics:
   enabled: true

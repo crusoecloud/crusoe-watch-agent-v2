@@ -62,10 +62,10 @@ const vrlParseCwaManagerLogsK8s = "\n.log_source = \"cwa-manager\"\n" + vrlUnwra
 
 const vrlParseReportRunnerLogsK8s = "\n.log_source = \"cwa-report-runner\"\n" + vrlUnwrapCRIAndParseBody
 
-// vrlEnrichLogsK8s is the K8s version of the envelope assembly. chart_version
+// vrlEnrichLogsK8s is the K8s version of the envelope assembly. crusoe_watch_version
 // is populated from AGENT_VERSION (helm AppVersion).
 const vrlEnrichLogsK8s = vrlEnrichLogsPrefix +
-	`{ "agent": "crusoe-watch-agent", "chart_version": "${AGENT_VERSION}" }` +
+	`{ "agent": "crusoe-watch-agent", "crusoe_watch_version": "${AGENT_VERSION}" }` +
 	vrlEnrichLogsSuffix
 
 // ---------------------------------------------------------------------------
@@ -73,12 +73,14 @@ const vrlEnrichLogsK8s = vrlEnrichLogsPrefix +
 // ---------------------------------------------------------------------------
 
 // vrlAddInternalLabelsK8s tags filtered internal metrics with cluster identity and version.
-// Differs from VM mode: adds cluster_id for cluster identification.
+// Differs from VM mode: adds cluster_id for cluster identification. install_type is
+// "kubernetes" here, set explicitly on the Vector container in the daemonset.
 const vrlAddInternalLabelsK8s = `
 .tags.cluster_id = "${CRUSOE_CLUSTER_ID}"
 .tags.vm_id = "${VM_ID}"
 .tags.crusoe_resource = "vm"
-.tags.agent_version = "${AGENT_VERSION}"
+.tags.helm_version = "${AGENT_VERSION}"
+.tags.install_type = "${INSTALL_TYPE:-unspecified}"
 `
 
 // vrlEnrichKSM tags kube-state-metrics with cluster identity.

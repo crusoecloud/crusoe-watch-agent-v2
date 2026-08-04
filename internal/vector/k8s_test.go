@@ -125,6 +125,17 @@ func TestApplyDCGMDisabled(t *testing.T) {
 	assert.NotContains(t, getSources(cfg), "dcgm_exporter_scrape")
 }
 
+func TestK8s_InternalMetricsVersionLabel(t *testing.T) {
+	cfg := buildAndParse(t, nil, nil, testK8sConfig())
+
+	// The version rides on Vector's internal metrics (incl. build_info) as a
+	// tag. K8s uses helm_version, never agent_version.
+	src := getTransforms(cfg)["add_internal_labels"].(map[string]any)["source"].(string)
+	assert.Contains(t, src, `.tags.vm_id = "${VM_ID}"`)
+	assert.Contains(t, src, `.tags.helm_version = "${AGENT_VERSION}"`)
+	assert.NotContains(t, src, "agent_version")
+}
+
 func TestApplyDCGMNoPod(t *testing.T) {
 	cfg := buildAndParse(t, nil, nil, testK8sConfig())
 	assert.NotContains(t, getSources(cfg), "dcgm_exporter_scrape")
@@ -353,8 +364,8 @@ func TestK8sLogsEnvelopeContract(t *testing.T) {
 	enrich := transforms["enrich_logs"].(map[string]any)["source"].(string)
 	assert.Contains(t, enrich, ".payload = raw")
 	assert.Contains(t, enrich, `.crusoe = { "agent": "crusoe-watch-agent"`)
-	// K8s envelope uses chart_version (not agent_version — that's the VM field name).
-	assert.Contains(t, enrich, `"chart_version": "${AGENT_VERSION}"`)
+	assert.Contains(t, enrich, `"crusoe_watch_version": "${AGENT_VERSION}"`)
+	assert.NotContains(t, enrich, `"chart_version"`)
 	assert.NotContains(t, enrich, `"agent_version"`)
 	assert.NotContains(t, enrich, "cluster_id")
 	assert.Contains(t, enrich, ".log_source = cwa_log_source")

@@ -25,7 +25,7 @@ log_line = string(.message) ?? ""
 
 // vrlEnrichLogs is the VM version of the envelope assembly.
 const vrlEnrichLogs = vrlEnrichLogsPrefix +
-	`{ "agent": "crusoe-watch-agent", "agent_version": "${AGENT_VERSION}" }` +
+	`{ "agent": "crusoe-watch-agent", "crusoe_watch_version": "${AGENT_VERSION}" }` +
 	vrlEnrichLogsSuffix
 
 // ---------------------------------------------------------------------------
@@ -40,11 +40,13 @@ del(.tags.Hostname)
 .tags.crusoe_resource = "vm"
 `
 
-// vrlAddInternalLabels tags filtered internal metrics with vm_id and version.
+// vrlAddInternalLabels tags filtered internal metrics with vm_id, agent version,
+// and install type (docker | systemd). install_type is set by the installer in .env.
 const vrlAddInternalLabels = `
 .tags.vm_id = "${VM_ID}"
 .tags.crusoe_resource = "vm"
 .tags.agent_version = "${AGENT_VERSION}"
+.tags.install_type = "${INSTALL_TYPE:-unspecified}"
 `
 
 // vrlEnrichCMEMetrics tags Crusoe Metrics Exporter metrics with a distinct

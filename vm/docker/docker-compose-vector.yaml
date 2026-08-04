@@ -1,10 +1,10 @@
 services:
-  crusoe-vector:
+  cwa-vector:
     image: ghcr.io/vectordotdev/vector:${VECTOR_VERSION}
-    container_name: crusoe-vector
-    hostname: crusoe-vector
+    container_name: cwa-vector
+    hostname: cwa-vector
     volumes:
-      - /etc/crusoe/vector:/etc/vector:ro
+      - /etc/crusoe/shared:/etc/vector:ro
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /var/log/journal:/var/log/journal:ro
