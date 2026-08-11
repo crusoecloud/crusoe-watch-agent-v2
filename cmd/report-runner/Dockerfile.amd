@@ -17,24 +17,32 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w -X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${VERSION}'" \
     -o /report-runner ./cmd/report-runner
 
-# AMD ROCm userspace + rocm_techsupport.sh — AMD's official diagnostic script
-# (github.com/amddcgpuce/rocmtechsupport, MIT), pinned to a commit for reproducible
-# builds. amd64-only: ROCm packages and AMD GPU VMs are x86_64.
+# AMD ROCm userspace (pinned) + rocm_techsupport.sh — AMD's official diagnostic script
+# (github.com/amddcgpuce/rocmtechsupport, MIT), pinned to a commit for reproducible builds.
+# ROCm is bundled at ROCM_APT_VERSION as the K8s fallback (KMM nodes have no host ROCm);
+# on VMs the host /opt/rocm is bind-mounted over it (ROCM_VERSION), keeping VMs driver-matched.
+# Bump ROCM_APT_VERSION to track the fleet. The extra tools back rocm_techsupport.sh sections;
+# ones still absent (IB/OFED/mst/nicctl) degrade gracefully. amd64-only: ROCm is x86_64.
 FROM ubuntu:24.04
 ARG ROCM_TECHSUPPORT_SHA=39ae6002f3cfaac9a121efa999328bb4d6572bf6
+ARG ROCM_APT_VERSION=7.0.1
 RUN apt-get update && apt-get install -y --no-install-recommends \
         wget ca-certificates gnupg \
     && mkdir -p /etc/apt/keyrings \
     && wget --https-only --tries=3 --timeout=30 -qO /tmp/rocm.gpg.key https://repo.radeon.com/rocm/rocm.gpg.key \
     && gpg --dearmor -o /etc/apt/keyrings/rocm.gpg /tmp/rocm.gpg.key \
     && rm -f /tmp/rocm.gpg.key \
-    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.3 ubuntu main" \
+    && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/${ROCM_APT_VERSION} noble main" \
         > /etc/apt/sources.list.d/rocm.list \
     && apt-get update && apt-get install -y --no-install-recommends \
-        rocm-smi rocminfo pciutils lshw dmidecode kmod util-linux \
+        amd-smi-lib rocm-smi-lib rocminfo \
+        lsb-release lshw pciutils dmidecode sudo kmod util-linux \
+        dkms hwloc numactl clinfo ethtool iproute2 initramfs-tools systemd \
     && wget --https-only --tries=3 --timeout=30 -qO /usr/bin/rocm_techsupport.sh \
         "https://raw.githubusercontent.com/amddcgpuce/rocmtechsupport/${ROCM_TECHSUPPORT_SHA}/rocm_techsupport.sh" \
     && chmod +x /usr/bin/rocm_techsupport.sh \
     && rm -rf /var/lib/apt/lists/*
+# ROCm tools (amd-smi, rocm-smi, rocminfo) install into /opt/rocm/bin, not on the default PATH.
+ENV PATH="/opt/rocm/bin:${PATH}"
 COPY --from=builder /report-runner /usr/local/bin/report-runner
 ENTRYPOINT ["/usr/local/bin/report-runner"]

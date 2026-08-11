@@ -19,4 +19,15 @@ services:
       - /etc/crusoe/bug-reports:/etc/crusoe/bug-reports
       # dmidecode reads the DMI tables from sysfs.
       - /sys/firmware/dmi:/sys/firmware/dmi:ro
+      # VM: prefer the host's driver-matched ROCm over the image's bundled fallback.
+      - /opt/rocm:/opt/rocm:ro
+      # Host install/config state read by rocm_techsupport.sh (read-only).
+      - /var/lib/dpkg:/var/lib/dpkg:ro        # dpkg -l: amdgpu-dkms / ROCm packages
+      - /lib/modules:/lib/modules:ro          # modinfo amdgpu
+      - /var/lib/dkms:/var/lib/dkms:ro        # dkms status
+      - /boot:/boot:ro                        # lsinitramfs
+      - /var/log/journal:/var/log/journal:ro  # journalctl -b -1/-2/-3 (needs host persistent journald)
+    environment:
+      # Pin the script to the host-mounted ROCm instead of auto-detecting the bundled copy.
+      - ROCM_VERSION=/opt/rocm
     restart: always
