@@ -101,7 +101,7 @@ func hostMetricsSource() map[string]any {
 		"network": map[string]any{
 			"devices": map[string]any{
 				"excludes": []string{"lo*"},
-				"includes": []string{"ens*"},
+				"includes": []string{"ens*", "enp*"},
 			},
 		},
 		"process": map[string]any{

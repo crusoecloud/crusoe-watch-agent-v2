@@ -92,11 +92,9 @@ func (w *Watcher) Run(ctx context.Context) error {
 		w.logger.Info("using existing vector config as baseline", "path", w.cfg.ConfigPath)
 	}
 
-	// Read node labels to populate K8sConfig.
-	nodeLabels, err := ReadNodeLabels(ctx, w.client, w.cfg.NodeName)
-	if err != nil {
-		return fmt.Errorf("reading node labels: %w", err)
-	}
+	// Resolve node labels, retrying until the API is reachable and the
+	// crusoe.ai/* identity labels are applied (both lag on a fresh node).
+	nodeLabels := w.resolveNodeLabels(ctx, nodeReadRetryInterval, nodeLabelWaitCap)
 
 	w.mu.Lock()
 	w.cfg.K8sCfg.NodeLabels = nodeLabels
@@ -163,6 +161,40 @@ func ReadNodeLabels(ctx context.Context, client kubernetes.Interface, nodeName s
 		ProjectID:    labels[nodeLabelProjectID],
 		Hostname:     labels[nodeLabelHostname],
 	}, nil
+}
+
+const (
+	nodeReadRetryInterval = 2 * time.Second
+	nodeLabelWaitCap      = 2 * time.Minute
+)
+
+// resolveNodeLabels retries the node read every retryInterval until the API is
+// reachable and the crusoe.ai/* identity labels are populated, giving up after waitCap.
+func (w *Watcher) resolveNodeLabels(ctx context.Context, retryInterval, waitCap time.Duration) vector.NodeLabels {
+	deadline := time.Now().Add(waitCap)
+
+	for {
+		labels, err := ReadNodeLabels(ctx, w.client, w.cfg.NodeName)
+		switch {
+		case err != nil:
+			w.logger.Warn("reading node labels failed; retrying", "error", err)
+		case labels.VMID != "" && labels.NodepoolID != "":
+			return labels
+		case time.Now().After(deadline):
+			w.logger.Warn("crusoe.ai identity labels still empty; proceeding without them",
+				"vm_id", labels.VMID, "nodepool_id", labels.NodepoolID)
+
+			return labels
+		default:
+			w.logger.Info("waiting for crusoe.ai identity labels")
+		}
+
+		select {
+		case <-ctx.Done():
+			return labels
+		case <-time.After(retryInterval):
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

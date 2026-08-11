@@ -103,8 +103,10 @@ subjects:
     name: {{ include "cwa.serviceAccountName" . }}
     namespace: {{ .Values.namespace }}
 ---
-# Least-privilege exec into the NVIDIA GPU Operator driver pod, scoped to its namespace,
-# so cwa-manager can run nvidia-bug-report.sh there for report.bug on GPU Operator nodes.
+{{- if lookup "v1" "Namespace" "" .Values.bugReport.driverNamespace }}
+# Exec into the GPU Operator driver pod to run nvidia-bug-report.sh (report.bug).
+# NVIDIA-only and scoped to the driver namespace — least privilege for pods/exec.
+# Rendered only when the driver namespace exists. On AMD, it is absent.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -135,3 +137,4 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "cwa.serviceAccountName" . }}
     namespace: {{ .Values.namespace }}
+{{- end }}

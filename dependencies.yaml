@@ -28,7 +28,7 @@ token-job: "v0.2.12"
 vector: "0.55.0"
 
 # crusoe-metrics-exporter: object-store metrics for VM (docker + native).
-crusoe-metrics-exporter: "0.2.4"
+crusoe-metrics-exporter: "0.2.7"
 
 # AMD device-metrics-exporter (docker only).
 amd-exporter: "v1.5.0"

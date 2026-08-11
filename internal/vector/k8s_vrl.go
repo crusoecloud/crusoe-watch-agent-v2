@@ -131,10 +131,10 @@ includes(metrics_allowlist, .name)
 func buildNodeMetricsTransformVRL(labels NodeLabels) string {
 	vrl := fmt.Sprintf(`.tags.nodepool = "%s"
 .tags.cluster_id = "${CRUSOE_CLUSTER_ID}"
-.tags.vm_id = "%s"
+.tags.vm_id = "${VM_ID}"
 .tags.vm_instance_type = "%s"
 .tags.node = "%s"
-`, labels.NodepoolID, labels.VMID, labels.InstanceType, labels.Hostname)
+`, labels.NodepoolID, labels.InstanceType, labels.Hostname)
 
 	if labels.PodID != "" {
 		vrl += fmt.Sprintf("if \"%s\" != \"\" { .tags.pod_id = \"%s\" }\n", labels.PodID, labels.PodID)
@@ -146,15 +146,13 @@ func buildNodeMetricsTransformVRL(labels NodeLabels) string {
 	return vrl
 }
 
-// buildCMETransformVRL generates VRL that tags Crusoe Metrics Exporter metrics.
-func buildCMETransformVRL(labels NodeLabels) string {
-	return fmt.Sprintf(`.tags.cluster_id = "${CRUSOE_CLUSTER_ID}"
+// vrlEnrichCME tags Crusoe Metrics Exporter metrics.
+const vrlEnrichCME = `.tags.cluster_id = "${CRUSOE_CLUSTER_ID}"
 .tags.project_id = "${CRUSOE_PROJECT_ID}"
-.tags.vm_id = "%s"
+.tags.vm_id = "${VM_ID}"
 .tags.crusoe_resource = "vm_custom_infra"
 .tags.metrics_source = "crusoe-metrics-exporter"
-`, labels.VMID)
-}
+`
 
 // buildCustomMetricsFilterVRL generates VRL lines that apply allowlist or droplist filtering.
 func buildCustomMetricsFilterVRL(deploymentCfg map[string]any) []string {
@@ -217,7 +215,7 @@ func buildCustomMetricsEnrichVRL(pod ClassifiedPod, labels NodeLabels) []string 
 	lines := []string{
 		fmt.Sprintf(".tags.nodepool = %q", labels.NodepoolID),
 		`.tags.cluster_id = "${CRUSOE_CLUSTER_ID}"`,
-		fmt.Sprintf(".tags.vm_id = %q", labels.VMID),
+		`.tags.vm_id = "${VM_ID}"`,
 		fmt.Sprintf(".tags.vm_instance_type = %q", labels.InstanceType),
 	}
 	if labels.PodID != "" {

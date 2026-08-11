@@ -308,7 +308,7 @@ func buildDynamicConfig(
 		sourceName:    "crusoe_metrics_exporter_scrape",
 		transformName: "enrich_crusoe_metrics_exporter",
 		sinkName:      "crusoe_metrics_exporter_sink",
-		transformVRL:  buildCMETransformVRL(cfg.NodeLabels),
+		transformVRL:  vrlEnrichCME,
 		sinkConfig: buildPromRemoteWriteSink(
 			cfg.infraEndpoint(), "cri:vm/${VM_ID}", cfg.Proxy,
 		),

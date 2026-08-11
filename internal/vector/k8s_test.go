@@ -233,7 +233,7 @@ func TestApplyCME(t *testing.T) {
 	assert.Contains(t, transforms, "enrich_crusoe_metrics_exporter")
 	xform := transforms["enrich_crusoe_metrics_exporter"].(map[string]any)
 	assert.Contains(t, xform["source"], "vm_custom_infra")
-	assert.Contains(t, xform["source"], "test-vm-id")
+	assert.Contains(t, xform["source"], `.tags.vm_id = "${VM_ID}"`)
 
 	sinks := getSinks(cfg)
 	assert.Contains(t, sinks, "crusoe_metrics_exporter_sink")
@@ -260,6 +260,7 @@ func TestApplyCustomMetrics(t *testing.T) {
 	assert.Contains(t, transforms, "svc_x_1_transform")
 	xform := transforms["svc_x_1_transform"].(map[string]any)
 	assert.Equal(t, true, xform["drop_on_abort"])
+	assert.Contains(t, xform["source"], `.tags.vm_id = "${VM_ID}"`)
 
 	sinks := getSinks(cfg)
 	assert.Contains(t, sinks, "svc_x_1_sink")
@@ -434,7 +435,7 @@ func TestNodeMetricsTransformHasNodeLabels(t *testing.T) {
 	transforms := getTransforms(cfg)
 	nodeTransform := transforms["enrich_node_metrics"].(map[string]any)
 	source := nodeTransform["source"].(string)
-	assert.Contains(t, source, "test-vm-id")
+	assert.Contains(t, source, `.tags.vm_id = "${VM_ID}"`)
 	assert.Contains(t, source, "test-nodepool-id")
 	assert.Contains(t, source, "test-instance-type")
 	assert.Contains(t, source, "test-node")

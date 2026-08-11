@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,7 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
@@ -113,6 +116,43 @@ func TestReadNodeLabels_MissingLabels(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "", labels.VMID)
 	assert.Equal(t, "", labels.NodepoolID)
+}
+
+func TestResolveNodeLabels_ReturnsWhenPresent(t *testing.T) {
+	w := New(Config{NodeName: "test-node", Logger: testLogger()}, fake.NewSimpleClientset(testNode()))
+
+	labels := w.resolveNodeLabels(context.Background(), time.Millisecond, time.Minute)
+	assert.Equal(t, "vm-abc-123", labels.VMID)
+	assert.Equal(t, "nodepool-1", labels.NodepoolID)
+}
+
+func TestResolveNodeLabels_RetriesThenSucceeds(t *testing.T) {
+	// Fail the node read twice (transient API error), then let it through.
+	client := fake.NewSimpleClientset(testNode())
+	var calls int
+	client.PrependReactor("get", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if calls++; calls < 3 {
+			return true, nil, errors.New("dial tcp: i/o timeout")
+		}
+
+		return false, nil, nil // fall through to the tracker, which returns the node
+	})
+
+	w := New(Config{NodeName: "test-node", Logger: testLogger()}, client)
+	labels := w.resolveNodeLabels(context.Background(), time.Millisecond, time.Minute)
+	assert.Equal(t, "nodepool-1", labels.NodepoolID)
+	assert.GreaterOrEqual(t, calls, 3)
+}
+
+func TestResolveNodeLabels_ContextCancelled(t *testing.T) {
+	// Node absent → read keeps erroring; a cancelled ctx must break the loop.
+	w := New(Config{NodeName: "missing", Logger: testLogger()}, fake.NewSimpleClientset())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	labels := w.resolveNodeLabels(ctx, time.Millisecond, time.Minute)
+	assert.Empty(t, labels.VMID)
 }
 
 func TestWatcher_WriteBaseConfig(t *testing.T) {

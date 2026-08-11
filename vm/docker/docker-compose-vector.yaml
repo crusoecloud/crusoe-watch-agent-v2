@@ -1,6 +1,6 @@
 services:
   cwa-vector:
-    image: ghcr.io/vectordotdev/vector:${VECTOR_VERSION}
+    image: ghcr.io/vectordotdev/vector:${VECTOR_VERSION}-debian
     container_name: cwa-vector
     hostname: cwa-vector
     volumes:

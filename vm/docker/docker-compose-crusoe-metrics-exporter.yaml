@@ -13,7 +13,7 @@ services:
     environment:
       - PORT=${CRUSOE_METRICS_EXPORTER_PORT:-9500}
       - DISKSTATS_PATH=/proc/diskstats
-      - MOUNTSTATS_PATH=/proc/self/mountstats
+      - MOUNTSTATS_PATH=/host/proc/1/mountstats
       - OBJSTORE_ENDPOINT_FQDN=${OBJSTORE_ENDPOINT_FQDN:-}
     ports:
       - "${CRUSOE_METRICS_EXPORTER_PORT:-9500}:${CRUSOE_METRICS_EXPORTER_PORT:-9500}"
