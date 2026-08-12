@@ -56,7 +56,6 @@ done
 # Configurable via flags
 ###############################################################################
 INSTALL_MODE="docker"   # "docker" or "native"
-CME_ENABLED=true
 MONITORING_TOKEN=""
 INGRESS_URL=""
 DCGM_EXPORTER_SKIP="false"   # set in dcgm_setup; leaves an existing Docker exporter untouched
@@ -133,10 +132,7 @@ validate_os_support() {
             fi
             ;;
         amd)
-            local major minor
-            major=$(echo "$UBUNTU_VERSION" | cut -d. -f1)
-            minor=$(echo "$UBUNTU_VERSION" | cut -d. -f2)
-            if (( major < 22 || (major == 22 && minor < 4) )); then
+            if version_lt "$UBUNTU_VERSION" "22.04"; then
                 error_exit "Ubuntu ${UBUNTU_VERSION} is not supported for AMD GPUs. Requires 22.04 or newer."
             fi
             ;;
@@ -167,11 +163,8 @@ validate_amd_deps() {
     if [[ -z "$rocm_ver" ]]; then
         error_exit "ROCm not detected. AMD GPU support requires ROCm 6.2.0+."
     fi
-    local major minor
-    major=$(echo "$rocm_ver" | cut -d. -f1)
-    minor=$(echo "$rocm_ver" | cut -d. -f2)
-    if (( major < 6 || (major == 6 && minor < 2) )); then
-        error_exit "ROCm $rocm_ver is too old. Requires 6.2.0+."
+    if version_lt "$rocm_ver" "6.2.0"; then
+        error_exit "ROCm $rocm_ver is not supported. Requires 6.2.0 or newer."
     fi
     status "ROCm $rocm_ver detected."
 }
@@ -523,7 +516,6 @@ AGENT_VERSION='${AGENT_VERSION}'
 CWA_MANAGER_VERSION='${CWA_MANAGER_VERSION}'
 REPORT_RUNNER_VERSION='${REPORT_RUNNER_VERSION}'
 VECTOR_VERSION='${VECTOR_VERSION}'
-CME_ENABLED='${CME_ENABLED}'
 INSTALL_TYPE='${install_type}'
 EOF
 
@@ -551,21 +543,19 @@ EOF
     fi
 
     # CME vars.
-    if [[ "$CME_ENABLED" == "true" ]]; then
-        echo "CRUSOE_METRICS_EXPORTER_PORT='${CME_PORT}'" >> "$ENV_FILE"
-        # Derive OBJSTORE_ENDPOINT_FQDN from the VM's hostname domain.
-        # Crusoe VMs have a domain like "us-east1-a.compute.internal"; the first
-        # dot-separated segment is the region.
-        local detected_domain
-        detected_domain=$(hostname -d 2>/dev/null || true)
-        if [[ -n "$detected_domain" ]]; then
-            local region="${detected_domain%%.*}"
-            echo "OBJSTORE_ENDPOINT_FQDN='object.${region}.crusoecloudcompute.com'" >> "$ENV_FILE"
-            status "Derived OBJSTORE_ENDPOINT_FQDN from hostname (region: ${region})"
-        fi
-        if [[ "$INSTALL_MODE" == "docker" ]]; then
-            echo "CME_VERSION='${CME_VERSION}'" >> "$ENV_FILE"
-        fi
+    echo "CRUSOE_METRICS_EXPORTER_PORT='${CME_PORT}'" >> "$ENV_FILE"
+    # Derive OBJSTORE_ENDPOINT_FQDN from the VM's hostname domain.
+    # Crusoe VMs have a domain like "us-east1-a.compute.internal"; the first
+    # dot-separated segment is the region.
+    local detected_domain
+    detected_domain=$(hostname -d 2>/dev/null || true)
+    if [[ -n "$detected_domain" ]]; then
+        local region="${detected_domain%%.*}"
+        echo "OBJSTORE_ENDPOINT_FQDN='object.${region}.crusoecloudcompute.com'" >> "$ENV_FILE"
+        status "Derived OBJSTORE_ENDPOINT_FQDN from hostname (region: ${region})"
+    fi
+    if [[ "$INSTALL_MODE" == "docker" ]]; then
+        echo "CME_VERSION='${CME_VERSION}'" >> "$ENV_FILE"
     fi
 
     chmod 640 "$ENV_FILE"
@@ -600,6 +590,14 @@ install_unit() {
     fi
 }
 
+# Install a systemd unit whose ExecStart/ExecStop drive a Compose file.
+#   $1 = unit filename; $2 = compose filename under CONFIG_DIR
+install_compose_unit() {
+    install_unit "$1" \
+        "/usr/bin/docker compose -f ${CONFIG_DIR}/$2 up" \
+        "/usr/bin/docker compose -f ${CONFIG_DIR}/$2 down"
+}
+
 install_systemd_units() {
     status "Installing systemd units..."
 
@@ -607,56 +605,40 @@ install_systemd_units() {
     if [[ "$INSTALL_MODE" == "docker" ]]; then
         download_file "vm/docker/docker-compose-cwa-manager.yaml" \
             "${CONFIG_DIR}/docker-compose-cwa-manager.yaml"
-        install_unit "cwa-manager.service" \
-            "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-cwa-manager.yaml up" \
-            "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-cwa-manager.yaml down"
+        install_compose_unit "cwa-manager.service" "docker-compose-cwa-manager.yaml"
     else
-        install_unit "cwa-manager.service" \
-            "${INSTALL_DIR}/cwa-manager"
+        install_unit "cwa-manager.service" "${INSTALL_DIR}/cwa-manager"
     fi
 
     # Vector
     if [[ "$INSTALL_MODE" == "docker" ]]; then
-        install_unit "cwa-vector.service" \
-            "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-vector.yaml up" \
-            "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-vector.yaml down"
+        install_compose_unit "cwa-vector.service" "docker-compose-vector.yaml"
     else
-        install_unit "cwa-vector.service" \
-            "/usr/bin/vector --config ${VECTOR_CONFIG} --watch-config"
+        install_unit "cwa-vector.service" "/usr/bin/vector --config ${VECTOR_CONFIG} --watch-config"
     fi
 
     # DCGM exporter
     if [[ "$GPU_TYPE" == "nvidia" ]]; then
-        if [[ "$INSTALL_MODE" == "docker" ]]; then
-            if [[ "$DCGM_EXPORTER_SKIP" == "true" ]]; then
-                status "Keeping existing crusoe-dcgm-exporter.service unit."
-            else
-                install_unit "crusoe-dcgm-exporter.service" \
-                    "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-dcgm-exporter.yaml up" \
-                    "/usr/bin/docker compose -f ${CONFIG_DIR}/docker-compose-dcgm-exporter.yaml down"
-            fi
-        else
+        if [[ "$INSTALL_MODE" != "docker" ]]; then
             install_unit "crusoe-dcgm-exporter.service" \
                 "/usr/bin/dcgm-exporter -f ${CONFIG_DIR}/dcp-metrics-included.csv -r localhost:5555 -a :${DCGM_EXPORTER_PORT}"
+        elif [[ "$DCGM_EXPORTER_SKIP" == "true" ]]; then
+            status "Keeping existing crusoe-dcgm-exporter.service unit."
+        else
+            install_compose_unit "crusoe-dcgm-exporter.service" "docker-compose-dcgm-exporter.yaml"
         fi
     fi
 
-    # Report runner (native): the bug-report collector service (NVIDIA-only).
-    if [[ "$INSTALL_MODE" == "native" && "$GPU_TYPE" == "nvidia" ]]; then
-        install_unit "cwa-report-runner.service" \
-            "${INSTALL_DIR}/report-runner"
-    fi
-
-    # Report runner (Docker): sidecar container that runs the vendor bug-report tool.
-    if [[ "$INSTALL_MODE" == "docker" ]]; then
-        local runner_compose=""
-        [[ "$GPU_TYPE" == "nvidia" ]] && runner_compose="docker-compose-cwa-report-runner.yaml"
-        [[ "$GPU_TYPE" == "amd" ]]    && runner_compose="docker-compose-cwa-report-runner-amd.yaml"
-        if [[ -n "$runner_compose" ]]; then
+    # Report runner: the bug-report collector. Native mode runs the binary.
+    # Docker mode runs a sidecar container with the vendor bug-report tool.
+    if [[ "$GPU_TYPE" != "none" ]]; then
+        if [[ "$INSTALL_MODE" == "native" ]]; then
+            install_unit "cwa-report-runner.service" "${INSTALL_DIR}/report-runner"
+        else
+            local runner_compose="docker-compose-cwa-report-runner.yaml"
+            [[ "$GPU_TYPE" == "amd" ]] && runner_compose="docker-compose-cwa-report-runner-amd.yaml"
             download_file "vm/docker/${runner_compose}" "${CONFIG_DIR}/${runner_compose}"
-            install_unit "cwa-report-runner.service" \
-                "/usr/bin/docker compose -f ${CONFIG_DIR}/${runner_compose} up" \
-                "/usr/bin/docker compose -f ${CONFIG_DIR}/${runner_compose} down"
+            install_compose_unit "cwa-report-runner.service" "$runner_compose"
         fi
     fi
 
@@ -666,9 +648,36 @@ install_systemd_units() {
     fi
 
     # CME Docker (native installs its own unit from tarball)
-    if [[ "$CME_ENABLED" == "true" && "$INSTALL_MODE" == "docker" ]]; then
+    if [[ "$INSTALL_MODE" == "docker" ]]; then
         install_unit "crusoe-metrics-exporter.service"
     fi
+}
+
+###############################################################################
+# Container images & readiness
+###############################################################################
+# Pull images ($1 = label, $@ = compose files) so the units start instantly and
+# the download stays outside wait_for_containers' deadline. Local images no-op.
+pull_images() {
+    local label="$1"; shift
+    status "Pre-pulling ${label} images..."
+    for cf in "$@"; do
+        [[ -f "$cf" ]] || continue
+        docker compose -f "$cf" pull || echo "WARNING: failed to pull $(basename "$cf")" >&2
+    done
+}
+
+# Wait for the containers themselves to be active, under one shared deadline.
+wait_for_containers() {
+    status "Waiting for containers: $*"
+    local deadline=$((SECONDS + 120)) c
+    for c in "$@"; do
+        until [[ "$(docker inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" == "true" ]]; do
+            (( SECONDS < deadline )) \
+                || error_exit "container ${c} not running after 120s. Check: sudo docker ps -a; journalctl -u ${c}"
+            sleep 2
+        done
+    done
 }
 
 ###############################################################################
@@ -800,10 +809,7 @@ do_install() {
         amd)    amd_setup ;;
     esac
 
-    # Optional CME.
-    if [[ "$CME_ENABLED" == "true" ]]; then
-        cme_setup
-    fi
+    cme_setup
 
     write_env_file "$vm_id"
     mkdir -p /var/lib/vector
@@ -817,8 +823,17 @@ do_install() {
     status "Starting services..."
     systemctl daemon-reload
 
+    if [[ "$INSTALL_MODE" == "docker" ]]; then
+        pull_images "cwa-manager" "${CONFIG_DIR}/docker-compose-cwa-manager.yaml"
+    fi
+
     systemctl enable cwa-manager.service
     systemctl restart cwa-manager.service
+
+    # Gate on the container first, so the config wait below times the manager, not Docker.
+    if [[ "$INSTALL_MODE" == "docker" ]]; then
+        wait_for_containers cwa-manager
+    fi
 
     status "Waiting for cwa-manager to write ${VECTOR_CONFIG}..."
     for _ in $(seq 1 60); do
@@ -830,16 +845,23 @@ do_install() {
     # Exporters before Vector, so its first scrapes find them listening.
     local services=()
     [[ "$GPU_TYPE" == "nvidia" && "$DCGM_EXPORTER_SKIP" != "true" ]] && services+=("crusoe-dcgm-exporter.service")
-    [[ "$INSTALL_MODE" == "native" && "$GPU_TYPE" == "nvidia" ]] && services+=("cwa-report-runner.service")
-    [[ "$INSTALL_MODE" == "docker" && ( "$GPU_TYPE" == "nvidia" || "$GPU_TYPE" == "amd" ) ]] && services+=("cwa-report-runner.service")
+    [[ "$GPU_TYPE" != "none" ]]   && services+=("cwa-report-runner.service")
     [[ "$GPU_TYPE" == "amd" ]]    && services+=("crusoe-amd-exporter.service")
-    [[ "$CME_ENABLED" == "true" ]] && services+=("crusoe-metrics-exporter.service")
-    services+=("cwa-vector.service")
+    services+=("crusoe-metrics-exporter.service" "cwa-vector.service")
+
+    if [[ "$INSTALL_MODE" == "docker" ]]; then
+        pull_images "exporter and Vector" "${CONFIG_DIR}"/docker-compose-*.yaml
+    fi
 
     for svc in "${services[@]}"; do
         systemctl enable "$svc"
         systemctl restart "$svc"
     done
+
+    # Every compose container_name matches its unit name, so strip the suffix.
+    if [[ "$INSTALL_MODE" == "docker" ]]; then
+        wait_for_containers "${services[@]%.service}"
+    fi
 
     echo ""
     status "Install complete. Check status:"
@@ -847,7 +869,7 @@ do_install() {
     echo "  systemctl status cwa-vector"
     [[ "$GPU_TYPE" == "nvidia" ]] && echo "  systemctl status crusoe-dcgm-exporter"
     [[ "$GPU_TYPE" == "amd" ]]    && echo "  systemctl status crusoe-amd-exporter"
-    [[ "$CME_ENABLED" == "true" ]] && echo "  systemctl status crusoe-metrics-exporter"
+    echo "  systemctl status crusoe-metrics-exporter"
 }
 
 do_uninstall() {
@@ -872,18 +894,10 @@ do_uninstall() {
 
     # Tear down Docker Compose services and clean up containers.
     if command_exists docker; then
-        local compose_files=(
-            docker-compose-cwa-manager.yaml
-            docker-compose-vector.yaml
-            docker-compose-dcgm-exporter.yaml
-            docker-compose-amd-exporter.yaml
-            docker-compose-crusoe-metrics-exporter.yaml
-        )
-        for cf in "${compose_files[@]}"; do
-            if [[ -f "${CONFIG_DIR}/${cf}" ]]; then
-                status "Removing Docker containers: ${cf}"
-                docker compose -f "${CONFIG_DIR}/${cf}" down --remove-orphans 2>/dev/null || true
-            fi
+        for cf in "${CONFIG_DIR}"/docker-compose-*.yaml; do
+            [[ -f "$cf" ]] || continue
+            status "Removing Docker containers: $(basename "$cf")"
+            docker compose -f "$cf" down --remove-orphans 2>/dev/null || true
         done
     fi
 
@@ -1009,7 +1023,6 @@ Commands:
 Install Options:
   --no-docker                Use native Vector binary (default: Docker)
   --token TOKEN              Monitoring token (prompted if omitted; use single quotes)
-  --cme                      Enable Crusoe Metrics Exporter
   --ingress-url URL          Override CMS base URL
   --dcgm-exporter-port PORT  DCGM exporter port (default: 9400)
   --amd-exporter-port PORT   AMD exporter port (default: 5000)
@@ -1021,7 +1034,6 @@ Examples:
   sudo ./crusoe_watch_agent.sh install
   sudo ./crusoe_watch_agent.sh install --no-docker
   sudo ./crusoe_watch_agent.sh install --token "$(crusoe monitoring tokens create -f token)"
-  sudo ./crusoe_watch_agent.sh install --cme
   sudo ./crusoe_watch_agent.sh upgrade
   sudo ./crusoe_watch_agent.sh refresh-token
   sudo ./crusoe_watch_agent.sh uninstall
@@ -1045,10 +1057,6 @@ while [[ $# -gt 0 ]]; do
         --token)
             MONITORING_TOKEN="${2:?Missing value for --token}"
             shift 2
-            ;;
-        --cme)
-            CME_ENABLED=true
-            shift
             ;;
         --ingress-url)
             INGRESS_URL="${2:?Missing value for --ingress-url}"

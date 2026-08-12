@@ -125,6 +125,13 @@ container_scanning:
       exists:
         - Dockerfile
 
+# Skip the shared template's image build on tag pipelines (vm/v2.x).
+build_and_push:
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      when: never
+    - !reference [.build_and_push, rules]
+
 code_intelligence:
   rules:
     - when: never

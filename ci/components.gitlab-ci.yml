@@ -13,6 +13,7 @@
 .build-image:
   stage: build
   image: docker:27
+  retry: 2
   services:
     - docker:27-dind
   variables:
