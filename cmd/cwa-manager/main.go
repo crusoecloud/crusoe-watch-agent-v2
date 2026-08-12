@@ -106,6 +106,8 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	logger.Info("identity resolved", "vm_id", ident.VMID, "install_type", ident.InstallType.String(),
 		"agent_id", ident.AgentID, "region", ident.Region)
 
+	vmCfg.DockerMode = ident.InstallType == pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER
+
 	deps := buildDeps(ident, vmCfg)
 
 	// On K8s, build the in-cluster client once and share it between the config watcher and the bug-report generator.
