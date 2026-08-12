@@ -60,6 +60,7 @@ CME_ENABLED=true
 MONITORING_TOKEN=""
 INGRESS_URL=""
 DCGM_EXPORTER_SKIP="false"   # set in dcgm_setup; leaves an existing Docker exporter untouched
+DCGM_REINSTALLED="false"     # set in dcgm_apt_install; the hostengine restarted, so exporters must too
 
 ###############################################################################
 # Helpers
@@ -272,12 +273,34 @@ setup_nvidia_cuda_repo() {
     status "NVIDIA CUDA apt repository configured."
 }
 
+# Detect for DCGM's proprietary profiling module.
+dcgm_profiling_available() {
+    local libs pkg_status
+
+    libs=$(ldconfig -p 2>/dev/null || true)
+    [[ "$libs" == *libdcgmmoduleprofiling* ]] && return 0
+
+    compgen -G "/usr/lib/*/libdcgmmoduleprofiling.so*" >/dev/null && return 0
+
+    pkg_status=$(dpkg-query -W -f='${Status}' datacenter-gpu-manager-4-proprietary 2>/dev/null || true)
+    [[ "$pkg_status" == *"install ok installed"* ]]
+}
+
 # Purge old DCGM, detect CUDA version, install DCGM 4.x, start service.
 dcgm_apt_install() {
-    # Purge any existing DCGM packages.
     systemctl --now disable nvidia-dcgm 2>/dev/null || true
-    dpkg --list datacenter-gpu-manager &>/dev/null && apt-get purge --yes datacenter-gpu-manager 2>/dev/null || true
-    dpkg --list datacenter-gpu-manager-config &>/dev/null && apt-get purge --yes datacenter-gpu-manager-config 2>/dev/null || true
+
+    # Purge first: apt only pulls the profiling module recommend for a package it considers new.
+    local -a installed=()
+    while IFS= read -r pkg; do
+        [[ -n "$pkg" ]] && installed+=("$pkg")
+    done < <(dpkg-query -W -f='${Package} ${Status}\n' 'datacenter-gpu-manager*' 2>/dev/null \
+        | awk '$NF != "not-installed" { print $1 }')
+
+    if (( ${#installed[@]} > 0 )); then
+        status "Purging existing DCGM packages: ${installed[*]}"
+        apt-get purge --yes "${installed[@]}" || true
+    fi
 
     local cuda_version
     cuda_version=$(nvidia-smi 2>/dev/null | sed -E -n 's/.*CUDA Version: ([0-9]+)\..*/\1/p')
@@ -288,6 +311,7 @@ dcgm_apt_install() {
     apt-get install --yes --install-recommends "datacenter-gpu-manager-4-cuda${cuda_version}" \
         || error_exit "Failed to install datacenter-gpu-manager-4-cuda${cuda_version}."
     systemctl --now enable nvidia-dcgm || error_exit "Failed to start nvidia-dcgm service."
+    DCGM_REINSTALLED="true"
 }
 
 dcgm_install() {
@@ -298,15 +322,24 @@ dcgm_install() {
         major=$(dcgmi --version 2>/dev/null | grep -i 'version:' | awk '{print $3}' | cut -d. -f1)
         major="${major:-0}"
         if (( major >= 4 )); then
-            status "DCGM version ${major}.x — no upgrade needed."
-            return
+            if dcgm_profiling_available; then
+                status "DCGM version ${major}.x — no upgrade needed."
+                return
+            fi
+            status "DCGM ${major}.x has no profiling module — reinstalling for DCGM_FI_PROF_* metrics."
+        else
+            status "DCGM version ${major}.x < 4.x — upgrading..."
         fi
-        status "DCGM version ${major}.x < 4.x — upgrading..."
     else
         status "Installing DCGM (Data Center GPU Manager)..."
     fi
     dcgm_apt_install
-    status "DCGM ready."
+
+    if dcgm_profiling_available; then
+        status "DCGM ready."
+    else
+        echo "WARNING: DCGM profiling module still not found; DCGM_FI_PROF_* metrics will be empty." >&2
+    fi
 }
 
 dcgm_setup() {
@@ -320,6 +353,12 @@ dcgm_setup() {
     fi
 
     dcgm_install
+
+    if [[ "$DCGM_EXPORTER_SKIP" == "true" && "$DCGM_REINSTALLED" == "true" ]]; then
+        DCGM_EXPORTER_SKIP="false"
+        status "DCGM was reinstalled; redeploying crusoe-dcgm-exporter.service to reconnect."
+    fi
+
     download_file "vm/config/dcp-metrics-included.csv" "${CONFIG_DIR}/dcp-metrics-included.csv"
 
     if [[ "$INSTALL_MODE" == "docker" ]]; then
