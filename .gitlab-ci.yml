@@ -8,10 +8,12 @@ include:
   # Flow A: per-component image builds (Docker images tagged :YYYY.MM.DD-sha,
   # published to the internal GitLab Container Registry, no :latest).
   - local: 'ci/components.gitlab-ci.yml'
-  # Manual, tag-anchored release jobs. One per delivery mode; they share
+  # Manual, tag-anchored release jobs. One per independently released artifact
+  # (vm script, agent chart, cwa-updater chart); they share
   # ci/scripts/release.sh as the orchestrator.
   - local: 'ci/release-vm.gitlab-ci.yml'
   - local: 'ci/release-k8s.gitlab-ci.yml'
+  - local: 'ci/release-updater.gitlab-ci.yml'
 
 # Pipeline stages. Builds (per-component images) run continuously; the manual
 # release job lives in a later stage so a `release:*` button only appears
@@ -88,24 +90,27 @@ vector:validate:
         - ci/vector-config-dump/**/*
         - go.*
 
-# Lints and template-renders the Helm chart.
+# Lints and template-renders both Helm charts (agent + cwa-updater).
 helm:lint:
   stage: test
   image: alpine/helm:3.16.2
   script:
-    - cp -r k8s/helm-chart /tmp/chart
-    - sed -i 's/@@CHART_VERSION@@/0.0.0-ci/; s/@@CHART_APP_VERSION@@/0.0.0-ci/' /tmp/chart/Chart.yaml
-    - helm lint /tmp/chart
-    - helm template ci-check /tmp/chart >/dev/null
+    - |
+      for c in helm-chart cwa-updater-chart; do
+        cp -r "k8s/${c}" "/tmp/${c}"
+        sed -i 's/@@CHART_VERSION@@/0.0.0-ci/; s/@@CHART_APP_VERSION@@/0.0.0-ci/' "/tmp/${c}/Chart.yaml"
+        helm lint "/tmp/${c}"
+        helm template ci-check "/tmp/${c}" >/dev/null
+      done
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - .gitlab-ci.yml
-        - k8s/helm-chart/**/*
+        - k8s/**/*
     - if: '$CI_COMMIT_BRANCH == "main"'
       changes:
         - .gitlab-ci.yml
-        - k8s/helm-chart/**/*
+        - k8s/**/*
 
 tag_semver:
   rules:

@@ -1,0 +1,18 @@
+# Fixed address for the handoff POST from every DaemonSet pod:
+# http://cwa-updater.<namespace>.svc.cluster.local:8786/upgrade
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cwaUpdater.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cwaUpdater.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "cwaUpdater.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.cwaUpdater.port }}
+      targetPort: http
+      protocol: TCP

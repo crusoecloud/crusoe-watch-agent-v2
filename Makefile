@@ -11,7 +11,7 @@ VECTOR_VERSION := $(shell grep '^vector:' dependencies.yaml | awk '{print $$2}' 
 GO_COVER_PACKAGES = $(shell go list ${MODULE}/... | grep -v -e '/ci/' | tr '\n' ',')
 
 .PHONY: build
-build: build-cwa-manager build-report-runner
+build: build-cwa-manager build-report-runner build-cwa-updater
 
 .PHONY: build-cwa-manager
 build-cwa-manager:
@@ -20,6 +20,10 @@ build-cwa-manager:
 .PHONY: build-report-runner
 build-report-runner:
 	@go build -o ${BUILDDIR}/report-runner ${GO_LDFLAGS} ./cmd/report-runner
+
+.PHONY: build-cwa-updater
+build-cwa-updater:
+	@go build -o ${BUILDDIR}/cwa-updater ${GO_LDFLAGS} ./cmd/cwa-updater
 
 .PHONY: cross
 cross:

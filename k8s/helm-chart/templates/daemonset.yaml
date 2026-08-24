@@ -13,10 +13,16 @@ spec:
     metadata:
       labels:
         {{- include "cwa.selectorLabels" . | nindent 8 }}
+        # Separates agent pods from report-runner pods, which share the selector
+        # labels. The headless Service selects on this.
+        app.kubernetes.io/component: agent
     spec:
       serviceAccountName: {{ include "cwa.serviceAccountName" . }}
       automountServiceAccountToken: true
       hostNetwork: true
+      # Required with hostNetwork: the node's resolver can't resolve
+      # cwa-updater.<ns>.svc.cluster.local.
+      dnsPolicy: ClusterFirstWithHostNet
       # 35 - 5s preStop = 30s SIGTERM grace; must exceed the heartbeat shutdown budget (heartbeat.go).
       terminationGracePeriodSeconds: 35
       {{- with .Values.imagePullSecrets }}
@@ -83,6 +89,10 @@ spec:
         # --- cwa-manager ---
         - name: cwa-manager
           image: "{{ .Values.cwaManager.image }}:{{ .Values.cwaManager.tag }}"
+          ports:
+            - name: health
+              containerPort: {{ .Values.cwaManager.healthPort }}
+              protocol: TCP
           lifecycle:
             # Delay SIGTERM so the shutdown handler doesn't race kubelet teardown.
             preStop:
@@ -97,6 +107,12 @@ spec:
               value: {{ .Chart.AppVersion | quote }}
             - name: CWA_STATE_DIR
               value: /var/lib/cwa-manager
+            - name: CWA_HEALTH_PORT
+              value: {{ .Values.cwaManager.healthPort | quote }}
+            - name: CWA_UPDATER_HOST
+              value: {{ .Values.cwaUpdater.host | default (printf "cwa-updater.%s.svc.cluster.local" .Values.namespace) | quote }}
+            - name: CWA_UPDATER_PORT
+              value: {{ .Values.cwaUpdater.port | quote }}
             - name: CRUSOE_MONITORING_TOKEN
               valueFrom:
                 secretKeyRef:

@@ -3,7 +3,7 @@
 # manual GitLab release job for vm or k8s.
 #
 # Inputs (all via env, supplied by the GitLab job):
-#   MODE                vm | k8s                    (required)
+#   MODE                vm | k8s | updater          (required)
 #   RELEASE_SHA         commit to release           (default: HEAD)
 #   DRY_RUN             true | false                (default: false)
 #   GHCR_REGISTRY       e.g. ghcr.io/crusoecloud/crusoe-watch-agent-v2
@@ -18,8 +18,8 @@
 #   1. Resolve RELEASE_SHA, compute next per-mode version (e.g. v1.4).
 #   2. Check out a worktree at RELEASE_SHA (clean, isolated).
 #   3. Render templates from RELEASE_SHA's dependencies.yaml.
-#   4. Publish artifacts: cosign-sign; for k8s, push chart to ghcr.io and
-#      move the per-mode "latest" pointer.
+#   4. Publish artifacts: cosign-sign; for k8s/updater, push the mode's chart to
+#      ghcr.io and move that chart's "latest" pointer.
 #   5. Generate notes from conventional-commit subjects in the tag range.
 #   6. Create the GitHub Release (materializes the tag on the GitHub mirror).
 #   7. Push the tag to GitLab — done last so a mid-flight failure leaves no
@@ -34,7 +34,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPTS="${REPO_ROOT}/ci/scripts"
 
 MODE_PATHS_vm="vm/ dependencies.yaml"
-MODE_PATHS_k8s="k8s/ dependencies.yaml"
+MODE_PATHS_k8s="k8s/helm-chart/ dependencies.yaml"
+MODE_PATHS_updater="k8s/cwa-updater-chart/ cmd/cwa-updater/ dependencies.yaml"
 
 mode_paths() {
     local v="MODE_PATHS_${1}"
@@ -105,14 +106,29 @@ publish_vm() {
 }
 
 publish_k8s() {
-    local chart_dir="${RENDER_OUT}/helm-chart"
     local chart_version="${NEW_VERSION#v}"
-    log "Packaging chart ${chart_version}"
-    helm package "$chart_dir" -d "$RENDER_OUT"
-    local tgz
-    tgz=$(ls "${RENDER_OUT}/crusoe-watch-agent-${chart_version}"*.tgz)
 
-    log "Pushing chart to ${GHCR_REGISTRY}"
+    publish_chart crusoe-watch-agent helm-chart "$chart_version" "K8s Agent ${NEW_VERSION}"
+}
+
+publish_updater() {
+    local chart_version="${NEW_VERSION#v}"
+
+    publish_chart cwa-updater cwa-updater-chart "$chart_version" "cwa-updater ${NEW_VERSION}"
+}
+
+# Package, push, sign, and release a single rendered chart.
+#   $1 chart name (also the OCI repo name)   $2 rendered dir under RENDER_OUT
+#   $3 chart version                         $4 GitHub Release title
+publish_chart() {
+    local chart="$1" src_dir="$2" chart_version="$3" title="$4"
+    local tgz
+
+    log "Packaging ${chart} ${chart_version}"
+    helm package "${RENDER_OUT}/${src_dir}" -d "$RENDER_OUT"
+    tgz=$(ls "${RENDER_OUT}/${chart}-${chart_version}"*.tgz)
+
+    log "Pushing ${chart} to ${GHCR_REGISTRY}"
     helm registry login -u "$GHCR_USERNAME" --password-stdin ghcr.io <<<"$GHCR_TOKEN"
     helm push "$tgz" "oci://${GHCR_REGISTRY}/charts"
 
@@ -125,13 +141,13 @@ publish_k8s() {
     echo "$COSIGN_PRIVATE_KEY_B64" | base64 -d > "$key"
     chmod 600 "$key"
     cosign sign --yes --key "$key" \
-        "${GHCR_REGISTRY}/charts/crusoe-watch-agent:${chart_version}"
+        "${GHCR_REGISTRY}/charts/${chart}:${chart_version}"
     rm -f "$key"
 
-    # Move the K8s "latest" pointer to this chart version.
+    # Move this chart's "latest" pointer to the version just pushed.
     docker buildx imagetools create \
-        --tag "${GHCR_REGISTRY}/charts/crusoe-watch-agent:latest" \
-        "${GHCR_REGISTRY}/charts/crusoe-watch-agent:${chart_version}"
+        --tag "${GHCR_REGISTRY}/charts/${chart}:latest" \
+        "${GHCR_REGISTRY}/charts/${chart}:${chart_version}"
 
     local notes_file
     notes_file=$(generate_notes "$NEW_TAG")
@@ -139,9 +155,9 @@ publish_k8s() {
     log "Creating GitHub Release ${NEW_TAG}"
     GH_REPO="$GITHUB_REPO" gh release create "$NEW_TAG" \
         --target "$RELEASE_SHA" \
-        --title "K8s Agent ${NEW_VERSION}" \
+        --title "$title" \
         ${notes_file:+--notes-file "$notes_file"} \
-        "${tgz}#crusoe-watch-agent-${chart_version}.tgz"
+        "${tgz}#${chart}-${chart_version}.tgz"
 }
 
 ###############################################################################
@@ -151,7 +167,7 @@ MODE="${MODE:-}"
 RELEASE_SHA="${RELEASE_SHA:-}"
 DRY_RUN="${DRY_RUN:-false}"
 
-case "$MODE" in vm|k8s) ;; *) die "MODE must be vm or k8s" ;; esac
+case "$MODE" in vm|k8s|updater) ;; *) die "MODE must be vm, k8s or updater" ;; esac
 
 if [[ -z "$RELEASE_SHA" ]]; then
     RELEASE_SHA="$(git rev-parse HEAD)"
@@ -197,8 +213,9 @@ RENDER_OUT="${WORK}/_render"
 "${WORK}/ci/scripts/render.sh" "$MODE" "$NEW_VERSION" "$RENDER_OUT"
 
 case "$MODE" in
-    vm)  publish_vm  ;;
-    k8s) publish_k8s ;;
+    vm)      publish_vm      ;;
+    k8s)     publish_k8s     ;;
+    updater) publish_updater ;;
 esac
 
 log "Pushing tag ${NEW_TAG} to GitLab"

@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cwaUpdater.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cwaUpdater.labels" . | nindent 4 }}
+spec:
+  # Single replica: the handoff ConfigMap is the durable lock, so a second adds
+  # contention without improving reliability.
+  replicas: 1
+  strategy:
+    # Recreate, not RollingUpdate: two updaters must never race on the handoff
+    # ConfigMap. A restart mid-upgrade recovers from the persisted state.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "cwaUpdater.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "cwaUpdater.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "cwaUpdater.serviceAccountName" . }}
+      automountServiceAccountToken: true
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: cwa-updater
+          image: "{{ .Values.cwaUpdater.image }}:{{ .Values.cwaUpdater.tag }}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.cwaUpdater.port }}
+              protocol: TCP
+          env:
+            - name: INSTALL_TYPE
+              value: "kubernetes"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CWA_UPDATER_PORT
+              value: {{ .Values.cwaUpdater.port | quote }}
+            - name: CWA_UPDATER_HANDOFF_CONFIGMAP
+              value: {{ .Values.handoffConfigMap | quote }}
+            - name: AGENT_RELEASE_NAME
+              value: {{ .Values.agent.releaseName | quote }}
+            - name: AGENT_CHART_REPO
+              value: {{ .Values.agent.chartRepo | quote }}
+            - name: AGENT_CHART_NAME
+              value: {{ .Values.agent.chartName | quote }}
+            - name: AGENT_HEALTH_SERVICE
+              value: {{ .Values.agent.healthService | quote }}
+            - name: AGENT_HEALTH_PORT
+              value: {{ .Values.agent.healthPort | quote }}
+            - name: UPGRADE_ROLLBACK_WINDOW_MIN
+              value: {{ .Values.upgrade.rollbackWindowMin | quote }}
+            - name: UPGRADE_ACK_TIMEOUT_MIN
+              value: {{ .Values.upgrade.ackTimeoutMin | quote }}
+            # Helm's HOME-relative dirs must land on the writable emptyDir.
+            - name: HELM_CACHE_HOME
+              value: /tmp/helm/cache
+            - name: HELM_CONFIG_HOME
+              value: /tmp/helm/config
+            - name: HELM_DATA_HOME
+              value: /tmp/helm/data
+            {{- if .Values.proxy.enabled }}
+            - name: HTTP_PROXY
+              value: {{ .Values.proxy.http | quote }}
+            - name: HTTPS_PROXY
+              value: {{ .Values.proxy.https | quote }}
+            - name: NO_PROXY
+              value: {{ .Values.proxy.noProxy | quote }}
+            {{- end }}
+          # /health is 200 in every upgrade state, so it is safe as both probes:
+          # a long-running upgrade must not restart the pod.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        # Scratch space for the pulled chart and Helm's cache/config/data dirs.
+        - name: tmp
+          emptyDir: {}

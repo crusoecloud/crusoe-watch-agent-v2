@@ -297,11 +297,11 @@ func TestGenerateVM_InternalMetricsVersionLabel(t *testing.T) {
 	cfg := parsedVM(t, VMConfig{GPUType: GPUNone})
 
 	// The agent version rides on Vector's internal metrics (incl. build_info)
-	// as a tag. VM/Docker uses agent_version, never helm_version.
+	// as a tag. VM/Docker uses agent_version, never chart_version.
 	src := transforms(cfg)["add_internal_labels"].(map[string]any)["source"].(string)
 	assert.Contains(t, src, `.tags.vm_id = "${VM_ID}"`)
 	assert.Contains(t, src, `.tags.agent_version = "${AGENT_VERSION}"`)
-	assert.NotContains(t, src, "helm_version")
+	assert.NotContains(t, src, "chart_version")
 }
 
 func TestGenerateVM_ValidYAML(t *testing.T) {

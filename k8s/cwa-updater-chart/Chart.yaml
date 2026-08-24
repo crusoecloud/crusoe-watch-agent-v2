@@ -1,0 +1,7 @@
+apiVersion: v2
+name: cwa-updater
+description: Helm chart for cwa-updater (crusoe-watch-agent v2 upgrade executor)
+type: application
+# Stamped by the release pipeline at render time.
+version: "@@CHART_VERSION@@"
+appVersion: "@@CHART_APP_VERSION@@"

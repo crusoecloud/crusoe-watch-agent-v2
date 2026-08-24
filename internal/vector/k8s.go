@@ -515,16 +515,32 @@ func applyLogs(sources, transforms, sinks map[string]any, cfg K8sConfig) {
 		"include":   []string{"/var/log/pods/*/report-runner/*.log"},
 		"read_from": "beginning",
 	}
+	sources["cwa_updater_logs"] = map[string]any{
+		"type":      "file",
+		"include":   []string{"/var/log/pods/*/cwa-updater/*.log"},
+		"read_from": "beginning",
+	}
 
 	transforms["filter_journald_noise"] = filterTransform([]string{"journald_logs"}, vrlFilterJournaldNoise)
 	transforms["parse_journald_logs"] = remapTransform([]string{"filter_journald_noise"}, vrlParseJournaldLogsK8s)
 	transforms["parse_internal_logs"] = remapTransform([]string{"vector_internal_logs"}, vrlParseInternalLogs)
 	transforms["parse_cwa_manager_logs"] = remapTransform([]string{"cwa_manager_logs"}, vrlParseCwaManagerLogsK8s)
 	transforms["parse_report_runner_logs"] = remapTransform([]string{"report_runner_logs"}, vrlParseReportRunnerLogsK8s)
+	transforms["parse_cwa_updater_logs"] = remapTransform([]string{"cwa_updater_logs"}, vrlParseCwaUpdaterLogsK8s)
 	transforms["enrich_logs"] = remapTransform(
-		[]string{"parse_journald_logs", "parse_internal_logs", "parse_cwa_manager_logs", "parse_report_runner_logs"},
+		[]string{
+			"parse_journald_logs",
+			"parse_internal_logs",
+			"parse_cwa_manager_logs",
+			"parse_report_runner_logs",
+			"parse_cwa_updater_logs",
+		},
 		vrlEnrichLogsK8s)
 
+	sinks["crusoe_ingest"] = buildLogsSink(cfg)
+}
+
+func buildLogsSink(cfg K8sConfig) map[string]any {
 	sinkConfig := map[string]any{
 		"type":        "http",
 		"inputs":      []string{"enrich_logs"},
@@ -547,7 +563,8 @@ func applyLogs(sources, transforms, sinks map[string]any, cfg K8sConfig) {
 	if cfg.Proxy.Enabled {
 		sinkConfig["proxy"] = cfg.Proxy.toMap()
 	}
-	sinks["crusoe_ingest"] = sinkConfig
+
+	return sinkConfig
 }
 
 // ---------------------------------------------------------------------------

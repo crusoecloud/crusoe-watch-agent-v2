@@ -1,0 +1,22 @@
+# Headless Service over the DaemonSet pods: cwa-updater reads its Endpoints to
+# poll per-pod health after a rolling update. The pods are hostNetwork, so these
+# addresses are node IPs.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cwa.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cwa.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  # List rolling pods, not just Ready ones, so a stuck pod stays pollable.
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "cwa.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: agent
+  ports:
+    - name: health
+      port: {{ .Values.cwaManager.healthPort }}
+      targetPort: health
+      protocol: TCP

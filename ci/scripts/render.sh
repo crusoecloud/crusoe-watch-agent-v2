@@ -5,11 +5,13 @@
 # release pipeline uploads it but never commits it back to the repo.
 #
 # Usage:
-#   render.sh vm  <release-version> <out-dir>
-#   render.sh k8s <release-version> <out-dir>
+#   render.sh vm      <release-version> <out-dir>
+#   render.sh k8s     <release-version> <out-dir>
+#   render.sh updater <release-version> <out-dir>
 #
 # The <release-version> is what gets stamped into AGENT_VERSION (VM) or
-# version/appVersion (K8s). It's the value computed by compute-next-version.sh.
+# version/appVersion (K8s, updater). It's the value computed by
+# compute-next-version.sh.
 
 set -euo pipefail
 
@@ -20,9 +22,9 @@ DEPS_FILE="${REPO_ROOT}/dependencies.yaml"
 
 [[ -f "$DEPS_FILE" ]] || die "dependencies.yaml not found at ${DEPS_FILE}"
 
-MODE="${1:?usage: render.sh <vm|k8s> <release-version> <out-dir>}"
-RELEASE_VERSION="${2:?usage: render.sh <vm|k8s> <release-version> <out-dir>}"
-OUT_DIR="${3:?usage: render.sh <vm|k8s> <release-version> <out-dir>}"
+MODE="${1:?usage: render.sh <vm|k8s|updater> <release-version> <out-dir>}"
+RELEASE_VERSION="${2:?usage: render.sh <vm|k8s|updater> <release-version> <out-dir>}"
+OUT_DIR="${3:?usage: render.sh <vm|k8s|updater> <release-version> <out-dir>}"
 
 mkdir -p "$OUT_DIR"
 
@@ -53,6 +55,7 @@ deps_get() {
 # the source has a placeholder with no corresponding pin.
 load_deps() {
     CWA_MANAGER=$(deps_get cwa-manager)
+    CWA_UPDATER=$(deps_get cwa-updater)
     REPORT_RUNNER=$(deps_get report-runner)
     VECTOR=$(deps_get vector)
     CRUSOE_METRICS_EXPORTER=$(deps_get crusoe-metrics-exporter)
@@ -61,7 +64,7 @@ load_deps() {
     DCGM_2204=$(deps_get dcgm-exporter-ubuntu2204)
     DCGM_2404=$(deps_get dcgm-exporter-ubuntu2404)
     TOKEN_JOB=$(deps_get token-job)
-    for var in CWA_MANAGER REPORT_RUNNER VECTOR CRUSOE_METRICS_EXPORTER AMD_EXPORTER \
+    for var in CWA_MANAGER CWA_UPDATER REPORT_RUNNER VECTOR CRUSOE_METRICS_EXPORTER AMD_EXPORTER \
                DCGM_2004 DCGM_2204 DCGM_2404 TOKEN_JOB; do
         [[ -n "${!var}" ]] || die "missing pin in dependencies.yaml for ${var}"
     done
@@ -159,10 +162,36 @@ render_k8s() {
     echo "Rendered K8s release ${RELEASE_VERSION} (chart ${chart_version}) -> ${OUT_DIR}/helm-chart"
 }
 
+# cwa-updater ships as its own chart so it never upgrades itself, and as its own
+# release mode so it is installed and versioned independently of the agent.
+render_updater() {
+    local chart_version="${RELEASE_VERSION#v}"
+
+    [[ -n "$chart_version" ]] || die "release version must not be empty"
+
+    rm -rf "${OUT_DIR}/cwa-updater-chart"
+    cp -r "${REPO_ROOT}/k8s/cwa-updater-chart" "${OUT_DIR}/cwa-updater-chart"
+
+    local chart="${OUT_DIR}/cwa-updater-chart/Chart.yaml"
+    local values="${OUT_DIR}/cwa-updater-chart/values.yaml"
+
+    substitute_file "$chart" \
+        CHART_VERSION       "$chart_version" \
+        CHART_APP_VERSION   "$chart_version"
+    substitute_file "$values" \
+        CWA_UPDATER_VERSION "$CWA_UPDATER"
+
+    assert_no_placeholders "$chart"
+    assert_no_placeholders "$values"
+
+    echo "Rendered cwa-updater release ${RELEASE_VERSION} (chart ${chart_version}) -> ${OUT_DIR}/cwa-updater-chart"
+}
+
 load_deps
 
 case "$MODE" in
-    vm)  render_vm ;;
-    k8s) render_k8s ;;
-    *)   die "unknown mode: ${MODE} (expected vm or k8s)" ;;
+    vm)      render_vm ;;
+    k8s)     render_k8s ;;
+    updater) render_updater ;;
+    *)       die "unknown mode: ${MODE} (expected vm, k8s or updater)" ;;
 esac

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # generate-release-notes.sh — emit Markdown release notes for the range
-# <previous-tag>..<current-tag> in this repo, scoped to one mode (vm or k8s),
+# <previous-tag>..<current-tag> in this repo, scoped to one mode (vm, k8s, updater),
 # by grouping commits by their conventional-commit type prefix. Writes to
 # stdout only; the release pipeline captures the output and attaches it to
 # the GitHub Release body. We never commit a CHANGELOG.md back to the repo.
@@ -27,13 +27,14 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 # Commit links in rendered notes point at the public GitHub mirror.
 COMMIT_URL_BASE="https://github.com/crusoecloud/crusoe-watch-agent-v2/commit/"
 
-# Per-mode path scope. dependencies.yaml counts for both modes since external
+# Per-mode path scope. dependencies.yaml counts for every mode since external
 # pin bumps land there.
 mode_paths() {
     case "$1" in
-        vm)  echo "vm/ dependencies.yaml" ;;
-        k8s) echo "k8s/ dependencies.yaml" ;;
-        *)   die "unknown mode: $1 (expected vm or k8s)" ;;
+        vm)      echo "vm/ dependencies.yaml" ;;
+        k8s)     echo "k8s/helm-chart/ dependencies.yaml" ;;
+        updater) echo "k8s/cwa-updater-chart/ cmd/cwa-updater/ dependencies.yaml" ;;
+        *)       die "unknown mode: $1 (expected vm, k8s or updater)" ;;
     esac
 }
 
@@ -113,7 +114,7 @@ Usage:
   $0 <mode> <new-tag>             # auto-detect previous tag for <mode>
   $0 <mode> <prev-tag> <new-tag>  # explicit range
 
-Modes: vm | k8s.
+Modes: vm | k8s | updater.
 Output: Markdown release notes on stdout, grouped by conventional-commit type.
 EOF
     exit 1

@@ -330,9 +330,6 @@ func (w *Watcher) reconcile() {
 
 	w.mu.Lock()
 	unchanged := hash == w.lastHash
-	if !unchanged {
-		w.lastHash = hash
-	}
 	w.mu.Unlock()
 
 	if unchanged {
@@ -344,6 +341,11 @@ func (w *Watcher) reconcile() {
 
 		return
 	}
+
+	// Only advance the tracked hash after a successful write so failures retry next cycle.
+	w.mu.Lock()
+	w.lastHash = hash
+	w.mu.Unlock()
 
 	w.logger.Info("vector config updated", "pods", len(pods), "path", w.cfg.ConfigPath)
 }

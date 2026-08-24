@@ -27,6 +27,16 @@ vector:
 cwaManager:
   image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/cwa-manager
   tag: "@@CWA_MANAGER_VERSION@@"
+  # Health endpoint cwa-updater polls per pod after an upgrade, fronted by the
+  # headless Service.
+  healthPort: 8787
+
+# cwa-updater address. Deployed by the separate `cwa-updater` chart, so it is
+# addressed by DNS rather than localhost. host defaults to
+# cwa-updater.<namespace>.svc.cluster.local.
+cwaUpdater:
+  host: ""
+  port: 8786
 
 # Resource requests/limits.
 resources:

@@ -68,6 +68,28 @@ cwa-manager:build:
         - go.sum
 
 ###############################################################################
+# cwa-updater — upgrade executor. K8s: single-replica Deployment (cwa-updater chart).
+###############################################################################
+cwa-updater:build:
+  extends: .build-image
+  variables:
+    IMAGE: "ghcr.io/crusoecloud/crusoe-watch-agent-v2/cwa-updater"
+    DOCKERFILE: cmd/cwa-updater/Dockerfile
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - cmd/cwa-updater/**/*
+        - internal/version/**/*
+        - go.mod
+        - go.sum
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - cmd/cwa-updater/**/*
+        - internal/version/**/*
+        - go.mod
+        - go.sum
+
+###############################################################################
 # report-runner (NVIDIA) — docker-mode bug-report sidecar, nvidia-bug-report.sh.
 ###############################################################################
 report-runner:build:

@@ -23,5 +23,4 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w
 FROM alpine:3.21
 RUN apk add --no-cache 'ca-certificates>=20250106'
 COPY --from=builder /cwa-manager /usr/local/bin/cwa-manager
-HEALTHCHECK --interval=30s --timeout=3s CMD ["/usr/local/bin/cwa-manager", "--version"] || exit 1
 ENTRYPOINT ["/usr/local/bin/cwa-manager"]

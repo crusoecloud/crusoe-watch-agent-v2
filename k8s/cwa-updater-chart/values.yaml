@@ -1,0 +1,58 @@
+# Namespace the updater and its handoff ConfigMap live in. Must match the
+# namespace of the agent chart it upgrades.
+namespace: crusoe-system
+
+# Image pull secrets for private registries.
+imagePullSecrets: []
+# - name: gitlab-registry
+
+cwaUpdater:
+  image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/cwa-updater
+  tag: "@@CWA_UPDATER_VERSION@@"
+  # Upgrade handoff + /health + /status endpoints.
+  port: 8786
+
+# The agent Helm release this updater upgrades.
+agent:
+  releaseName: crusoe-watch-agent
+  # OCI chart repo. The target version comes from the upgrade command; only the
+  # repo is configured here. Point this at a pull-through mirror in clusters
+  # without outbound access to ghcr.io.
+  chartRepo: oci://ghcr.io/crusoecloud/crusoe-watch-agent-v2/charts
+  chartName: crusoe-watch-agent
+  # Headless Service (agent chart) used to enumerate per-pod health endpoints.
+  healthService: crusoe-watch-agent
+  healthPort: 8787
+
+upgrade:
+  # Minutes to wait for post-upgrade pod health before rolling back.
+  rollbackWindowMin: 15
+  # Minutes to wait for one execution_id per healthy DaemonSet pod before
+  # aborting with status: collection_timeout.
+  ackTimeoutMin: 15
+
+# Upgrade state persisted across cwa-updater restarts. Owned by this chart;
+# written by cwa-updater at runtime.
+handoffConfigMap: cwa-upgrade-handoff
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# Proxy settings (optional) — applies to artifact pulls at upgrade time.
+proxy:
+  enabled: false
+  http: ""
+  https: ""
+  noProxy: ""
+
+# Single replica, so it must be schedulable on any node in the cluster.
+tolerations:
+  - operator: Exists
+
+nodeSelector: {}
+affinity: {}

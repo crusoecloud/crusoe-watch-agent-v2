@@ -29,6 +29,7 @@ type reportRunnerChecker interface {
 const (
 	defaultVectorAPIPort     = "8686"
 	defaultVectorMetricsPort = "9598"
+	defaultCwaUpdaterHost    = "localhost"
 	defaultCwaUpdaterPort    = "8786"
 	httpTimeout              = 3 * time.Second
 	k8sUpdaterPollInterval   = 5 // poll cwa-updater every 5th heartbeat on K8s
@@ -76,13 +77,16 @@ func NewCollector(logger *slog.Logger, installType pb.CwaInstallType, reportRunn
 	vectorPort := getEnvOrDefault("VECTOR_API_PORT", defaultVectorAPIPort)
 	vectorMetricsPort := getEnvOrDefault("VECTOR_METRICS_PORT", defaultVectorMetricsPort)
 	updaterPort := getEnvOrDefault("CWA_UPDATER_PORT", defaultCwaUpdaterPort)
+	// On K8s cwa-updater is a per-cluster Deployment, not a local peer, so the
+	// chart points this at its Service DNS name.
+	updaterHost := getEnvOrDefault("CWA_UPDATER_HOST", defaultCwaUpdaterHost)
 
 	return &Collector{
 		client:            &http.Client{Timeout: httpTimeout},
 		logger:            logger,
 		vectorHealthURL:   "http://localhost:" + vectorPort + "/health",
 		vectorMetricsURL:  "http://localhost:" + vectorMetricsPort + "/metrics",
-		updaterHealthURL:  "http://localhost:" + updaterPort + "/health",
+		updaterHealthURL:  "http://" + updaterHost + ":" + updaterPort + "/health",
 		isK8s:             installType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES,
 		updaterPollOffset: cryptoRandIntn(k8sUpdaterPollInterval),
 		reportRunner:      reportRunner,

@@ -1,0 +1,54 @@
+# All of cwa-updater's permissions are namespace-scoped: it reads and writes the
+# handoff ConfigMap, bumps the agent DaemonSet, and polls DaemonSet pod health.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "cwaUpdater.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cwaUpdater.labels" . | nindent 4 }}
+rules:
+  # Handoff state. resourceNames-scoped, so watch it by field selector.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["{{ .Values.handoffConfigMap }}"]
+    verbs: ["get", "watch", "update"]
+  # Helm release state (sh.helm.release.v1.*). `list` can't be
+  # resourceNames-scoped, hence namespace-wide.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  # `helm upgrade --wait` and the expected_count snapshot (numberReady).
+  - apiGroups: ["apps"]
+    resources: ["daemonsets/status"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch"]
+  # Pod IPs behind the headless Service, for post-upgrade health polling. Both
+  # kinds are granted so the chart works across CMK Kubernetes versions.
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "cwaUpdater.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cwaUpdater.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "cwaUpdater.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cwaUpdater.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}

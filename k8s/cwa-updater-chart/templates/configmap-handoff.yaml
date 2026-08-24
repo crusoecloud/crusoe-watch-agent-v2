@@ -1,0 +1,17 @@
+{{- $name := .Values.handoffConfigMap }}
+{{- if not (lookup "v1" "ConfigMap" .Values.namespace $name) }}
+# Upgrade handoff state, written by cwa-updater at runtime; new DaemonSet pods
+# read it on startup to recover their execution_id. Rendered only when absent
+# and annotated `keep`, so reinstalling mid-upgrade neither clobbers nor prunes
+# in-flight state.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Values.namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "cwaUpdater.labels" . | nindent 4 }}
+data: {}
+{{- end }}

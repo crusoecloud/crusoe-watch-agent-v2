@@ -56,11 +56,12 @@ if parsed_cri != null {
 }
 ` + vrlParseCwaManagerBody
 
-// vrlParseCwaManagerLogsK8s / vrlParseReportRunnerLogsK8s: both agent binaries
-// share the logfmt handler, so they differ only in log_source.
+// All agent binaries share the logfmt handler, so their parsers differ only in log_source.
 const vrlParseCwaManagerLogsK8s = "\n.log_source = \"cwa-manager\"\n" + vrlUnwrapCRIAndParseBody
 
 const vrlParseReportRunnerLogsK8s = "\n.log_source = \"cwa-report-runner\"\n" + vrlUnwrapCRIAndParseBody
+
+const vrlParseCwaUpdaterLogsK8s = "\n.log_source = \"cwa-updater\"\n" + vrlUnwrapCRIAndParseBody
 
 // vrlEnrichLogsK8s is the K8s version of the envelope assembly. crusoe_watch_version
 // is populated from AGENT_VERSION (helm AppVersion).
@@ -79,7 +80,7 @@ const vrlAddInternalLabelsK8s = `
 .tags.cluster_id = "${CRUSOE_CLUSTER_ID}"
 .tags.vm_id = "${VM_ID}"
 .tags.crusoe_resource = "vm"
-.tags.helm_version = "${AGENT_VERSION}"
+.tags.chart_version = "${AGENT_VERSION}"
 .tags.install_type = "${INSTALL_TYPE:-unspecified}"
 `
 

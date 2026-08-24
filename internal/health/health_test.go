@@ -50,6 +50,15 @@ func TestNewCollector_EnvOverrides(t *testing.T) {
 	assert.False(t, c.isK8s)
 }
 
+func TestNewCollector_UpdaterHostOverride(t *testing.T) {
+	t.Setenv("CWA_UPDATER_HOST", "cwa-updater.crusoe-system.svc.cluster.local")
+	t.Setenv("CWA_UPDATER_PORT", "8786")
+
+	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES, nil)
+
+	assert.Equal(t, "http://cwa-updater.crusoe-system.svc.cluster.local:8786/health", c.updaterHealthURL)
+}
+
 func TestNewCollector_K8sDetection(t *testing.T) {
 	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES, nil)
 	assert.True(t, c.isK8s)

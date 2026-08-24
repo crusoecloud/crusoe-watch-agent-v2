@@ -129,10 +129,10 @@ func TestK8s_InternalMetricsVersionLabel(t *testing.T) {
 	cfg := buildAndParse(t, nil, nil, testK8sConfig())
 
 	// The version rides on Vector's internal metrics (incl. build_info) as a
-	// tag. K8s uses helm_version, never agent_version.
+	// tag. K8s uses chart_version, never agent_version.
 	src := getTransforms(cfg)["add_internal_labels"].(map[string]any)["source"].(string)
 	assert.Contains(t, src, `.tags.vm_id = "${VM_ID}"`)
-	assert.Contains(t, src, `.tags.helm_version = "${AGENT_VERSION}"`)
+	assert.Contains(t, src, `.tags.chart_version = "${AGENT_VERSION}"`)
 	assert.NotContains(t, src, "agent_version")
 }
 
@@ -326,13 +326,17 @@ func TestApplyLogs(t *testing.T) {
 	assert.Contains(t, sources, "vector_internal_logs")
 	assert.Contains(t, sources, "cwa_manager_logs")
 	assert.Contains(t, sources, "report_runner_logs")
+	assert.Contains(t, sources, "cwa_updater_logs")
 
-	// cwa-manager and report-runner logs read from container log files.
+	// cwa-manager, report-runner and cwa-updater logs read from container log files.
 	cwaLogs := sources["cwa_manager_logs"].(map[string]any)
 	assert.Equal(t, "file", cwaLogs["type"])
 	runnerLogs := sources["report_runner_logs"].(map[string]any)
 	assert.Equal(t, "file", runnerLogs["type"])
 	assert.Contains(t, runnerLogs["include"].([]any), "/var/log/pods/*/report-runner/*.log")
+	updaterLogs := sources["cwa_updater_logs"].(map[string]any)
+	assert.Equal(t, "file", updaterLogs["type"])
+	assert.Contains(t, updaterLogs["include"].([]any), "/var/log/pods/*/cwa-updater/*.log")
 
 	transforms := getTransforms(cfg)
 	assert.Contains(t, transforms, "filter_journald_noise")
@@ -340,14 +344,17 @@ func TestApplyLogs(t *testing.T) {
 	assert.Contains(t, transforms, "parse_internal_logs")
 	assert.Contains(t, transforms, "parse_cwa_manager_logs")
 	assert.Contains(t, transforms, "parse_report_runner_logs")
+	assert.Contains(t, transforms, "parse_cwa_updater_logs")
 	assert.Contains(t, transforms, "enrich_logs")
 
-	// Enrich logs converges four parsers (journald + internal + cwa-manager + report-runner).
+	// Enrich logs converges five parsers (journald + internal + cwa-manager +
+	// report-runner + cwa-updater).
 	enrich := transforms["enrich_logs"].(map[string]any)
 	inputs := enrich["inputs"].([]any)
-	assert.Len(t, inputs, 4)
+	assert.Len(t, inputs, 5)
 	assert.Contains(t, inputs, "parse_cwa_manager_logs")
 	assert.Contains(t, inputs, "parse_report_runner_logs")
+	assert.Contains(t, inputs, "parse_cwa_updater_logs")
 
 	sinks := getSinks(cfg)
 	assert.Contains(t, sinks, "crusoe_ingest")
@@ -397,11 +404,17 @@ func TestK8sLogsEnvelopeContract(t *testing.T) {
 	assert.NotContains(t, cwaManager, "del(.message)")
 	assert.NotContains(t, cwaManager, "del(.timestamp)")
 
-	// report-runner shares the same CRI-unwrap + logfmt body, differing only in log_source.
+	// report-runner and cwa-updater share the same CRI-unwrap + logfmt body,
+	// differing only in log_source.
 	reportRunner := transforms["parse_report_runner_logs"].(map[string]any)["source"].(string)
 	assert.Contains(t, reportRunner, `.log_source = "cwa-report-runner"`)
 	assert.Contains(t, reportRunner, ".level = downcase(string!(parsed.level))")
 	assert.Contains(t, reportRunner, "parse_regex(msg,")
+
+	cwaUpdater := transforms["parse_cwa_updater_logs"].(map[string]any)["source"].(string)
+	assert.Contains(t, cwaUpdater, `.log_source = "cwa-updater"`)
+	assert.Contains(t, cwaUpdater, ".level = downcase(string!(parsed.level))")
+	assert.Contains(t, cwaUpdater, "parse_regex(msg,")
 
 	internal := transforms["parse_internal_logs"].(map[string]any)["source"].(string)
 	assert.Contains(t, internal, `.log_source = "crusoe-watch-agent"`)
