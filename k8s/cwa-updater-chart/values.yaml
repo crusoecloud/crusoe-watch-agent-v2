@@ -15,6 +15,7 @@ cwaUpdater:
 # The agent Helm release this updater upgrades.
 agent:
   releaseName: crusoe-watch-agent
+  daemonSet: crusoe-watch-agent
   # OCI chart repo. The target version comes from the upgrade command; only the
   # repo is configured here. Point this at a pull-through mirror in clusters
   # without outbound access to ghcr.io.

@@ -64,6 +64,8 @@ spec:
               value: {{ .Values.handoffConfigMap | quote }}
             - name: AGENT_RELEASE_NAME
               value: {{ .Values.agent.releaseName | quote }}
+            - name: AGENT_DAEMONSET
+              value: {{ .Values.agent.daemonSet | quote }}
             - name: AGENT_CHART_REPO
               value: {{ .Values.agent.chartRepo | quote }}
             - name: AGENT_CHART_NAME

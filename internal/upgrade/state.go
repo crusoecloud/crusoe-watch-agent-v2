@@ -2,6 +2,7 @@ package upgrade
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -12,18 +13,20 @@ type Phase string
 
 // Persisted phases.
 const (
-	PhasePending     Phase = "pending"
-	PhaseInProgress  Phase = "in_progress"
-	PhaseRollingBack Phase = "rolling_back"
-	PhaseComplete    Phase = "complete"
-	PhaseRolledBack  Phase = "rolled_back"
-	PhaseFailed      Phase = "failed"
+	PhasePending           Phase = "pending"
+	PhaseInProgress        Phase = "in_progress"
+	PhaseRollingBack       Phase = "rolling_back"
+	PhaseComplete          Phase = "complete"
+	PhaseRolledBack        Phase = "rolled_back"
+	PhaseFailed            Phase = "failed"
+	PhaseCollectionTimeout Phase = "collection_timeout"
 )
 
 // Known reports whether the phase is one this build understands.
 func (p Phase) Known() bool {
 	switch p {
-	case PhasePending, PhaseInProgress, PhaseRollingBack, PhaseComplete, PhaseRolledBack, PhaseFailed:
+	case PhasePending, PhaseInProgress, PhaseRollingBack,
+		PhaseComplete, PhaseRolledBack, PhaseFailed, PhaseCollectionTimeout:
 		return true
 	}
 
@@ -34,7 +37,7 @@ func (p Phase) Known() bool {
 // acknowledges the result with DELETE /status.
 func (p Phase) Terminal() bool {
 	switch p {
-	case PhaseComplete, PhaseRolledBack, PhaseFailed:
+	case PhaseComplete, PhaseRolledBack, PhaseFailed, PhaseCollectionTimeout:
 		return true
 	case PhasePending, PhaseInProgress, PhaseRollingBack:
 		return false
@@ -62,8 +65,57 @@ const (
 	ResultFailed     = "failed"
 )
 
-// ErrConflict marks a status clear that the current state refuses.
+// StatusAccepted is the POST /upgrade response status for a persisted handoff.
+const StatusAccepted = "accepted"
+
+// ErrConflict marks a request the current upgrade state refuses.
 var ErrConflict = errors.New("conflicts with current upgrade state")
+
+// ErrInvalidRequest marks a handoff that cannot be executed or acknowledged.
+var ErrInvalidRequest = errors.New("invalid upgrade request")
+
+// Request is the POST /upgrade body. On Kubernetes every DaemonSet pod sends
+// one, carrying the same upgrade but its own agent_id and execution_id.
+//
+//nolint:tagliatelle // snake_case is the handoff wire contract
+type Request struct {
+	ExecutionID     string    `json:"execution_id"`
+	AgentID         string    `json:"agent_id"`
+	TargetVersion   string    `json:"target_version"`
+	RollbackVersion string    `json:"rollback_version"`
+	ArtifactURL     string    `json:"artifact_url,omitempty"`
+	Checksum        string    `json:"checksum,omitempty"`
+	RequestedAt     time.Time `json:"requested_at,omitempty"`
+}
+
+// Validate rejects a handoff cwa-updater could not act on. Checksum is not
+// required: on Kubernetes the OCI registry digest covers artifact integrity, so
+// the control plane omits it.
+func (r *Request) Validate() error {
+	switch {
+	case r.ExecutionID == "":
+		return fmt.Errorf("%w: execution_id is required", ErrInvalidRequest)
+	case r.AgentID == "":
+		return fmt.Errorf("%w: agent_id is required", ErrInvalidRequest)
+	case r.TargetVersion == "":
+		return fmt.Errorf("%w: target_version is required", ErrInvalidRequest)
+	case r.RollbackVersion == "":
+		return fmt.Errorf("%w: rollback_version is required", ErrInvalidRequest)
+	}
+
+	return nil
+}
+
+// Acceptance is the POST /upgrade response. It confirms the handoff is durable,
+// which is all cwa-manager needs before it exits; it is not an upgrade result.
+//
+//nolint:tagliatelle // snake_case is the handoff wire contract
+type Acceptance struct {
+	Status         string `json:"status"`
+	Phase          Phase  `json:"phase"`
+	CollectedCount int    `json:"collected_count"`
+	ExpectedCount  int    `json:"expected_count"`
+}
 
 // StatusView is the GET /status body: the /health status plus everything
 // cwa-manager needs to close the acknowledgement loop after an upgrade, namely
@@ -119,13 +171,20 @@ func (s *State) HealthStatus() string {
 		return StatusRollingBack
 	case PhaseRolledBack:
 		return StatusRolledBack
-	case PhaseFailed:
+	case PhaseFailed, PhaseCollectionTimeout:
+		// A window that never filled is a failed upgrade to the control plane:
+		// nothing was installed, and the round has to be dispatched again.
 		return StatusFailed
 	case PhaseComplete:
 		return StatusIdle
 	}
 
 	return StatusIdle
+}
+
+// CollectionComplete reports whether every expected agent has handed off.
+func (s *State) CollectionComplete() bool {
+	return s.ExpectedCount > 0 && len(s.AgentExecutions) >= s.ExpectedCount
 }
 
 // clone returns a deep copy, so a caller can stage a change and commit it only once it is durably persisted.

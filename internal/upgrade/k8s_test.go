@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -119,4 +120,24 @@ func TestConfigMapStoreLoadNilExecutions(t *testing.T) {
 
 	loaded.AgentExecutions["agent-1"] = "cmd-1"
 	assert.Len(t, loaded.AgentExecutions, 1)
+}
+
+func TestDaemonSetCounterReadyCount(t *testing.T) {
+	daemonSet := &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "crusoe-watch-agent", Namespace: testNamespace},
+		Status:     appsv1.DaemonSetStatus{NumberReady: 6, DesiredNumberScheduled: 8},
+	}
+	counter := NewDaemonSetCounter(fake.NewSimpleClientset(daemonSet), testNamespace, "crusoe-watch-agent")
+
+	// numberReady, not desired: only ready pods were dispatched this round.
+	ready, err := counter.ReadyCount(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 6, ready)
+}
+
+func TestDaemonSetCounterMissingDaemonSet(t *testing.T) {
+	counter := NewDaemonSetCounter(fake.NewSimpleClientset(), testNamespace, "crusoe-watch-agent")
+
+	_, err := counter.ReadyCount(context.Background())
+	require.Error(t, err)
 }

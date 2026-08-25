@@ -13,6 +13,29 @@ import (
 // stateKey is the ConfigMap data key holding the serialised State.
 const stateKey = "state"
 
+// DaemonSetCounter reports the agent DaemonSet's numberReady, which is how many
+// pods the control plane could have dispatched this upgrade round to.
+type DaemonSetCounter struct {
+	client    kubernetes.Interface
+	namespace string
+	name      string
+}
+
+// NewDaemonSetCounter returns a counter reading the named agent DaemonSet.
+func NewDaemonSetCounter(client kubernetes.Interface, namespace, name string) *DaemonSetCounter {
+	return &DaemonSetCounter{client: client, namespace: namespace, name: name}
+}
+
+// ReadyCount reads numberReady from the DaemonSet's status subresource.
+func (c *DaemonSetCounter) ReadyCount(ctx context.Context) (int, error) {
+	daemonSet, err := c.client.AppsV1().DaemonSets(c.namespace).Get(ctx, c.name, metav1.GetOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("reading daemonset %s/%s: %w", c.namespace, c.name, err)
+	}
+
+	return int(daemonSet.Status.NumberReady), nil
+}
+
 // ConfigMapStore persists upgrade state in the handoff ConfigMap. The cwa-updater
 // chart creates it with helm.sh/resource-policy: keep, so state outlives both a
 // pod restart and a chart reinstall mid-upgrade. Kubernetes only.

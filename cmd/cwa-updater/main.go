@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -33,6 +34,10 @@ const (
 	shutdownTimeout   = 5 * time.Second
 
 	defaultHandoffConfigMap = "cwa-upgrade-handoff"
+	defaultAgentDaemonSet   = "crusoe-watch-agent"
+
+	// maxRequestBytes caps the handoff body; a handoff is a few hundred bytes.
+	maxRequestBytes = 16 << 10
 )
 
 // errMissingNamespace is fatal: without a namespace there is no handoff ConfigMap
@@ -92,6 +97,9 @@ func run() error {
 		return fmt.Errorf("cwa-updater startup: %w", err)
 	}
 
+	// Drives the collection window, including one left open by a restart.
+	go upgrades.Run(ctx)
+
 	return serve(ctx, logger, &server{logger: logger, upgrade: upgrades})
 }
 
@@ -114,12 +122,36 @@ func buildUpgradeService(logger *slog.Logger) (*upgrade.Service, error) {
 	}
 
 	configMap := getEnvOrDefault("CWA_UPDATER_HANDOFF_CONFIGMAP", defaultHandoffConfigMap)
-	logger.Info("upgrade state wired", "namespace", namespace, "handoff_configmap", configMap)
+	daemonSet := getEnvOrDefault("AGENT_DAEMONSET", defaultAgentDaemonSet)
+	ackTimeout := ackTimeoutFromEnv(logger)
+
+	logger.Info("upgrade state wired", "namespace", namespace,
+		"handoff_configmap", configMap, "agent_daemonset", daemonSet, "ack_timeout", ackTimeout)
 
 	return upgrade.New(upgrade.Config{
-		Store:  upgrade.NewConfigMapStore(client, namespace, configMap),
-		Logger: logger,
+		Store:      upgrade.NewConfigMapStore(client, namespace, configMap),
+		Counter:    upgrade.NewDaemonSetCounter(client, namespace, daemonSet),
+		Executor:   upgrade.UnimplementedExecutor{},
+		Logger:     logger,
+		AckTimeout: ackTimeout,
 	}), nil
+}
+
+// ackTimeoutFromEnv reads upgrade_ack_timeout_min. Zero leaves the service on its own default.
+func ackTimeoutFromEnv(logger *slog.Logger) time.Duration {
+	raw := os.Getenv("UPGRADE_ACK_TIMEOUT_MIN")
+	if raw == "" {
+		return 0
+	}
+
+	minutes, err := strconv.Atoi(raw)
+	if err != nil || minutes <= 0 {
+		logger.Warn("ignoring invalid UPGRADE_ACK_TIMEOUT_MIN", "value", raw)
+
+		return 0
+	}
+
+	return time.Duration(minutes) * time.Minute
 }
 
 func serve(ctx context.Context, logger *slog.Logger, srv *server) error {
@@ -199,8 +231,8 @@ func (s *server) handleStatus(writer http.ResponseWriter, request *http.Request)
 	}
 }
 
-// handleUpgrade refuses the handoff. Returning 200 here would tell cwa-manager
-// the upgrade was accepted and durably queued, and it would exit.
+// handleUpgrade takes one agent's handoff. The 200 is what tells cwa-manager it
+// may exit, so it is only written once the handoff is durably persisted.
 func (s *server) handleUpgrade(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
@@ -208,17 +240,34 @@ func (s *server) handleUpgrade(writer http.ResponseWriter, request *http.Request
 		return
 	}
 
-	s.logger.Warn("refusing upgrade handoff: execution is not implemented in this build")
-	s.respond(writer, http.StatusNotImplemented, errorResponse{
-		Error: "upgrade execution is not implemented in this build",
-	})
+	var req upgrade.Request
+
+	body := http.MaxBytesReader(writer, request.Body, maxRequestBytes)
+	if err := json.NewDecoder(body).Decode(&req); err != nil {
+		s.respondError(writer, fmt.Errorf("%w: %w", upgrade.ErrInvalidRequest, err))
+
+		return
+	}
+
+	acceptance, err := s.upgrade.Accept(request.Context(), &req)
+	if err != nil {
+		s.respondError(writer, err)
+
+		return
+	}
+
+	s.respond(writer, http.StatusOK, acceptance)
 }
 
 // respondError maps a service error onto its status code. A refusal the control
 // plane should retry differs from one it should not, so the codes must be exact.
 func (s *server) respondError(writer http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
-	if errors.Is(err, upgrade.ErrConflict) {
+
+	switch {
+	case errors.Is(err, upgrade.ErrInvalidRequest):
+		status = http.StatusBadRequest
+	case errors.Is(err, upgrade.ErrConflict):
 		status = http.StatusConflict
 	}
 

@@ -20,3 +20,14 @@ type Store interface {
 	Save(ctx context.Context, state *State) error
 	Clear(ctx context.Context) error
 }
+
+// ReadyCounter reports how many agents are ready to hand off. That count is the
+// number of execution_ids cwa-updater must collect before it may upgrade.
+type ReadyCounter interface {
+	ReadyCount(ctx context.Context) (int, error)
+}
+
+// Executor performs the upgrade once collection closes, and reports its outcome.
+type Executor interface {
+	Execute(ctx context.Context, state *State) (*Result, error)
+}
