@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -61,6 +62,20 @@ type Loop struct {
 	// sendHeartbeat, which has a single sequential caller.
 	lastHealth healthSnapshot
 	haveHealth bool
+
+	// lastHeartbeat is the unix-nano time of the most recent heartbeat that
+	// reached the coordinator, read by the health server on another goroutine.
+	lastHeartbeat atomic.Int64
+}
+
+// LastHeartbeat implements health.Reporter: when the most recent heartbeat was sent, zero if none.
+func (l *Loop) LastHeartbeat() time.Time {
+	nanos := l.lastHeartbeat.Load()
+	if nanos == 0 {
+		return time.Time{}
+	}
+
+	return time.Unix(0, nanos)
 }
 
 // healthSnapshot captures the statuses reported in a heartbeat so the loop can
@@ -194,6 +209,7 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 		return fmt.Errorf("stream send: %w", err)
 	}
 
+	l.lastHeartbeat.Store(time.Now().UnixNano())
 	l.logger.Debug("heartbeat sent", "agent_id", req.GetAgentId())
 
 	l.logHealthChange(healthSnapshot{

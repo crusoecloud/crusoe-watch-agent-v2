@@ -175,6 +175,22 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ .Values.existingSecret }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 3
           volumeMounts:
             - name: crusoe-shared
               mountPath: /etc/crusoe/shared

@@ -148,10 +148,30 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	// Layer 2: recover commands a hard stop interrupted, before the loop starts.
 	command.RecoverInterrupted(deps.Store, loop, logger)
 
+	startHealthServer(ctx, ident.InstallType, loop, logger)
+
 	heartbeatLoop(ctx, coordAddr, ident, loop, resolver, logger)
 	logger.Info("cwa-manager shutdown complete")
 
 	return nil
+}
+
+// startHealthServer serves cwa-manager's own /health in the background.
+func startHealthServer(ctx context.Context, installType pb.CwaInstallType, loop *heartbeat.Loop, logger *slog.Logger) {
+	// K8s agent pods are hostNetwork, so kubelet and cwa-updater reach this on the node IP.
+	host := "127.0.0.1"
+	if installType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
+		host = ""
+	}
+
+	addr := host + ":" + getEnvOrDefault(health.PortEnv, health.DefaultPort)
+	srv := health.NewServer(addr, loop, logger)
+
+	go func() {
+		if err := srv.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Error("health server stopped", "error", err)
+		}
+	}()
 }
 
 // newHealthCollector builds the heartbeat health collector, polling the report-runner
