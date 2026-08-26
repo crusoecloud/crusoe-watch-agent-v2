@@ -6,6 +6,8 @@ services:
     volumes:
       - /sys/class/dmi/id:/sys/class/dmi/id:ro
       - /etc/crusoe:/etc/crusoe
+      # Host os-release: /etc/os-release inside the container describes the image.
+      - /etc/os-release:/host/etc/os-release:ro
     env_file:
       - /etc/crusoe/crusoe_watch_agent/.env
       - /etc/crusoe/secrets/.monitoring-token

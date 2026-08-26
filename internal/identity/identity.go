@@ -36,6 +36,14 @@ const (
 	// envProjectID is sourced from the crusoe-secrets Secret via envFrom in K8s
 	// mode (the same secret Vector consumes). Unset on VMs.
 	envProjectID = "CRUSOE_PROJECT_ID"
+	// envClusterID comes from the same secret and identifies the CMK cluster.
+	// Unset on VMs.
+	envClusterID = "CRUSOE_CLUSTER_ID"
+
+	// os-release paths. The /host copy is the bind-mounted host file, used in
+	// Docker and K8s mode where /etc/os-release describes the container image.
+	osReleasePathHost  = "/host/etc/os-release"
+	osReleasePathLocal = "/etc/os-release"
 )
 
 // Identity holds the resolved identity fields for this agent.
@@ -45,6 +53,8 @@ type Identity struct {
 	AgentID     string
 	Region      string
 	ProjectID   string
+	ClusterID   string
+	OSVersion   string
 }
 
 // Resolver resolves identity fields from the local environment.
@@ -69,6 +79,8 @@ func (r *Resolver) Resolve(ctx context.Context) (*Identity, error) {
 		InstallType: detectInstallType(),
 		Region:      readRegion(),
 		ProjectID:   readProjectID(),
+		ClusterID:   readClusterID(),
+		OSVersion:   readOSVersion(),
 	}
 
 	agentID, err := os.ReadFile(agentIDPath)
@@ -106,6 +118,49 @@ func (r *Resolver) Registered() bool {
 
 func readProjectID() string {
 	return strings.TrimSpace(os.Getenv(envProjectID))
+}
+
+func readClusterID() string {
+	return strings.TrimSpace(os.Getenv(envClusterID))
+}
+
+// readOSVersion returns the host OS as "<id>-<version_id>" (e.g. "ubuntu-22.04"),
+// or "" if os-release is unreadable or missing either key.
+func readOSVersion() string {
+	for _, path := range []string{osReleasePathHost, osReleasePathLocal} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		if v := osVersionFrom(string(data)); v != "" {
+			return v
+		}
+	}
+
+	return ""
+}
+
+// osVersionFrom joins ID and VERSION_ID from the shell-style KEY=VALUE lines of
+// an os-release file. Returns "" unless both keys are present.
+func osVersionFrom(content string) string {
+	fields := make(map[string]string)
+
+	for _, line := range strings.Split(content, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok || strings.HasPrefix(key, "#") {
+			continue
+		}
+
+		fields[key] = strings.Trim(value, `"'`)
+	}
+
+	id, version := fields["ID"], fields["VERSION_ID"]
+	if id == "" || version == "" {
+		return ""
+	}
+
+	return id + "-" + version
 }
 
 // readRegion parses the Crusoe region from NODE_NAME.

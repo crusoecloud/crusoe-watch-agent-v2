@@ -129,6 +129,14 @@ func (l *Loop) Register(ctx context.Context) (string, error) {
 		req.ProjectId = &l.identity.ProjectID
 	}
 
+	if l.identity.ClusterID != "" {
+		req.ClusterId = &l.identity.ClusterID
+	}
+
+	if l.identity.OSVersion != "" {
+		req.OsVersion = &l.identity.OSVersion
+	}
+
 	resp, err := l.client.RegisterCwaAgent(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("register RPC: %w", err)

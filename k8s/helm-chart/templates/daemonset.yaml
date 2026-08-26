@@ -197,6 +197,10 @@ spec:
             - name: host-sys
               mountPath: /host/sys
               readOnly: true
+            # Host os-release: /etc/os-release inside the container describes the image.
+            - name: host-os-release
+              mountPath: /host/etc/os-release
+              readOnly: true
             - name: cwa-state
               mountPath: /var/lib/cwa-manager
             # Shared with the report-runner DaemonSet on bundled-driver GPU nodes: the
@@ -229,6 +233,10 @@ spec:
           hostPath:
             path: /sys
             type: Directory
+        - name: host-os-release
+          hostPath:
+            path: /etc/os-release
+            type: File
         - name: journal-logs
           hostPath:
             path: /var/log/journal

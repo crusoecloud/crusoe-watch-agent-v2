@@ -86,6 +86,59 @@ func TestReadProjectID(t *testing.T) {
 	}
 }
 
+func TestReadClusterID(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		want string
+	}{
+		{"set", "cluster-123", "cluster-123"},
+		{"unset", "", ""},
+		{"whitespace trimmed", "  cluster-123\n", "cluster-123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envClusterID, tc.env)
+			assert.Equal(t, tc.want, readClusterID())
+		})
+	}
+}
+
+func TestOSVersionFrom(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "ubuntu",
+			content: "PRETTY_NAME=\"Ubuntu 22.04.4 LTS\"\nID=ubuntu\nVERSION_ID=\"22.04\"\n",
+			want:    "ubuntu-22.04",
+		},
+		{
+			name:    "unquoted values",
+			content: "ID=debian\nVERSION_ID=12\n",
+			want:    "debian-12",
+		},
+		{
+			name:    "comments and blank lines ignored",
+			content: "# a comment\n\nID=rhel\n\nVERSION_ID=\"9.4\"\n",
+			want:    "rhel-9.4",
+		},
+		{
+			name:    "missing VERSION_ID",
+			content: "ID=arch\n",
+			want:    "",
+		},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, osVersionFrom(tc.content))
+		})
+	}
+}
+
 func TestReadRegion(t *testing.T) {
 	cases := []struct {
 		name     string

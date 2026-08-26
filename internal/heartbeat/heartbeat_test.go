@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/command"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/health"
@@ -25,6 +26,70 @@ func newTestLoop() *Loop {
 		pendingResults: make(map[string]*pb.CwaCommandResult),
 	}
 }
+
+// fakeAgentClient records the registration request. The embedded interface is
+// nil — only RegisterCwaAgent is called.
+type fakeAgentClient struct {
+	pb.CwaAgentClient
+	req *pb.RegisterCwaAgentRequest
+}
+
+func (f *fakeAgentClient) RegisterCwaAgent(_ context.Context, req *pb.RegisterCwaAgentRequest,
+	_ ...grpc.CallOption,
+) (*pb.RegisterCwaAgentResponse, error) {
+	f.req = req
+
+	return &pb.RegisterCwaAgentResponse{AgentId: "agent-1"}, nil
+}
+
+func TestRegister(t *testing.T) {
+	tests := []struct {
+		name          string
+		identity      *identity.Identity
+		wantProjectID *string
+		wantClusterID *string
+		wantOSVersion *string
+	}{
+		{
+			name: "k8s node sends cluster_id",
+			identity: &identity.Identity{
+				VMID: "vm-1", ProjectID: "proj-1", ClusterID: "cluster-1", OSVersion: "ubuntu-22.04",
+				InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES,
+			},
+			wantProjectID: ptr("proj-1"),
+			wantClusterID: ptr("cluster-1"),
+			wantOSVersion: ptr("ubuntu-22.04"),
+		},
+		{
+			name: "vm omits cluster_id but sends os_version",
+			identity: &identity.Identity{
+				VMID: "vm-1", OSVersion: "ubuntu-22.04",
+				InstallType: pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER,
+			},
+			wantOSVersion: ptr("ubuntu-22.04"),
+		},
+		{
+			name:     "unresolvable fields are omitted",
+			identity: &identity.Identity{VMID: "vm-1"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakeAgentClient{}
+			l := &Loop{identity: tc.identity, client: client, logger: slog.Default()}
+
+			agentID, err := l.Register(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, "agent-1", agentID)
+
+			assert.Equal(t, tc.wantProjectID, client.req.ProjectId)
+			assert.Equal(t, tc.wantClusterID, client.req.ClusterId)
+			assert.Equal(t, tc.wantOSVersion, client.req.OsVersion)
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }
 
 func TestDeriveAgentStatus(t *testing.T) {
 	tests := []struct {
