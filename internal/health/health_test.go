@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/upgrade"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
@@ -318,6 +319,34 @@ func TestCollectCwaUpdater_InvalidJSON(t *testing.T) {
 	assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY, h.GetStatus())
 	assert.Empty(t, h.GetVersion(), "version should be empty when JSON decode fails")
 	require.NotNil(t, h.GetLastSeen())
+}
+
+// cwa-updater answers 200 with status "error" when its persisted state is
+// unreadable, so only the body distinguishes it from a healthy updater.
+func TestCollectCwaUpdater_CorruptStateIsUnhealthy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(updaterHealthResponse{Status: upgrade.StatusError, Version: "1.2.3"})
+	}))
+	defer srv.Close()
+
+	h := newTestCollector("", "", srv.URL, false).collectCwaUpdater(context.Background())
+
+	assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNHEALTHY, h.GetStatus())
+	assert.Equal(t, "1.2.3", h.GetVersion())
+}
+
+// A finished upgrade that failed says nothing about the updater's own health.
+func TestCollectCwaUpdater_UpgradeOutcomeStaysHealthy(t *testing.T) {
+	for _, status := range []string{upgrade.StatusIdle, upgrade.StatusInProgress, upgrade.StatusFailed, upgrade.StatusRolledBack} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			json.NewEncoder(w).Encode(updaterHealthResponse{Status: status, Version: "1.2.3"})
+		}))
+
+		h := newTestCollector("", "", srv.URL, false).collectCwaUpdater(context.Background())
+		assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY, h.GetStatus(), status)
+
+		srv.Close()
+	}
 }
 
 func TestCollectCwaUpdater(t *testing.T) {

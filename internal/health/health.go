@@ -17,6 +17,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/upgrade"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
@@ -37,6 +38,7 @@ const (
 
 // updaterHealthResponse is the expected JSON from cwa-updater's /health endpoint.
 type updaterHealthResponse struct {
+	Status  string `json:"status"`
 	Version string `json:"version"`
 }
 
@@ -310,6 +312,14 @@ func (c *Collector) collectCwaUpdater(ctx context.Context) *pb.CwaUpdaterHealth 
 	var body updaterHealthResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err == nil {
 		health.Version = body.Version
+
+		// cwa-updater answers 200 even when its persisted state is unreadable, so
+		// the status field is the only thing that surfaces it.
+		if body.Status == upgrade.StatusError {
+			c.logger.Warn("cwa-updater reports unreadable upgrade state")
+
+			health.Status = pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNHEALTHY
+		}
 	} else {
 		c.logger.Debug("failed to decode cwa-updater health response", "error", err)
 	}
