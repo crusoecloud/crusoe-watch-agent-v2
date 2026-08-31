@@ -198,6 +198,7 @@ func journaldSource() map[string]any {
 			"crusoe-watch-agent-native.service",
 			"cwa-manager.service",
 			"cwa-report-runner.service",
+			"cwa-vector.service",
 		},
 	}
 }

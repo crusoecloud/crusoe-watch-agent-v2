@@ -333,6 +333,7 @@ func TestGenerateVM_JournaldExcludesAgentUnits(t *testing.T) {
 	assert.Contains(t, units, "crusoe-watch-agent-native.service")
 	assert.Contains(t, units, "cwa-manager.service")
 	assert.Contains(t, units, "cwa-report-runner.service")
+	assert.Contains(t, units, "cwa-vector.service")
 }
 
 func TestGenerateVM_CwaManagerLogs(t *testing.T) {
