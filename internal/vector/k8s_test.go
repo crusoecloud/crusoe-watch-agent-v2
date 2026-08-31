@@ -328,15 +328,14 @@ func TestApplyLogs(t *testing.T) {
 	assert.Contains(t, sources, "report_runner_logs")
 	assert.Contains(t, sources, "cwa_updater_logs")
 
-	// cwa-manager, report-runner and cwa-updater logs read from container log files.
 	cwaLogs := sources["cwa_manager_logs"].(map[string]any)
-	assert.Equal(t, "file", cwaLogs["type"])
+	assert.Equal(t, "kubernetes_logs", cwaLogs["type"])
 	runnerLogs := sources["report_runner_logs"].(map[string]any)
-	assert.Equal(t, "file", runnerLogs["type"])
-	assert.Contains(t, runnerLogs["include"].([]any), "/var/log/pods/*/report-runner/*.log")
+	assert.Equal(t, "kubernetes_logs", runnerLogs["type"])
+	assert.Contains(t, runnerLogs["include_paths_glob_patterns"].([]any), "/var/log/pods/*/report-runner/*.log")
 	updaterLogs := sources["cwa_updater_logs"].(map[string]any)
-	assert.Equal(t, "file", updaterLogs["type"])
-	assert.Contains(t, updaterLogs["include"].([]any), "/var/log/pods/*/cwa-updater/*.log")
+	assert.Equal(t, "kubernetes_logs", updaterLogs["type"])
+	assert.Contains(t, updaterLogs["include_paths_glob_patterns"].([]any), "/var/log/pods/*/cwa-updater/*.log")
 
 	transforms := getTransforms(cfg)
 	assert.Contains(t, transforms, "filter_journald_noise")
@@ -371,10 +370,10 @@ func TestK8sLogsEnvelopeContract(t *testing.T) {
 
 	enrich := transforms["enrich_logs"].(map[string]any)["source"].(string)
 	assert.Contains(t, enrich, ".payload = raw")
-	assert.Contains(t, enrich, `.crusoe = { "agent": "crusoe-watch-agent"`)
-	assert.Contains(t, enrich, `"crusoe_watch_version": "${AGENT_VERSION}"`)
+	assert.Contains(t, enrich, `.crusoe_watch_version = "${AGENT_VERSION}"`)
+	assert.NotContains(t, enrich, `"crusoe_agent_version"`)
 	assert.NotContains(t, enrich, `"chart_version"`)
-	assert.NotContains(t, enrich, `"agent_version"`)
+	assert.NotContains(t, enrich, `.crusoe =`)
 	assert.NotContains(t, enrich, "cluster_id")
 	assert.Contains(t, enrich, ".log_source = cwa_log_source")
 	assert.NotContains(t, enrich, ".crusoe.log_source")
@@ -404,17 +403,16 @@ func TestK8sLogsEnvelopeContract(t *testing.T) {
 	assert.NotContains(t, cwaManager, "del(.message)")
 	assert.NotContains(t, cwaManager, "del(.timestamp)")
 
-	// report-runner and cwa-updater share the same CRI-unwrap + logfmt body,
-	// differing only in log_source.
+	// report-runner and cwa-updater use the same logfmt body. Parsers differ only in log_source.
 	reportRunner := transforms["parse_report_runner_logs"].(map[string]any)["source"].(string)
 	assert.Contains(t, reportRunner, `.log_source = "cwa-report-runner"`)
 	assert.Contains(t, reportRunner, ".level = downcase(string!(parsed.level))")
-	assert.Contains(t, reportRunner, "parse_regex(msg,")
+	assert.NotContains(t, reportRunner, "parse_regex(msg,")
 
 	cwaUpdater := transforms["parse_cwa_updater_logs"].(map[string]any)["source"].(string)
 	assert.Contains(t, cwaUpdater, `.log_source = "cwa-updater"`)
 	assert.Contains(t, cwaUpdater, ".level = downcase(string!(parsed.level))")
-	assert.Contains(t, cwaUpdater, "parse_regex(msg,")
+	assert.NotContains(t, cwaUpdater, "parse_regex(msg,")
 
 	internal := transforms["parse_internal_logs"].(map[string]any)["source"].(string)
 	assert.Contains(t, internal, `.log_source = "crusoe-watch-agent"`)

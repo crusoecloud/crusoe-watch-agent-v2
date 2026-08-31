@@ -39,34 +39,28 @@ if includes(klog_emitters, syslog_id) {
 }
 `
 
-// vrlUnwrapCRIAndParseBody unwraps the CRI log wrapper and applies shared logfmt parser body.
-// Callers prepend a `.log_source = "..."` line to identify the emitter.
-const vrlUnwrapCRIAndParseBody = `
-msg = string(.message) ?? ""
-log_line = msg
+// vrlParseK8sAgentBody parses logfmt from kubernetes_logs events.
+// Callers must set .log_source before this body runs.
+const vrlParseK8sAgentBody = `
+log_line = string(.message) ?? ""
 
-# Unwrap CRI log format: <timestamp> <stream> <tag> <log_line>
-parsed_cri = parse_regex(msg, r'^(?P<cri_time>\S+) (?P<stream>\S+) \S+ (?P<log>.*)$') ?? null
-if parsed_cri != null {
-    cri_time, ts_err = parse_timestamp(string!(parsed_cri.cri_time), format: "%+")
-    if ts_err == null {
-        ._time = cri_time
-    }
-    log_line = string!(parsed_cri.log)
+# Use .timestamp as the default for ._time. The logfmt time field overrides it.
+if exists(.timestamp) {
+    ._time = .timestamp
 }
 ` + vrlParseCwaManagerBody
 
-// All agent binaries share the logfmt handler, so their parsers differ only in log_source.
-const vrlParseCwaManagerLogsK8s = "\n.log_source = \"cwa-manager\"\n" + vrlUnwrapCRIAndParseBody
+// All agent binaries use the same logfmt handler. Parsers differ only in log_source.
+const vrlParseCwaManagerLogsK8s = "\n.log_source = \"cwa-manager\"\n" + vrlParseK8sAgentBody
 
-const vrlParseReportRunnerLogsK8s = "\n.log_source = \"cwa-report-runner\"\n" + vrlUnwrapCRIAndParseBody
+const vrlParseReportRunnerLogsK8s = "\n.log_source = \"cwa-report-runner\"\n" + vrlParseK8sAgentBody
 
-const vrlParseCwaUpdaterLogsK8s = "\n.log_source = \"cwa-updater\"\n" + vrlUnwrapCRIAndParseBody
+const vrlParseCwaUpdaterLogsK8s = "\n.log_source = \"cwa-updater\"\n" + vrlParseK8sAgentBody
 
-// vrlEnrichLogsK8s is the K8s version of the envelope assembly. crusoe_watch_version
-// is populated from AGENT_VERSION (helm AppVersion).
+// vrlEnrichLogsK8s is the K8s version of the envelope assembly.
+// crusoe_watch_version is populated from AGENT_VERSION (helm AppVersion).
 const vrlEnrichLogsK8s = vrlEnrichLogsPrefix +
-	`{ "agent": "crusoe-watch-agent", "crusoe_watch_version": "${AGENT_VERSION}" }` +
+	`.crusoe_watch_version = "${AGENT_VERSION}"` +
 	vrlEnrichLogsSuffix
 
 // ---------------------------------------------------------------------------

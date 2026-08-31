@@ -87,10 +87,9 @@ if err == null && is_object(parsed) {
 `
 
 // vrlEnrichLogsPrefix and vrlEnrichLogsSuffix assemble the standardized
-// envelope (see "Managed Logs Redesign"): the raw event verbatim under
-// `payload`, Crusoe identity metadata under `crusoe` (the mode-specific object
-// literal is spliced between the two; remaining identity fields are added by
-// CML Ingress), and `_msg`/`_time`/`level`/`log_source` at the top level.
+// envelope: the raw event verbatim under `payload`, identity fields at the
+// top level (the mode-specific literal is spliced between the two), and
+// `_msg`/`_time`/`level`/`log_source` at the top level.
 const vrlEnrichLogsPrefix = `
 parsed_msg = null
 if exists(._msg) {
@@ -112,8 +111,7 @@ if exists(.log_source) {
 raw = .
 . = {}
 .payload = raw
-
-.crusoe = `
+`
 
 const vrlEnrichLogsSuffix = `
 

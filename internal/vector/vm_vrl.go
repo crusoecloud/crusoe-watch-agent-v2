@@ -25,7 +25,7 @@ log_line = string(.message) ?? ""
 
 // vrlEnrichLogs is the VM version of the envelope assembly.
 const vrlEnrichLogs = vrlEnrichLogsPrefix +
-	`{ "agent": "crusoe-watch-agent", "crusoe_watch_version": "${AGENT_VERSION}" }` +
+	`.crusoe_watch_version = "${AGENT_VERSION}"` +
 	vrlEnrichLogsSuffix
 
 // ---------------------------------------------------------------------------

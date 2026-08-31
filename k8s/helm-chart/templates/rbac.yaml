@@ -5,14 +5,12 @@ metadata:
   labels:
     {{- include "cwa.labels" . | nindent 4 }}
 rules:
-  # cwa-manager needs to list/watch pods for dynamic Vector config.
+  # kubernetes_logs: list+watch on pods, nodes, namespaces.
+  # cwa-manager: get nodes, list+watch pods.
+  # Ref: https://vector.dev/docs/reference/configuration/sources/kubernetes_logs/#kubernetes-api-access-control
   - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["list", "watch"]
-  # cwa-manager reads node labels (instance type, nodepool, vm_id, etc).
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get"]
+    resources: ["namespaces", "nodes", "pods"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

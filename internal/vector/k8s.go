@@ -505,20 +505,21 @@ func applyLogs(sources, transforms, sinks map[string]any, cfg K8sConfig) {
 	sources["vector_internal_logs"] = map[string]any{
 		"type": "internal_logs",
 	}
+	// Each kubernetes_logs source reads one agent container via include_paths_glob_patterns.
 	sources["cwa_manager_logs"] = map[string]any{
-		"type":      "file",
-		"include":   []string{"/var/log/pods/*/cwa-manager/*.log"},
-		"read_from": "beginning",
+		"type":                        "kubernetes_logs",
+		"include_paths_glob_patterns": []string{"/var/log/pods/*/cwa-manager/*.log"},
+		"read_from":                   "beginning",
 	}
 	sources["report_runner_logs"] = map[string]any{
-		"type":      "file",
-		"include":   []string{"/var/log/pods/*/report-runner/*.log"},
-		"read_from": "beginning",
+		"type":                        "kubernetes_logs",
+		"include_paths_glob_patterns": []string{"/var/log/pods/*/report-runner/*.log"},
+		"read_from":                   "beginning",
 	}
 	sources["cwa_updater_logs"] = map[string]any{
-		"type":      "file",
-		"include":   []string{"/var/log/pods/*/cwa-updater/*.log"},
-		"read_from": "beginning",
+		"type":                        "kubernetes_logs",
+		"include_paths_glob_patterns": []string{"/var/log/pods/*/cwa-updater/*.log"},
+		"read_from":                   "beginning",
 	}
 
 	transforms["filter_journald_noise"] = filterTransform([]string{"journald_logs"}, vrlFilterJournaldNoise)

@@ -386,11 +386,9 @@ func TestGenerateVM_LogsEnvelopeContract(t *testing.T) {
 
 	enrich := xf["enrich_logs"].(map[string]any)["source"].(string)
 	assert.Contains(t, enrich, ".payload = raw")
-	assert.Contains(t, enrich, `.crusoe = { "agent": "crusoe-watch-agent"`)
-	assert.Contains(t, enrich, `"crusoe_watch_version": "${AGENT_VERSION}"`)
-	// Version tag is unified across modes as crusoe_watch_version; legacy
-	// per-mode names must not leak. cluster_id is a K8s-only field.
-	assert.NotContains(t, enrich, `"agent_version"`)
+	assert.Contains(t, enrich, `.crusoe_watch_version = "${AGENT_VERSION}"`)
+	assert.NotContains(t, enrich, `"crusoe_agent_version"`)
+	assert.NotContains(t, enrich, `.crusoe =`)
 	assert.NotContains(t, enrich, `"chart_version"`)
 	assert.NotContains(t, enrich, `"cluster_id"`)
 	assert.Contains(t, enrich, ".log_source = cwa_log_source")
