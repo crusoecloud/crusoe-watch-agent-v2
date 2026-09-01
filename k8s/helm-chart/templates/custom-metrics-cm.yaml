@@ -7,6 +7,11 @@ metadata:
   namespace: crusoe-monitoring
   labels:
     {{- include "cwa.labels" . | nindent 4 }}
+  annotations:
+    # Seeded once as a hook, so it never enters the release manifest.
+    "helm.sh/hook": post-install
+    # Customer scrape config lives here, so it has to survive leaving the manifest.
+    helm.sh/resource-policy: keep
 data:
   custom-metrics-config.yaml: |
     default_scrape_interval_sec: {{ .Values.customMetrics.defaultScrape }}

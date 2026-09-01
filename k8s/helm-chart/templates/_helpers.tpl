@@ -23,6 +23,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
+Labels for the RBAC objects in rbac.yaml. Deliberately omits app.kubernetes.io/version
+so their rendered content never changes between chart versions.
+*/}}
+{{- define "cwa.bootstrapLabels" -}}
+app.kubernetes.io/name: {{ include "cwa.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
 Selector labels.
 */}}
 {{- define "cwa.selectorLabels" -}}

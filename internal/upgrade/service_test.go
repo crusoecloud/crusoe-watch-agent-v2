@@ -13,7 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var errStore = errors.New("store unavailable")
+var (
+	errStore    = errors.New("store unavailable")
+	errRollback = errors.New("rollback unavailable")
+)
 
 // memStore is an in-memory Store.
 type memStore struct {
@@ -94,17 +97,28 @@ func (f *fakeCounter) ReadyCount(context.Context) (int, error) {
 	return f.ready, nil
 }
 
-// fakeExecutor records that it ran and returns a canned result.
+// fakeExecutor records the steps it ran and the versions it was asked for.
 type fakeExecutor struct {
-	calls  int
-	result *Result
-	err    error
+	calls         int
+	upgradeErr    error
+	rollbacks     int
+	rollbackErr   error
+	sawTarget     string
+	sawRollbackTo string
 }
 
-func (f *fakeExecutor) Execute(context.Context, *State) (*Result, error) {
+func (f *fakeExecutor) Upgrade(_ context.Context, state *State) error {
 	f.calls++
+	f.sawTarget = state.TargetVersion
 
-	return f.result, f.err
+	return f.upgradeErr
+}
+
+func (f *fakeExecutor) Rollback(_ context.Context, state *State) error {
+	f.rollbacks++
+	f.sawRollbackTo = state.RollbackVersion
+
+	return f.rollbackErr
 }
 
 func newTestService(store Store) *Service {
@@ -176,8 +190,8 @@ func TestRecoverTerminalServesResult(t *testing.T) {
 	assert.Equal(t, ResultRolledBack, status.Result.Status)
 }
 
-// An upgrade still in flight when the process stopped is served as-is; resuming
-// or rolling it back needs the executor.
+// Recover only reports what it found; rolling an interrupted upgrade back is
+// Run's job, so /health and /status are correct before anything is executed.
 func TestRecoverInFlightIsServed(t *testing.T) {
 	svc := newTestService(&memStore{state: &State{
 		Phase:           PhaseInProgress,
@@ -481,9 +495,7 @@ func TestAcceptFailsWhenStoreRefuses(t *testing.T) {
 func TestCollectionCompleteExecutes(t *testing.T) {
 	ctx := context.Background()
 	store := &memStore{}
-	executor := &fakeExecutor{result: &Result{
-		Status: ResultSucceeded, FromVersion: "v2.0.3", ToVersion: "v2.1.0",
-	}}
+	executor := &fakeExecutor{}
 	svc := newCollectService(store, &fakeCounter{ready: 2}, executor)
 
 	_, err := svc.Accept(ctx, handoff("agent-1", "cmd-1"))
@@ -494,9 +506,13 @@ func TestCollectionCompleteExecutes(t *testing.T) {
 	svc.collectTick(ctx)
 
 	assert.Equal(t, 1, executor.calls)
+	assert.Equal(t, "v2.1.0", executor.sawTarget)
+	assert.Equal(t, 0, executor.rollbacks)
 	assert.Equal(t, PhaseComplete, store.state.Phase)
 	require.NotNil(t, store.state.Result)
 	assert.Equal(t, ResultSucceeded, store.state.Result.Status)
+	assert.Equal(t, "v2.0.3", store.state.Result.FromVersion)
+	assert.Equal(t, "v2.1.0", store.state.Result.ToVersion)
 	// A successful upgrade reports idle; the result is still served on /status.
 	assert.Equal(t, StatusIdle, svc.HealthStatus())
 }
@@ -504,7 +520,7 @@ func TestCollectionCompleteExecutes(t *testing.T) {
 // Nothing runs until the last agent has handed off.
 func TestCollectionWaitsForEveryAgent(t *testing.T) {
 	ctx := context.Background()
-	executor := &fakeExecutor{result: &Result{Status: ResultSucceeded}}
+	executor := &fakeExecutor{}
 	svc := newCollectService(&memStore{}, &fakeCounter{ready: 3}, executor)
 
 	_, err := svc.Accept(ctx, handoff("agent-1", "cmd-1"))
@@ -521,7 +537,7 @@ func TestCollectionWaitsForEveryAgent(t *testing.T) {
 func TestCollectionIgnoresScaleUp(t *testing.T) {
 	ctx := context.Background()
 	counter := &fakeCounter{ready: 1}
-	executor := &fakeExecutor{result: &Result{Status: ResultSucceeded}}
+	executor := &fakeExecutor{}
 	svc := newCollectService(&memStore{}, counter, executor)
 
 	_, err := svc.Accept(ctx, handoff("agent-1", "cmd-1"))
@@ -539,7 +555,7 @@ func TestCollectionScaleDownNeedsGrace(t *testing.T) {
 	ctx := context.Background()
 	store := &memStore{}
 	counter := &fakeCounter{ready: 3}
-	executor := &fakeExecutor{result: &Result{Status: ResultSucceeded}}
+	executor := &fakeExecutor{}
 	svc := newCollectService(store, counter, executor)
 
 	_, err := svc.Accept(ctx, handoff("agent-1", "cmd-1"))
@@ -572,7 +588,7 @@ func TestCollectionScaleDownNeedsGrace(t *testing.T) {
 func TestCollectionTimesOut(t *testing.T) {
 	ctx := context.Background()
 	store := &memStore{}
-	executor := &fakeExecutor{result: &Result{Status: ResultSucceeded}}
+	executor := &fakeExecutor{}
 	svc := newCollectService(store, &fakeCounter{ready: 3}, executor)
 
 	_, err := svc.Accept(ctx, handoff("agent-1", "cmd-1"))
@@ -595,11 +611,35 @@ func TestCollectionTimesOut(t *testing.T) {
 	assert.Equal(t, StatusIdle, svc.HealthStatus())
 }
 
-// An executor failure is still a result the agents can acknowledge.
-func TestCollectionExecutorFailureIsTerminal(t *testing.T) {
+// A failed upgrade rolls back automatically, and the rollback reports why the
+// upgrade was undone so the audit log says more than "rolled_back".
+func TestUpgradeFailureRollsBack(t *testing.T) {
 	ctx := context.Background()
 	store := &memStore{}
-	svc := newCollectService(store, &fakeCounter{ready: 1}, &fakeExecutor{err: errStore})
+	executor := &fakeExecutor{upgradeErr: errStore}
+	svc := newCollectService(store, &fakeCounter{ready: 1}, executor)
+
+	_, err := svc.Accept(ctx, handoff("agent-1", "cmd-1"))
+	require.NoError(t, err)
+
+	svc.collectTick(ctx)
+
+	assert.Equal(t, 1, executor.rollbacks)
+	assert.Equal(t, "v2.0.3", executor.sawRollbackTo)
+	assert.Equal(t, PhaseRolledBack, store.state.Phase)
+	require.NotNil(t, store.state.Result)
+	assert.Equal(t, ResultRolledBack, store.state.Result.Status)
+	assert.Contains(t, store.state.Result.Reason, errStore.Error())
+	assert.Equal(t, StatusRolledBack, svc.HealthStatus())
+}
+
+// Both steps failing is the one case that reports failed, and the reason has to
+// carry both: the upgrade error alone would not say the stack is still broken.
+func TestRollbackFailureIsFailed(t *testing.T) {
+	ctx := context.Background()
+	store := &memStore{}
+	svc := newCollectService(store, &fakeCounter{ready: 1},
+		&fakeExecutor{upgradeErr: errStore, rollbackErr: errRollback})
 
 	_, err := svc.Accept(ctx, handoff("agent-1", "cmd-1"))
 	require.NoError(t, err)
@@ -609,17 +649,61 @@ func TestCollectionExecutorFailureIsTerminal(t *testing.T) {
 	assert.Equal(t, PhaseFailed, store.state.Phase)
 	require.NotNil(t, store.state.Result)
 	assert.Equal(t, ResultFailed, store.state.Result.Status)
+	assert.Contains(t, store.state.Result.Reason, errStore.Error())
+	assert.Contains(t, store.state.Result.Reason, errRollback.Error())
 	assert.Equal(t, StatusFailed, svc.HealthStatus())
 }
 
-// The stand-in executor terminates the round rather than leaving it in_progress.
-func TestUnimplementedExecutorReportsFailure(t *testing.T) {
-	result, err := UnimplementedExecutor{}.Execute(context.Background(), &State{
-		TargetVersion: "v2.1.0", RollbackVersion: "v2.0.3",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, ResultFailed, result.Status)
-	assert.Equal(t, "v2.1.0", result.ToVersion)
+// Spec — Agent Architecture startup table: an in_progress or rolling_back record
+// means execution was cut short, so the stack may be half-replaced and the only
+// safe move is to restore rollback_version. Without this the record is terminal
+// in neither direction and wedges the updater: every new handoff is refused and
+// DELETE /status will not clear a non-terminal phase.
+func TestRunRollsBackInterruptedExecution(t *testing.T) {
+	for _, phase := range []Phase{PhaseInProgress, PhaseRollingBack} {
+		ctx := context.Background()
+		store := &memStore{state: &State{
+			Phase:           phase,
+			TargetVersion:   "v2.1.0",
+			RollbackVersion: "v2.0.3",
+			AgentExecutions: map[string]string{"agent-1": "cmd-1"},
+			ExpectedCount:   1,
+		}}
+		executor := &fakeExecutor{}
+		svc := newCollectService(store, &fakeCounter{ready: 1}, executor)
+
+		require.NoError(t, svc.Recover(ctx))
+		svc.resumeInterrupted(ctx)
+
+		assert.Equal(t, 0, executor.calls, phase)
+		assert.Equal(t, 1, executor.rollbacks, phase)
+		assert.Equal(t, PhaseRolledBack, store.state.Phase, phase)
+		require.NotNil(t, store.state.Result, phase)
+		assert.Equal(t, ResultRolledBack, store.state.Result.Status, phase)
+		assert.Contains(t, store.state.Result.Reason, string(phase), phase)
+
+		// The round is now acknowledgeable, so the updater can be freed for the next.
+		require.NoError(t, svc.ClearStatus(ctx), phase)
+		assert.Equal(t, StatusIdle, svc.HealthStatus(), phase)
+	}
+}
+
+// A window still collecting, or a round already finished, must not be rolled back.
+func TestRunLeavesUninterruptedStateAlone(t *testing.T) {
+	for _, state := range []*State{
+		{Phase: PhasePending, TargetVersion: "v2.1.0", RollbackVersion: "v2.0.3", ExpectedCount: 2,
+			AgentExecutions: map[string]string{"agent-1": "cmd-1"}, CollectDeadline: time.Now().Add(time.Minute)},
+		terminalState(),
+	} {
+		ctx := context.Background()
+		executor := &fakeExecutor{}
+		svc := newCollectService(&memStore{state: state}, &fakeCounter{ready: 2}, executor)
+
+		require.NoError(t, svc.Recover(ctx))
+		svc.resumeInterrupted(ctx)
+
+		assert.Equal(t, 0, executor.rollbacks, state.Phase)
+	}
 }
 
 // An idle updater must not poll the API server.
@@ -643,7 +727,7 @@ func TestCollectionResumesAfterRestart(t *testing.T) {
 		ExpectedCount:   2,
 		CollectDeadline: time.Now().Add(time.Minute),
 	}}
-	executor := &fakeExecutor{result: &Result{Status: ResultSucceeded}}
+	executor := &fakeExecutor{}
 	svc := newCollectService(store, &fakeCounter{ready: 2}, executor)
 
 	require.NoError(t, svc.Recover(ctx))

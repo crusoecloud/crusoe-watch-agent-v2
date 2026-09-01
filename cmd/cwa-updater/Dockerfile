@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w
     -o /cwa-updater ./cmd/cwa-updater
 
 FROM alpine:3.21
-RUN apk add --no-cache 'ca-certificates>=20250106'
+RUN apk add --no-cache 'ca-certificates>=20250106' 'helm>=3.14'
 COPY --from=builder /cwa-updater /usr/local/bin/cwa-updater
 # Matches runAsUser/runAsGroup in the cwa-updater chart; the binary needs no root and writes only to the mounted emptyDir.
 USER 65532:65532

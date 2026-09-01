@@ -3,7 +3,7 @@ kind: ClusterRole
 metadata:
   name: {{ include "cwa.fullname" . }}
   labels:
-    {{- include "cwa.labels" . | nindent 4 }}
+    {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 rules:
   # kubernetes_logs: list+watch on pods, nodes, namespaces.
   # cwa-manager: get nodes, list+watch pods.
@@ -17,7 +17,7 @@ kind: ClusterRoleBinding
 metadata:
   name: {{ include "cwa.fullname" . }}
   labels:
-    {{- include "cwa.labels" . | nindent 4 }}
+    {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -34,14 +34,14 @@ metadata:
   name: {{ include "cwa.fullname" . }}-token-job
   namespace: {{ .Values.namespace }}
   labels:
-    {{- include "cwa.labels" . | nindent 4 }}
+    {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ include "cwa.fullname" . }}-token-job
   labels:
-    {{- include "cwa.labels" . | nindent 4 }}
+    {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -55,7 +55,7 @@ kind: ClusterRoleBinding
 metadata:
   name: {{ include "cwa.fullname" . }}-token-job
   labels:
-    {{- include "cwa.labels" . | nindent 4 }}
+    {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
     name: {{ include "cwa.fullname" . }}-token-job
@@ -70,7 +70,7 @@ kind: Namespace
 metadata:
   name: crusoe-monitoring
   labels:
-    {{- include "cwa.labels" . | nindent 4 }}
+    {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 ---
 # Role for reading custom-metrics ConfigMap in crusoe-monitoring namespace.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -79,7 +79,7 @@ metadata:
   name: {{ include "cwa.fullname" . }}-configmap-reader
   namespace: crusoe-monitoring
   labels:
-    {{- include "cwa.labels" . | nindent 4 }}
+    {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
@@ -91,7 +91,7 @@ metadata:
   name: {{ include "cwa.fullname" . }}-configmap-reader
   namespace: crusoe-monitoring
   labels:
-    {{- include "cwa.labels" . | nindent 4 }}
+    {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -111,7 +111,7 @@ metadata:
   name: {{ include "cwa.fullname" . }}-driver-exec
   namespace: {{ .Values.bugReport.driverNamespace }}
   labels:
-    {{- include "cwa.labels" . | nindent 4 }}
+    {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -126,7 +126,7 @@ metadata:
   name: {{ include "cwa.fullname" . }}-driver-exec
   namespace: {{ .Values.bugReport.driverNamespace }}
   labels:
-    {{- include "cwa.labels" . | nindent 4 }}
+    {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

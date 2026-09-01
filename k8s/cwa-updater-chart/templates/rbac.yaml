@@ -1,5 +1,3 @@
-# All of cwa-updater's permissions are namespace-scoped: it reads and writes the
-# handoff ConfigMap, bumps the agent DaemonSet, and polls DaemonSet pod health.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -13,14 +11,19 @@ rules:
     resources: ["configmaps"]
     resourceNames: ["{{ .Values.handoffConfigMap }}"]
     verbs: ["get", "watch", "update"]
-  # Helm release state (sh.helm.release.v1.*). `list` can't be
-  # resourceNames-scoped, hence namespace-wide.
+  # Helm release state (sh.helm.release.v1.<release>.v<N>). The revision number is
+  # unbounded and `list` cannot be resourceNames-scoped, so this is namespace-wide
+  # for any Helm-based upgrade path.
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "create", "update", "delete"]
+  # Agent chart workload resources: the auto-upgraded surface.
   - apiGroups: ["apps"]
     resources: ["daemonsets"]
-    verbs: ["get", "list", "watch", "patch", "update"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "serviceaccounts"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
   # `helm upgrade --wait` and the expected_count snapshot (numberReady).
   - apiGroups: ["apps"]
     resources: ["daemonsets/status"]
@@ -28,11 +31,7 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["list", "watch"]
-  # Pod IPs behind the headless Service, for post-upgrade health polling. Both
-  # kinds are granted so the chart works across CMK Kubernetes versions.
-  - apiGroups: [""]
-    resources: ["endpoints"]
-    verbs: ["get", "list"]
+  # Pod IPs behind the headless Service, for post-upgrade health polling.
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
     verbs: ["get", "list"]
@@ -48,6 +47,74 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "cwaUpdater.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cwaUpdater.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}
+---
+# The agent also defines cluster-scoped objects and permissions in other
+# namespaces. Helm reads every object a chart defines to work out what changed on
+# an upgrade, so these are readable but not writable: cwa-updater cannot modify
+# any permission in this cluster, including its own.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "cwaUpdater.fullname" . }}-agent-chart
+  labels:
+    {{- include "cwaUpdater.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "cwaUpdater.fullname" . }}-agent-chart
+  labels:
+    {{- include "cwaUpdater.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "cwaUpdater.fullname" . }}-agent-chart
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "cwaUpdater.serviceAccountName" . }}
+    namespace: {{ .Values.namespace }}
+---
+# The agent's default custom metrics configuration lives in the crusoe-monitoring
+# namespace. An upgrade reads it and leaves it in place; a rollback may have to
+# recreate it, which is why create is included.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "cwaUpdater.fullname" . }}-custom-metrics
+  namespace: crusoe-monitoring
+  labels:
+    {{- include "cwaUpdater.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["crusoe-custom-metrics-config"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "cwaUpdater.fullname" . }}-custom-metrics
+  namespace: crusoe-monitoring
+  labels:
+    {{- include "cwaUpdater.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "cwaUpdater.fullname" . }}-custom-metrics
 subjects:
   - kind: ServiceAccount
     name: {{ include "cwaUpdater.serviceAccountName" . }}

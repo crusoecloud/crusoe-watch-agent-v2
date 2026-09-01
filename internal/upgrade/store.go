@@ -27,7 +27,14 @@ type ReadyCounter interface {
 	ReadyCount(ctx context.Context) (int, error)
 }
 
-// Executor performs the upgrade once collection closes, and reports its outcome.
+// Executor installs a version and restores one. It reports only whether the
+// step worked; Service owns every phase write and builds the Result, so a crash
+// between the two can never leave the persisted phase disagreeing with reality.
 type Executor interface {
-	Execute(ctx context.Context, state *State) (*Result, error)
+	// Upgrade installs state.TargetVersion and confirms the agents came back.
+	Upgrade(ctx context.Context, state *State) error
+	// Rollback restores state.RollbackVersion. It is called both when Upgrade
+	// fails and when a restart finds an upgrade interrupted mid-execution, so it
+	// must tolerate a target version that was never deployed.
+	Rollback(ctx context.Context, state *State) error
 }

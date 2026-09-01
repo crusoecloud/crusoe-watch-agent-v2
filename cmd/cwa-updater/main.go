@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -35,6 +36,11 @@ const (
 
 	defaultHandoffConfigMap = "cwa-upgrade-handoff"
 	defaultAgentDaemonSet   = "crusoe-watch-agent"
+	defaultAgentRelease     = "crusoe-watch-agent"
+	defaultAgentChartRepo   = "oci://ghcr.io/crusoecloud/crusoe-watch-agent-v2/charts"
+	defaultAgentChartName   = "crusoe-watch-agent"
+	defaultAgentHealthSvc   = "crusoe-watch-agent"
+	defaultAgentHealthPort  = 8787
 
 	// maxRequestBytes caps the handoff body; a handoff is a few hundred bytes.
 	maxRequestBytes = 16 << 10
@@ -123,7 +129,7 @@ func buildUpgradeService(logger *slog.Logger) (*upgrade.Service, error) {
 
 	configMap := getEnvOrDefault("CWA_UPDATER_HANDOFF_CONFIGMAP", defaultHandoffConfigMap)
 	daemonSet := getEnvOrDefault("AGENT_DAEMONSET", defaultAgentDaemonSet)
-	ackTimeout := ackTimeoutFromEnv(logger)
+	ackTimeout := minutesFromEnv(logger, "UPGRADE_ACK_TIMEOUT_MIN")
 
 	logger.Info("upgrade state wired", "namespace", namespace,
 		"handoff_configmap", configMap, "agent_daemonset", daemonSet, "ack_timeout", ackTimeout)
@@ -131,27 +137,69 @@ func buildUpgradeService(logger *slog.Logger) (*upgrade.Service, error) {
 	return upgrade.New(upgrade.Config{
 		Store:      upgrade.NewConfigMapStore(client, namespace, configMap),
 		Counter:    upgrade.NewDaemonSetCounter(client, namespace, daemonSet),
-		Executor:   upgrade.UnimplementedExecutor{},
+		Executor:   buildExecutor(logger, client, namespace),
 		Logger:     logger,
 		AckTimeout: ackTimeout,
 	}), nil
 }
 
-// ackTimeoutFromEnv reads upgrade_ack_timeout_min. Zero leaves the service on its own default.
-func ackTimeoutFromEnv(logger *slog.Logger) time.Duration {
-	raw := os.Getenv("UPGRADE_ACK_TIMEOUT_MIN")
+// buildExecutor wires the helm-backed executor and its post-upgrade health check.
+func buildExecutor(logger *slog.Logger, client kubernetes.Interface, namespace string) upgrade.Executor {
+	healthService := getEnvOrDefault("AGENT_HEALTH_SERVICE", defaultAgentHealthSvc)
+	healthPort := portFromEnv(logger, "AGENT_HEALTH_PORT", defaultAgentHealthPort)
+	rollbackWindow := minutesFromEnv(logger, "UPGRADE_ROLLBACK_WINDOW_MIN")
+
+	cfg := upgrade.HelmConfig{
+		Runner:         upgrade.ExecRunner{Logger: logger},
+		Verifier:       upgrade.NewEndpointVerifier(client, logger, namespace, healthService, healthPort),
+		Logger:         logger,
+		Namespace:      namespace,
+		Release:        getEnvOrDefault("AGENT_RELEASE_NAME", defaultAgentRelease),
+		ChartRepo:      getEnvOrDefault("AGENT_CHART_REPO", defaultAgentChartRepo),
+		ChartName:      getEnvOrDefault("AGENT_CHART_NAME", defaultAgentChartName),
+		RollbackWindow: rollbackWindow,
+	}
+
+	logger.Info("upgrade executor wired",
+		"release", cfg.Release, "chart_repo", cfg.ChartRepo, "chart_name", cfg.ChartName,
+		"health_service", healthService, "health_port", healthPort,
+		"rollback_window", rollbackWindow)
+
+	return upgrade.NewHelmExecutor(cfg)
+}
+
+// minutesFromEnv reads a minute-valued setting. Zero leaves the consumer on its own default.
+func minutesFromEnv(logger *slog.Logger, key string) time.Duration {
+	raw := os.Getenv(key)
 	if raw == "" {
 		return 0
 	}
 
 	minutes, err := strconv.Atoi(raw)
 	if err != nil || minutes <= 0 {
-		logger.Warn("ignoring invalid UPGRADE_ACK_TIMEOUT_MIN", "value", raw)
+		logger.Warn("ignoring invalid value", "key", key, "value", raw)
 
 		return 0
 	}
 
 	return time.Duration(minutes) * time.Minute
+}
+
+// portFromEnv reads a port, falling back to def when it is unset or unusable.
+func portFromEnv(logger *slog.Logger, key string, def int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def
+	}
+
+	port, err := strconv.Atoi(raw)
+	if err != nil || port <= 0 || port > math.MaxUint16 {
+		logger.Warn("ignoring invalid port", "key", key, "value", raw)
+
+		return def
+	}
+
+	return port
 }
 
 func serve(ctx context.Context, logger *slog.Logger, srv *server) error {

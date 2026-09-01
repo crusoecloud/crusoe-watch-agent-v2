@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 )
@@ -97,8 +98,9 @@ func New(cfg Config) *Service {
 // Recover loads any upgrade persisted by a previous cwa-updater process, so the
 // first /health and /status reads reflect it rather than reporting idle. A
 // terminal result is held until cwa-manager acknowledges it with DELETE /status;
-// a collection window still open is resumed by Run. A record that cannot be
-// read is not fatal, but a store that cannot be reached is.
+// a collection window still open, and an execution interrupted mid-flight, are
+// both resumed by Run. A record that cannot be read is not fatal, but a store
+// that cannot be reached is.
 func (s *Service) Recover(ctx context.Context) error {
 	state, err := s.store.Load(ctx)
 
@@ -274,8 +276,11 @@ func acceptance(state *State) Acceptance {
 // many agents are ready, follows a sustained scale-down, and closes the window
 // once every expected agent has handed off or the deadline passes. Running it
 // as a loop rather than a goroutine per handoff is what lets a cwa-updater that
-// restarted mid-collection pick the window back up.
+// restarted mid-collection pick the window back up. It first resumes an
+// execution the previous process did not finish.
 func (s *Service) Run(ctx context.Context) {
+	s.resumeInterrupted(ctx)
+
 	ticker := time.NewTicker(s.collectInterval)
 	defer ticker.Stop()
 
@@ -384,7 +389,7 @@ func (s *Service) outcome() collectOutcome {
 // execute closes the window and runs the upgrade. The in_progress write lands
 // first, so a crash from here on is not mistaken for a clean resume.
 func (s *Service) execute(ctx context.Context) {
-	state, ok := s.transition(ctx, PhaseInProgress)
+	state, ok := s.transition(ctx, PhaseInProgress, PhasePending)
 	if !ok {
 		return
 	}
@@ -392,18 +397,76 @@ func (s *Service) execute(ctx context.Context) {
 	s.logger.Info("collection complete; executing upgrade",
 		"target_version", state.TargetVersion, "collected", len(state.AgentExecutions))
 
-	result, err := s.executor.Execute(ctx, state)
-	if err != nil {
-		result = &Result{
+	if err := s.executor.Upgrade(ctx, state); err != nil {
+		s.logger.Error("upgrade failed; rolling back",
+			"error", err, "target_version", state.TargetVersion,
+			"rollback_version", state.RollbackVersion)
+		s.rollback(ctx, err.Error())
+
+		return
+	}
+
+	s.finish(ctx, &Result{
+		Status:      ResultSucceeded,
+		FromVersion: state.RollbackVersion,
+		ToVersion:   state.TargetVersion,
+		CompletedAt: time.Now().UTC(),
+	})
+}
+
+// resumeInterrupted rolls back an upgrade the previous process did not finish.
+// An in_progress record means execution was interrupted, so restoring rollback_version
+// is the only safe move. A rolling_back record is resumed the same way.
+func (s *Service) resumeInterrupted(ctx context.Context) {
+	s.mu.Lock()
+
+	var phase Phase
+	if s.state != nil {
+		phase = s.state.Phase
+	}
+
+	s.mu.Unlock()
+
+	if phase != PhaseInProgress && phase != PhaseRollingBack {
+		return
+	}
+
+	s.logger.Warn("upgrade was interrupted mid-execution; rolling back", "phase", phase)
+	s.rollback(ctx, fmt.Sprintf("cwa-updater restarted while the upgrade was %s", phase))
+}
+
+// rollback restores RollbackVersion and records the terminal result. reason is
+// why the upgrade is being undone, and is reported either way: a rollback that
+// works reports it against rolled_back, one that fails appends its own failure.
+func (s *Service) rollback(ctx context.Context, reason string) {
+	// PhaseRollingBack is accepted as a source phase too, so a restart that
+	// found a cut-short rollback can drive this same path.
+	state, ok := s.transition(ctx, PhaseRollingBack, PhaseInProgress, PhaseRollingBack)
+	if !ok {
+		return
+	}
+
+	if err := s.executor.Rollback(ctx, state); err != nil {
+		s.logger.Error("rollback failed",
+			"error", err, "rollback_version", state.RollbackVersion)
+		s.finish(ctx, &Result{
 			Status:      ResultFailed,
 			FromVersion: state.RollbackVersion,
 			ToVersion:   state.TargetVersion,
-			Reason:      err.Error(),
+			Reason:      fmt.Sprintf("%s; rollback to %s also failed: %v", reason, state.RollbackVersion, err),
 			CompletedAt: time.Now().UTC(),
-		}
+		})
+
+		return
 	}
 
-	s.finish(ctx, result)
+	s.finish(ctx, &Result{
+		Status:      ResultRolledBack,
+		FromVersion: state.RollbackVersion,
+		ToVersion:   state.TargetVersion,
+		Reason:      reason,
+		CompletedAt: time.Now().UTC(),
+	})
 }
 
 // abort ends a window that never filled. The persisted phase is
@@ -440,13 +503,14 @@ func (s *Service) abort(ctx context.Context) {
 		"collected", len(staged.AgentExecutions), "expected", staged.ExpectedCount)
 }
 
-// transition moves an open window to phase, returning a snapshot of the state
-// it committed. The false return means another path already closed the window.
-func (s *Service) transition(ctx context.Context, phase Phase) (*State, bool) {
+// transition moves the persisted upgrade to phase, returning a snapshot of the
+// state it committed. The false return means the record is not in any of the
+// from phases, so another path already moved it on.
+func (s *Service) transition(ctx context.Context, phase Phase, from ...Phase) (*State, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.state == nil || s.state.Phase != PhasePending {
+	if s.state == nil || !slices.Contains(from, s.state.Phase) {
 		return nil, false
 	}
 
@@ -454,7 +518,7 @@ func (s *Service) transition(ctx context.Context, phase Phase) (*State, bool) {
 	staged.Phase = phase
 
 	if err := s.commit(ctx, staged); err != nil {
-		s.logger.Error("marking upgrade in progress", "error", err)
+		s.logger.Error("persisting phase transition", "phase", phase, "error", err)
 
 		return nil, false
 	}
