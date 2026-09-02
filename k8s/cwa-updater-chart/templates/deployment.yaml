@@ -78,6 +78,9 @@ spec:
               value: {{ .Values.upgrade.rollbackWindowMin | quote }}
             - name: UPGRADE_ACK_TIMEOUT_MIN
               value: {{ .Values.upgrade.ackTimeoutMin | quote }}
+            # cosign caches the transparency log's signing keys under HOME, and the root filesystem is read-only.
+            - name: HOME
+              value: /tmp
             # Helm's HOME-relative dirs must land on the writable emptyDir.
             - name: HELM_CACHE_HOME
               value: /tmp/helm/cache

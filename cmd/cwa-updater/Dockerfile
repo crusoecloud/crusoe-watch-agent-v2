@@ -21,8 +21,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w
     -o /cwa-updater ./cmd/cwa-updater
 
 FROM alpine:3.21
-RUN apk add --no-cache 'ca-certificates>=20250106' 'helm>=3.14'
+RUN apk add --no-cache 'ca-certificates>=20250106' 'helm>=3.14' 'cosign>=2.2'
 COPY --from=builder /cwa-updater /usr/local/bin/cwa-updater
+# Public half of the release pipeline's chart signing key. Baked in rather than
+# configured, so nothing in the cluster can point verification at another key.
+COPY ci/cosign.pub /etc/cwa/cosign.pub
 # Matches runAsUser/runAsGroup in the cwa-updater chart; the binary needs no root and writes only to the mounted emptyDir.
 USER 65532:65532
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -q -O /dev/null "http://127.0.0.1:${CWA_UPDATER_PORT:-8786}/health" || exit 1

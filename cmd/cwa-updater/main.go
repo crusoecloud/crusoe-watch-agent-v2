@@ -150,7 +150,8 @@ func buildExecutor(logger *slog.Logger, client kubernetes.Interface, namespace s
 	rollbackWindow := minutesFromEnv(logger, "UPGRADE_ROLLBACK_WINDOW_MIN")
 
 	cfg := upgrade.HelmConfig{
-		Runner:         upgrade.ExecRunner{Logger: logger},
+		Runner:         upgrade.NewHelmRunner(logger),
+		Cosign:         upgrade.NewCosignRunner(logger),
 		Verifier:       upgrade.NewEndpointVerifier(client, logger, namespace, healthService, healthPort),
 		Logger:         logger,
 		Namespace:      namespace,

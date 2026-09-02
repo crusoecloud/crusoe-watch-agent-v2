@@ -81,6 +81,7 @@ cwa-updater:build:
         - cmd/cwa-updater/**/*
         - internal/upgrade/**/*
         - internal/version/**/*
+        - ci/cosign.pub
         - go.mod
         - go.sum
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -88,6 +89,7 @@ cwa-updater:build:
         - cmd/cwa-updater/**/*
         - internal/upgrade/**/*
         - internal/version/**/*
+        - ci/cosign.pub
         - go.mod
         - go.sum
 

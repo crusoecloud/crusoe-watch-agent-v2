@@ -144,6 +144,11 @@ publish_chart() {
         "${GHCR_REGISTRY}/charts/${chart}:${chart_version}"
     rm -f "$key"
 
+    # cwa-updater verifies every chart it upgrades to against the public key.
+    log "Verifying the signature with the committed public key"
+    cosign verify --key "${WORK}/ci/cosign.pub" \
+        "${GHCR_REGISTRY}/charts/${chart}:${chart_version}" > /dev/null
+
     # Move this chart's "latest" pointer to the version just pushed.
     docker buildx imagetools create \
         --tag "${GHCR_REGISTRY}/charts/${chart}:latest" \
