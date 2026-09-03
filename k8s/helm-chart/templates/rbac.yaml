@@ -37,23 +37,27 @@ metadata:
     {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   name: {{ include "cwa.fullname" . }}-token-job
+  namespace: {{ .Values.namespace }}
   labels:
     {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 rules:
+  # The Job writes exactly one Secret in its own namespace.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["create", "get"]
+    verbs: ["create"]
   - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["create", "get"]
+    resources: ["secrets"]
+    resourceNames: [{{ include "cwa.monitoringSecretName" . }}]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
   name: {{ include "cwa.fullname" . }}-token-job
+  namespace: {{ .Values.namespace }}
   labels:
     {{- include "cwa.bootstrapLabels" . | nindent 4 }}
 subjects:
@@ -61,7 +65,7 @@ subjects:
     name: {{ include "cwa.fullname" . }}-token-job
     namespace: {{ .Values.namespace }}
 roleRef:
-  kind: ClusterRole
+  kind: Role
   name: {{ include "cwa.fullname" . }}-token-job
   apiGroup: rbac.authorization.k8s.io
 ---
