@@ -25,6 +25,7 @@ import (
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/health"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/heartbeat"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/identity"
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/upgrade"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/watcher"
@@ -141,9 +142,7 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	}()
 
 	loop := heartbeat.NewLoop(ident, newHealthCollector(ident, vmCfg.GPUType, logger), conn, logger)
-	uploadURL := "https://" + strings.TrimSuffix(coordAddr, ":443") + "/upload"
-	uploader := bugreport.NewHTTPUploader(uploadURL, token, ident.VMID, os.Getenv(nodeNameEnv))
-	loop.SetDispatcher(buildDispatcher(loop, deps, k8sRT, uploader, logger))
+	wireCommands(loop, deps, k8sRT, coordAddr, token, ident, logger)
 
 	// Layer 2: recover commands a hard stop interrupted, before the loop starts.
 	command.RecoverInterrupted(deps.Store, loop, logger)
@@ -154,6 +153,25 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	logger.Info("cwa-manager shutdown complete")
 
 	return nil
+}
+
+// wireCommands gives the loop its command surface: the bug-report uploader, the
+// cwa-updater client, and the dispatcher.
+func wireCommands(
+	loop *heartbeat.Loop, deps command.Deps, k8sRT *k8sRuntime,
+	coordAddr, token string, ident *identity.Identity, logger *slog.Logger,
+) {
+	uploadURL := "https://" + strings.TrimSuffix(coordAddr, ":443") + "/upload"
+	uploader := bugreport.NewHTTPUploader(uploadURL, token, ident.VMID, os.Getenv(nodeNameEnv))
+
+	// cwa-updater owns the upgrade; cwa-manager hands its own off and reports back.
+	updater := upgrade.NewClient(
+		getEnvOrDefault(upgrade.HostEnv, upgrade.DefaultHost),
+		getEnvOrDefault(upgrade.PortEnv, upgrade.DefaultPort),
+	)
+
+	loop.SetUpgradeStatus(updater)
+	loop.SetDispatcher(buildDispatcher(loop, deps, k8sRT, uploader, updater, ident, logger))
 }
 
 // startHealthServer serves cwa-manager's own /health in the background.
@@ -254,7 +272,8 @@ func startDataPlane(
 
 // buildDispatcher wires the command dispatcher with all command handlers.
 func buildDispatcher(
-	loop *heartbeat.Loop, deps command.Deps, k8sRT *k8sRuntime, uploader command.Uploader, logger *slog.Logger,
+	loop *heartbeat.Loop, deps command.Deps, k8sRT *k8sRuntime, uploader command.Uploader,
+	updater command.Updater, ident *identity.Identity, logger *slog.Logger,
 ) *command.Dispatcher {
 	disp := command.NewDispatcher(loop, deps.Store, logger)
 	disp.Register(command.ConfigApplyCommand, command.NewConfigApply(deps))
@@ -262,6 +281,15 @@ func buildDispatcher(
 	disp.Register(command.IngestionBlockCommand, command.NewIngestionBlock(deps, true))
 	disp.Register(command.IngestionUnblockCommand, command.NewIngestionBlock(deps, false))
 	disp.Register(command.RateLimitSetCommand, command.NewRateLimitSet(deps))
+
+	// Registered only where cwa-updater is deployed.
+	if deps.InstallType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
+		disp.Register(command.UpgradeExecuteCommand, command.NewUpgradeExecute(
+			updater,
+			func() string { return ident.AgentID },
+			command.WithUpgradeNotifier(loop.MarkUpgradeHandedOff),
+		))
+	}
 
 	// report.bug is only registered when a platform generator could be built;
 	// otherwise the agent runs degraded and the command is acked as FAILED.

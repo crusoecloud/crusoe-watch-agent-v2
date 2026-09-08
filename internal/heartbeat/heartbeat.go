@@ -33,8 +33,8 @@ const (
 	heartbeatFlushGrace = 5 * time.Second
 )
 
-func capabilities() []string {
-	return []string{
+func capabilities(installType pb.CwaInstallType) []string {
+	caps := []string{
 		"heartbeat",
 		"config_apply",
 		"config_get",
@@ -43,6 +43,14 @@ func capabilities() []string {
 		"report_bug",
 		"rate_limit",
 	}
+
+	// Only Kubernetes deploys cwa-updater today, so VM targets must not claim
+	// they can be upgraded.
+	if installType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
+		caps = append(caps, "auto_upgrade")
+	}
+
+	return caps
 }
 
 // optional renders a value for a proto3 optional field: nil when unset.
@@ -61,7 +69,9 @@ type Loop struct {
 	client     pb.CwaAgentClient
 	logger     *slog.Logger
 	dispatcher *command.Dispatcher
-	mu         sync.Mutex
+	// upgrades reports and acknowledges cwa-updater's results; nil-safe.
+	upgrades *upgradeReporter
+	mu       sync.Mutex
 	// pendingResults holds command results that are re-sent on every heartbeat
 	// until the coordinator stops echoing the corresponding command.
 	pendingResults map[string]*pb.CwaCommandResult
@@ -103,6 +113,17 @@ func (l *Loop) SetDispatcher(d *command.Dispatcher) {
 	l.dispatcher = d
 }
 
+// SetUpgradeStatus wires the cwa-updater client upgrade results are read from.
+// Without it the heartbeat reports no last_upgrade_result.
+func (l *Loop) SetUpgradeStatus(client UpdaterStatus) {
+	l.upgrades = &upgradeReporter{client: client, logger: l.logger}
+}
+
+// MarkUpgradeHandedOff is the hook upgrade.execute calls on an accepted handoff.
+func (l *Loop) MarkUpgradeHandedOff(targetVersion string) {
+	l.upgrades.MarkHandedOff(targetVersion)
+}
+
 // DeliverResult implements command.ResultSink. It stores a finished command
 // result for inclusion in the next heartbeat, re-sent until the coordinator acks.
 func (l *Loop) DeliverResult(result *pb.CwaCommandResult) {
@@ -131,7 +152,7 @@ func (l *Loop) Register(ctx context.Context) (string, error) {
 		VmId:           l.identity.VMID,
 		InstallType:    l.identity.InstallType,
 		Version:        version.Agent(),
-		CapabilityList: capabilities(),
+		CapabilityList: capabilities(l.identity.InstallType),
 		Location:       l.identity.Region,
 		ProjectId:      optional(l.identity.ProjectID),
 		ClusterId:      optional(l.identity.ClusterID),
@@ -158,6 +179,8 @@ func (l *Loop) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("opening heartbeat stream: %w", err)
 	}
+
+	l.upgrades.StreamOpened()
 
 	// Receive goroutine: reads commands from coordinator.
 	// streamCancel ensures this goroutine exits when Run returns.
@@ -201,15 +224,16 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 	l.mu.Unlock()
 
 	components := l.health.Collect(ctx)
+	lastUpgrade := l.upgrades.Result(ctx)
 
 	req := &pb.CwaAgentHeartbeatRequest{
 		AgentId:           l.identity.AgentID,
 		InstallType:       l.identity.InstallType,
 		Version:           version.Agent(),
-		CapabilityList:    capabilities(),
-		AgentStatus:       deriveAgentStatus(components),
+		CapabilityList:    capabilities(l.identity.InstallType),
+		AgentStatus:       deriveAgentStatus(components, l.upgrades.InProgress()),
 		Components:        components,
-		LastUpgradeResult: nil, // TODO: Populate from cwa-updater persistence store on startup.
+		LastUpgradeResult: lastUpgrade,
 		CommandResults:    results,
 		Location:          l.identity.Region,
 		OsVersion:         optional(l.identity.OSVersion),
@@ -220,6 +244,9 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 	}
 
 	l.lastHeartbeat.Store(time.Now().UnixNano())
+
+	// This send is the evidence an earlier one reached the coordinator.
+	l.upgrades.Sent(ctx)
 	l.logger.Debug("heartbeat sent", "agent_id", req.GetAgentId())
 
 	l.logHealthChange(healthSnapshot{
@@ -308,8 +335,14 @@ func (l *Loop) receiveLoop(ctx context.Context, stream pb.CwaAgent_CwaAgentHeart
 	}
 }
 
-// TODO: Set CWA_AGENT_STATUS_UPGRADE_IN_PROGRESS when upgrade dispatch is implemented.
-func deriveAgentStatus(compHealth *pb.CwaComponentsHealth) pb.CwaAgentStatus {
+// deriveAgentStatus folds component health and any upgrade in flight into the
+// agent status. Upgrading outranks degraded: components are expected to be
+// unsettled while the agent is being replaced.
+func deriveAgentStatus(compHealth *pb.CwaComponentsHealth, upgrading bool) pb.CwaAgentStatus {
+	if upgrading {
+		return pb.CwaAgentStatus_CWA_AGENT_STATUS_UPGRADE_IN_PROGRESS
+	}
+
 	healthy := pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY
 
 	degraded := compHealth.GetCwaManager().GetStatus() != healthy ||

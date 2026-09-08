@@ -25,6 +25,20 @@ const (
 
 var errCommandTimedOut = errors.New("command timed out")
 
+// execIDKey carries the running command's execution_id into its handler.
+type execIDKey struct{}
+
+// ExecutionIDFromContext returns the execution_id of the command being run.
+// upgrade.execute sends it to cwa-updater, which collects one per agent.
+func ExecutionIDFromContext(ctx context.Context) string {
+	id, ok := ctx.Value(execIDKey{}).(string)
+	if !ok {
+		return ""
+	}
+
+	return id
+}
+
 // Handler executes a single command. A nil error is reported as SUCCEEDED; a
 // non-nil error as FAILED with the error message as the reason. The returned
 // string is an optional command-defined result payload.
@@ -117,6 +131,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, cmd *pb.CwaCommand) {
 	// Detach from the caller's cancellation: a command outlives the heartbeat
 	// stream that delivered it and is bounded by its own timeout (or Interrupt).
 	runCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), handler.Timeout())
+	runCtx = context.WithValue(runCtx, execIDKey{}, execID)
 	inf := &inflightCmd{
 		id:          execID,
 		command:     cmd.GetCommand(),

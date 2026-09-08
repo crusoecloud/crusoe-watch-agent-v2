@@ -162,7 +162,7 @@ func TestDeriveAgentStatus(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			status := deriveAgentStatus(tt.components)
+			status := deriveAgentStatus(tt.components, false)
 			assert.Equal(t, tt.expected, status)
 		})
 	}
@@ -234,7 +234,7 @@ func TestDeriveAgentStatus_UnspecifiedIsDegraded(t *testing.T) {
 		CwaUpdater: &pb.CwaUpdaterHealth{Status: pb.CwaComponentStatus_CWA_COMPONENT_STATUS_UNSPECIFIED},
 	}
 
-	assert.Equal(t, pb.CwaAgentStatus_CWA_AGENT_STATUS_DEGRADED, deriveAgentStatus(components))
+	assert.Equal(t, pb.CwaAgentStatus_CWA_AGENT_STATUS_DEGRADED, deriveAgentStatus(components, false))
 }
 
 // fakeStream is a minimal CwaAgent heartbeat client stream for exercising
