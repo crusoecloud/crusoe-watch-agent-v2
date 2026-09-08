@@ -79,8 +79,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
 github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
-gitlab.com/crusoeenergy/schemas/api/island/v2 v2.216.24 h1:pRAbgygo/CvHvNcjtnW+W8v2gNKnAIo78nk8bc2gOmk=
-gitlab.com/crusoeenergy/schemas/api/island/v2 v2.216.24/go.mod h1:WubA9iNez3WrDLi43pdqiUzHi0Twre6cae/RLdRVf7A=
+gitlab.com/crusoeenergy/schemas/api/island/v2 v2.216.44 h1:DDUEPm4Tp7QWqCS3+67evVARaa35JDzw3++faRgjx3U=
+gitlab.com/crusoeenergy/schemas/api/island/v2 v2.216.44/go.mod h1:WubA9iNez3WrDLi43pdqiUzHi0Twre6cae/RLdRVf7A=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/otel v1.44.0 h1:JjwHmHpA4iZ3wBxluu2fbbE7j4kqlE8jXyAyPXH7HqU=

@@ -45,6 +45,15 @@ func capabilities() []string {
 	}
 }
 
+// optional renders a value for a proto3 optional field: nil when unset.
+func optional(s string) *string {
+	if s == "" {
+		return nil
+	}
+
+	return &s
+}
+
 // Loop manages the bidirectional heartbeat stream.
 type Loop struct {
 	identity   *identity.Identity
@@ -124,17 +133,9 @@ func (l *Loop) Register(ctx context.Context) (string, error) {
 		Version:        version.Agent(),
 		CapabilityList: capabilities(),
 		Location:       l.identity.Region,
-	}
-	if l.identity.ProjectID != "" {
-		req.ProjectId = &l.identity.ProjectID
-	}
-
-	if l.identity.ClusterID != "" {
-		req.ClusterId = &l.identity.ClusterID
-	}
-
-	if l.identity.OSVersion != "" {
-		req.OsVersion = &l.identity.OSVersion
+		ProjectId:      optional(l.identity.ProjectID),
+		ClusterId:      optional(l.identity.ClusterID),
+		OsVersion:      optional(l.identity.OSVersion),
 	}
 
 	resp, err := l.client.RegisterCwaAgent(ctx, req)
@@ -211,6 +212,7 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 		LastUpgradeResult: nil, // TODO: Populate from cwa-updater persistence store on startup.
 		CommandResults:    results,
 		Location:          l.identity.Region,
+		OsVersion:         optional(l.identity.OSVersion),
 	}
 
 	if err := stream.Send(req); err != nil {

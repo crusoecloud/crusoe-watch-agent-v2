@@ -311,6 +311,28 @@ func newShutdownLoop() *Loop {
 	}
 }
 
+func TestSendHeartbeat_OSVersion(t *testing.T) {
+	tests := []struct {
+		name      string
+		osVersion string
+		want      *string
+	}{
+		{name: "resolved os_version is sent", osVersion: "ubuntu-22.04", want: ptr("ubuntu-22.04")},
+		{name: "unresolvable os_version is omitted"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newShutdownLoop()
+			l.identity.OSVersion = tc.osVersion
+
+			stream := &fakeStream{}
+			require.NoError(t, l.sendHeartbeat(context.Background(), stream))
+
+			assert.Equal(t, tc.want, stream.lastSent().OsVersion)
+		})
+	}
+}
+
 func TestShutdown_FlushesPendingResultsInFinalHeartbeat(t *testing.T) {
 	l := newShutdownLoop()
 	l.pendingResults["exec-1"] = &pb.CwaCommandResult{
