@@ -20,9 +20,17 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w -X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${VERSION}'" \
     -o /cwa-updater ./cmd/cwa-updater
 
+# Same pin as .gitlab-ci.yml's signing side; move the two together.
+ARG COSIGN_VERSION=v2.6.5
+RUN apk add --no-cache curl && \
+    curl -fsSL -o /cosign \
+        "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${TARGETARCH}" && \
+    chmod +x /cosign
+
 FROM alpine:3.21
-RUN apk add --no-cache 'ca-certificates>=20250106' 'helm>=3.14' 'cosign>=2.2'
+RUN apk add --no-cache 'ca-certificates>=20250106' 'helm>=3.14'
 COPY --from=builder /cwa-updater /usr/local/bin/cwa-updater
+COPY --from=builder /cosign /usr/local/bin/cosign
 # Public half of the release pipeline's chart signing key. Baked in rather than
 # configured, so nothing in the cluster can point verification at another key.
 COPY ci/cosign.pub /etc/cwa/cosign.pub

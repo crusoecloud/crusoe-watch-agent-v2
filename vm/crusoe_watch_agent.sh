@@ -94,21 +94,102 @@ detect_gpu() {
     fi
 }
 
-# Download a file from the repo, or copy from local checkout.
-# When running from the repo directory (e.g., during development/testing),
-# local files are used automatically without needing GitHub access.
-download_file() {
-    local remote_path="$1"
+# Place an asset from the release bundle, which fetch_bundle has already
+# verified and pointed SCRIPT_DIR at. A miss is a packaging bug.
+copy_asset() {
+    local asset_path="$1"
     local dest="$2"
 
-    local local_path="${SCRIPT_DIR}/${remote_path#vm/}"
-    if [[ -f "$local_path" ]]; then
-        status "Copying local file: ${local_path}"
-        cp "$local_path" "$dest"
-    else
-        local url="${GITHUB_RELEASE_URL}/${remote_path##*/}"
-        wget -q -O "$dest" "$url" || error_exit "Failed to download ${url}"
+    # Callers name assets by their repo path; the bundle mirrors vm/.
+    local src="${SCRIPT_DIR}/${asset_path#vm/}"
+    [[ -f "$src" ]] || error_exit "${asset_path} is missing from the release bundle."
+
+    cp "$src" "$dest"
+}
+
+# Public half of the release signing key, whose private half lives in CI.
+# Spliced in from ci/cosign.pub at render time so there is only one copy to rotate.
+cosign_public_key() {
+    cat <<'PUBKEY'
+@@COSIGN_PUBLIC_KEY@@
+PUBKEY
+}
+
+# Download the release bundle for this install mode, verify it, and extract it.
+# SCRIPT_DIR is repointed at the result so copy_asset and install_release_binary
+# resolve every asset from a bundle whose signature has already been checked.
+fetch_bundle() {
+    # A repo checkout already has everything laid out next to the script.
+    if [[ -d "${SCRIPT_DIR}/systemctl" ]]; then
+        status "Running from a checkout; using local assets."
+        return
     fi
+
+    # The agent bundle (cwa-updater ships separately).
+    local bundle
+    if [[ "$INSTALL_MODE" == "docker" ]]; then
+        bundle="cwa-docker.tar.gz"
+    else
+        bundle="cwa-native-$(dpkg --print-architecture).tar.gz"
+    fi
+
+    fetch_verified "$GITHUB_RELEASE_URL" "$bundle"
+
+    status "Extracting ${bundle}..."
+    tar -xzf "${DOWNLOAD_DIR}/${bundle}" -C "$DOWNLOAD_DIR" \
+        || error_exit "Failed to extract ${bundle}."
+
+    SCRIPT_DIR="$DOWNLOAD_DIR"
+}
+
+# Download $2 and the signed manifest from release URL $1 into a fresh temp
+# directory, verify $2 against the manifest, and leave the path in DOWNLOAD_DIR.
+# Every artifact this installer fetches from a Crusoe release comes through here.
+fetch_verified() {
+    local base_url="$1" name="$2"
+
+    DOWNLOAD_DIR=$(mktemp -d)
+    trap 'rm -rf "${DOWNLOAD_DIR}"' EXIT
+
+    status "Downloading ${name}..."
+    local f
+    for f in "$name" SHA256SUMS SHA256SUMS.sig; do
+        wget -q -O "${DOWNLOAD_DIR}/${f}" "${base_url}/${f}" \
+            || error_exit "Failed to download ${base_url}/${f}"
+    done
+
+    verify_download "$DOWNLOAD_DIR" "$name"
+}
+
+# Check the release signature over SHA256SUMS in directory $1, then $2's digest
+# against it. Both must pass before $2 is extracted or executed. $1 must already
+# hold SHA256SUMS and SHA256SUMS.sig from the same release as $2.
+verify_download() {
+    local dir="$1" name="$2"
+
+    ensure_openssl
+
+    cosign_public_key > "${dir}/cosign.pub"
+    grep -q "BEGIN PUBLIC KEY" "${dir}/cosign.pub" \
+        || error_exit "This installer carries no signing key; it was not produced by the release pipeline."
+    base64 -d < "${dir}/SHA256SUMS.sig" > "${dir}/SHA256SUMS.der" \
+        || error_exit "Release signature is malformed."
+
+    status "Verifying the signature on ${name}..."
+    openssl dgst -sha256 \
+        -verify "${dir}/cosign.pub" \
+        -signature "${dir}/SHA256SUMS.der" \
+        "${dir}/SHA256SUMS" > /dev/null \
+        || error_exit "Release signature does not verify. Refusing to continue."
+
+    # Exact filename match, not a regex.
+    local digest_line
+    digest_line=$(awk -v n="$name" '$2 == n { print; found = 1 } END { exit !found }' \
+        "${dir}/SHA256SUMS") \
+        || error_exit "${name} is not listed in SHA256SUMS. Refusing to continue."
+
+    ( cd "$dir" && printf '%s\n' "$digest_line" | sha256sum -c --status - ) \
+        || error_exit "${name} does not match its signed checksum. Refusing to continue."
 }
 
 ###############################################################################
@@ -179,6 +260,14 @@ ensure_wget() {
     fi
 }
 
+ensure_openssl() {
+    if ! command_exists openssl; then
+        status "Installing openssl..."
+        { apt-get update -qq && apt-get install -y -qq openssl; } \
+            || error_exit "Failed to install openssl, which is required to verify the release signature."
+    fi
+}
+
 ensure_docker() {
     if command_exists docker; then
         status "Docker already installed: $(docker --version)"
@@ -192,12 +281,11 @@ ensure_docker() {
 ###############################################################################
 # Component installers
 ###############################################################################
-# Installs a native-mode Go binary to INSTALL_DIR. $1 = binary name; the release
-# asset is <name>-linux-<arch> for the host arch (amd64 or arm64), with a fallback.
+# Installs a native-mode Go binary to INSTALL_DIR. $1 = binary name. The native
+# bundle carries it at its root; a repo checkout falls back to a local build.
 install_release_binary() {
     local name="$1" src=""
 
-    # Dev fallback: pick up a locally-built binary if present.
     for candidate in \
         "${SCRIPT_DIR}/${name}" \
         "${SCRIPT_DIR}/../dist/${name}"; do
@@ -207,24 +295,10 @@ install_release_binary() {
         fi
     done
 
-    if [[ -z "$src" ]]; then
-        local arch
-        arch=$(dpkg --print-architecture)
-        local url="${GITHUB_RELEASE_URL}/${name}-linux-${arch}"
-        status "Downloading ${name} from ${url}..."
-        local tmp
-        tmp=$(mktemp)
-        if wget -q -O "$tmp" "$url"; then
-            src="$tmp"
-        else
-            rm -f "$tmp"
-            error_exit "Failed to download ${name}. Place binary next to the script or check network."
-        fi
-    fi
+    [[ -n "$src" ]] || error_exit "${name} is missing from the release bundle."
 
     status "Installing ${name} to ${INSTALL_DIR}/${name}"
     install -m 0755 "$src" "${INSTALL_DIR}/${name}"
-    if [[ "$src" == /tmp/* ]]; then rm -f "$src"; fi
 }
 
 install_vector_native() {
@@ -352,11 +426,11 @@ dcgm_setup() {
         status "DCGM was reinstalled; redeploying crusoe-dcgm-exporter.service to reconnect."
     fi
 
-    download_file "vm/config/dcp-metrics-included.csv" "${CONFIG_DIR}/dcp-metrics-included.csv"
+    copy_asset "vm/config/dcp-metrics-included.csv" "${CONFIG_DIR}/dcp-metrics-included.csv"
 
     if [[ "$INSTALL_MODE" == "docker" ]]; then
         [[ "$DCGM_EXPORTER_SKIP" == "true" ]] \
-            || download_file "vm/docker/docker-compose-dcgm-exporter.yaml" "${CONFIG_DIR}/docker-compose-dcgm-exporter.yaml"
+            || copy_asset "vm/docker/docker-compose-dcgm-exporter.yaml" "${CONFIG_DIR}/docker-compose-dcgm-exporter.yaml"
     else
         install_dcgm_exporter_native
     fi
@@ -419,8 +493,8 @@ install_dcgm_exporter_native() {
 amd_setup() {
     status "Setting up AMD GPU exporter..."
     mkdir -p "${CONFIG_DIR}/config"
-    download_file "vm/config/amd_metrics_config.json" "${CONFIG_DIR}/config/config.json"
-    download_file "vm/docker/docker-compose-amd-exporter.yaml" "${CONFIG_DIR}/docker-compose-amd-exporter.yaml"
+    copy_asset "vm/config/amd_metrics_config.json" "${CONFIG_DIR}/config/config.json"
+    copy_asset "vm/docker/docker-compose-amd-exporter.yaml" "${CONFIG_DIR}/docker-compose-amd-exporter.yaml"
 }
 
 ###############################################################################
@@ -429,7 +503,7 @@ amd_setup() {
 cme_setup() {
     status "Setting up Crusoe Metrics Exporter..."
     if [[ "$INSTALL_MODE" == "docker" ]]; then
-        download_file "vm/docker/docker-compose-crusoe-metrics-exporter.yaml" \
+        copy_asset "vm/docker/docker-compose-crusoe-metrics-exporter.yaml" \
             "${CONFIG_DIR}/docker-compose-crusoe-metrics-exporter.yaml"
     else
         install_metrics_exporter_native
@@ -562,7 +636,7 @@ EOF
 }
 
 install_vector_compose() {
-    download_file "vm/docker/docker-compose-vector.yaml" "${CONFIG_DIR}/docker-compose-vector.yaml"
+    copy_asset "vm/docker/docker-compose-vector.yaml" "${CONFIG_DIR}/docker-compose-vector.yaml"
 }
 
 ###############################################################################
@@ -578,7 +652,7 @@ install_unit() {
     local dest="${SYSTEMCTL_DIR}/${name}"
     local d=$'\x01'
 
-    download_file "vm/systemctl/${name}" "$dest"
+    copy_asset "vm/systemctl/${name}" "$dest"
 
     if [[ -n "$exec_start" ]]; then
         sed -i "s${d}@@EXEC_START@@${d}${exec_start}${d}" "$dest"
@@ -603,7 +677,7 @@ install_systemd_units() {
 
     # cwa-manager
     if [[ "$INSTALL_MODE" == "docker" ]]; then
-        download_file "vm/docker/docker-compose-cwa-manager.yaml" \
+        copy_asset "vm/docker/docker-compose-cwa-manager.yaml" \
             "${CONFIG_DIR}/docker-compose-cwa-manager.yaml"
         install_compose_unit "cwa-manager.service" "docker-compose-cwa-manager.yaml"
     else
@@ -637,7 +711,7 @@ install_systemd_units() {
         else
             local runner_compose="docker-compose-cwa-report-runner.yaml"
             [[ "$GPU_TYPE" == "amd" ]] && runner_compose="docker-compose-cwa-report-runner-amd.yaml"
-            download_file "vm/docker/${runner_compose}" "${CONFIG_DIR}/${runner_compose}"
+            copy_asset "vm/docker/${runner_compose}" "${CONFIG_DIR}/${runner_compose}"
             install_compose_unit "cwa-report-runner.service" "$runner_compose"
         fi
     fi
@@ -781,6 +855,9 @@ do_install() {
     if [[ "$INSTALL_MODE" == "docker" ]]; then
         ensure_docker
     fi
+
+    # Everything installed below this line comes out of the verified bundle.
+    fetch_bundle
 
     local vm_id
     vm_id=$(read_vm_id)
@@ -967,12 +1044,9 @@ do_upgrade() {
 
     status "Upgrading ${installed_version} → ${remote_version}..."
 
-    # Download latest install script.
-    local script_url="${GITHUB_LATEST_RELEASE_URL}/crusoe_watch_agent.sh"
-    local tmp_script
-    tmp_script=$(mktemp)
-    wget -q -O "$tmp_script" "$script_url" || error_exit "Failed to download latest installer."
-    chmod +x "$tmp_script"
+    # The new installer runs as root and is what verifies the bundle, so it is itself verified first.
+    fetch_verified "$GITHUB_LATEST_RELEASE_URL" crusoe_watch_agent.sh
+    chmod +x "${DOWNLOAD_DIR}/crusoe_watch_agent.sh"
 
     # Replay saved args.
     local -a saved_args=()
@@ -982,8 +1056,8 @@ do_upgrade() {
         done < "${SECRETS_DIR}/.install-args"
     fi
 
-    CWA_UPGRADE=1 "$tmp_script" install "${saved_args[@]}"
-    rm -f "$tmp_script"
+    # The upgrade is performed by the new version's installer, not this one.
+    CWA_UPGRADE=1 "${DOWNLOAD_DIR}/crusoe_watch_agent.sh" install "${saved_args[@]}"
 
     status "Upgrade complete."
 }

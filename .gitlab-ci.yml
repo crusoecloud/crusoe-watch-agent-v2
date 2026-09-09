@@ -58,6 +58,18 @@ variables:
   TAG_PREFIX: ""
   CI_IMAGE: "registry.gitlab.com/crusoeenergy/tools/go-ci-1.26"
   CI_IMAGE_TAG: "master"
+  # Pinned cosign for the release jobs — see .install-cosign. Held on the 2.x line.
+  COSIGN_VERSION: "v2.6.5"
+
+# Installs the pinned cosign. Release runners are amd64. To check the binary by
+# hand, compare sha256sum against cosign_checksums.txt on the release page:
+#   https://github.com/sigstore/cosign/releases/tag/${COSIGN_VERSION}
+.install-cosign:
+  script:
+    - curl -fsSL -o /usr/local/bin/cosign
+      "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"
+    - chmod +x /usr/local/bin/cosign
+    - cosign version
 
 # Renders the VM and K8s Vector config variants and runs `vector validate` on each.
 vector:validate:

@@ -82,6 +82,20 @@ substitute_file() {
     done
 }
 
+# Replace a placeholder line in $1 with the contents of file $3. Used for values
+# that span lines, which substitute_file's sed cannot carry.
+splice_file() {
+    local file="$1" key="$2" src="$3"
+
+    [[ -f "$src" ]] || die "cannot splice @@${key}@@: ${src} not found"
+
+    awk -v token="@@${key}@@" -v src="$src" '
+        index($0, token) { while ((getline line < src) > 0) print line; next }
+        { print }
+    ' "$file" > "${file}.spliced"
+    mv "${file}.spliced" "$file"
+}
+
 # Assert no render-time placeholders remain. EXEC_START/EXEC_STOP are
 # install-time markers the rendered VM script substitutes when it writes
 # systemd unit files at install time, not release-time placeholders.
@@ -116,6 +130,11 @@ render_vm() {
         DCGM_EXPORTER_UBUNTU2004_VERSION    "$DCGM_2004" \
         DCGM_EXPORTER_UBUNTU2204_VERSION    "$DCGM_2204" \
         DCGM_EXPORTER_UBUNTU2404_VERSION    "$DCGM_2404"
+
+    # The installer verifies its release bundle against this key. Splicing it
+    # from ci/cosign.pub keeps the installer and the signing job on one key.
+    splice_file "$dst" COSIGN_PUBLIC_KEY "${REPO_ROOT}/ci/cosign.pub"
+
     assert_no_placeholders "$dst"
 
     # Compose files contain only runtime ${VAR} placeholders filled at install

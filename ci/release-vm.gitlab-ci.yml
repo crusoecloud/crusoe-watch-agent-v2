@@ -30,9 +30,11 @@ release:vm:
     GHCR_REGISTRY: "ghcr.io/crusoecloud/crusoe-watch-agent-v2"
     GITHUB_REPO: "crusoecloud/crusoe-watch-agent-v2"
   before_script:
-    # Tools: git for tag push; cosign for signing; gh for the GitHub Release;
-    # jq for parsing. Go ships in the base image.
-    - apk add --no-cache git bash curl jq cosign github-cli
+    # Tools: git for tag push; openssl to verify the signature the way the
+    # installer does; gh for the GitHub Release; jq for parsing. Go ships in
+    # the base image. cosign is pinned separately (.install-cosign).
+    - apk add --no-cache git bash curl jq github-cli openssl
+    - !reference [.install-cosign, script]
     - git config --global user.name  "gitlab-ci"
     - git config --global user.email "gitlab-ci@crusoe.ai"
     # Push URL with a token that can write tags (the job token cannot push tags).

@@ -42,6 +42,31 @@ mode_paths() {
     echo "${!v}"
 }
 
+# Run "$@" with the release signing key at $COSIGN_KEY, removing it afterwards whether or not the command succeeds.
+with_signing_key() {
+    local key rc=0
+
+    key=$(mktemp -t cwa-cosign.XXXXXX)
+    chmod 600 "$key"
+    echo "$COSIGN_PRIVATE_KEY_B64" | base64 -d > "$key"
+
+    COSIGN_KEY="$key" "$@" || rc=$?
+
+    rm -f "$key"
+
+    return $rc
+}
+
+# The two signing modes, chosen by artifact type: VM assets are plain files on a
+# GitHub Release, charts are objects addressed by digest in a registry.
+sign_blob() {
+    cosign sign-blob --yes --key "$COSIGN_KEY" --output-signature "$1" "$2"
+}
+
+sign_oci() {
+    cosign sign --yes --key "$COSIGN_KEY" "$1"
+}
+
 # Write release notes to a temp file and echo the path.
 generate_notes() {
     local new="$1"
@@ -51,58 +76,85 @@ generate_notes() {
     echo "$out"
 }
 
+# Lay out one install mode's bundle tree. The layout mirrors vm/ because the
+# installer extracts it and resolves every asset from there.
+#   $1 docker | native   $2 arch (native only)   $3 destination directory
+stage_bundle() {
+    local mode="$1" arch="$2" dir="$3"
+
+    mkdir -p "${dir}/config" "${dir}/systemctl"
+    cp "${RENDER_OUT}/config/"*           "${dir}/config/"
+    cp "${RENDER_OUT}/systemctl/"*.service "${dir}/systemctl/"
+
+    if [[ "$mode" == "docker" ]]; then
+        mkdir -p "${dir}/docker"
+        cp "${RENDER_OUT}/docker/"*.yaml "${dir}/docker/"
+
+        return
+    fi
+
+    local cmd
+    for cmd in cwa-manager report-runner; do
+        install -m 0755 "${RENDER_OUT}/${cmd}-linux-${arch}" "${dir}/${cmd}"
+    done
+}
+
 publish_vm() {
-    log "Signing VM script"
-    local key=/tmp/cosign.key
-    echo "$COSIGN_PRIVATE_KEY_B64" | base64 -d > "$key"
-    chmod 600 "$key"
+    local assets_dir="${RENDER_OUT}/assets" src_dir="${RENDER_OUT}/bundle-src"
+    mkdir -p "$assets_dir" "$src_dir"
 
-    local script="${RENDER_OUT}/crusoe_watch_agent.sh"
-    cosign sign-blob --yes --key "$key" \
-        --new-bundle-format=false \
-        --bundle "${script}.bundle" \
-        "$script"
-    rm -f "$key"
-
-    # Build native-mode binaries for both host architectures and add them as
-    # release assets. NVIDIA hosts are amd64 except GB200, which are arm64.
-    local -a assets=(
-        "${script}#crusoe_watch_agent.sh"
-        "${script}.bundle#crusoe_watch_agent.sh.bundle"
-        "${RENDER_OUT}/VERSION#VERSION"
-    )
+    # Native-mode binaries for both host architectures. NVIDIA hosts are amd64 except GB200, which are arm64.
     local ldflags="-s -w -X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${NEW_VERSION}'"
-    local arch cmd out
+    local arch cmd
     for arch in amd64 arm64; do
         for cmd in cwa-manager report-runner; do
-            out="${RENDER_OUT}/${cmd}-linux-${arch}"
             log "Building ${cmd}-linux-${arch}"
             ( cd "$WORK" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
                 -ldflags "$ldflags" \
-                -o "$out" \
+                -o "${RENDER_OUT}/${cmd}-linux-${arch}" \
                 "./cmd/${cmd}" ) || die "go build ${cmd} (${arch}) failed"
-            assets+=("${out}#${cmd}-linux-${arch}")
         done
     done
+
+    # One tarball per install mode; cwa-updater ships its own.
+    log "Building release bundles"
+    stage_bundle docker "" "${src_dir}/docker"
+    tar -czf "${assets_dir}/cwa-docker.tar.gz" -C "${src_dir}/docker" .
+    for arch in amd64 arm64; do
+        stage_bundle native "$arch" "${src_dir}/native-${arch}"
+        tar -czf "${assets_dir}/cwa-native-${arch}.tar.gz" -C "${src_dir}/native-${arch}" .
+    done
+
+    cp "${RENDER_OUT}/crusoe_watch_agent.sh" "${RENDER_OUT}/VERSION" "$assets_dir"
+    ( cd "$assets_dir" && sha256sum crusoe_watch_agent.sh VERSION *.tar.gz > SHA256SUMS )
+
+    log "Signing SHA256SUMS"
+    with_signing_key sign_blob \
+        "${assets_dir}/SHA256SUMS.sig" "${assets_dir}/SHA256SUMS"
+
+    # Self-check through openssl rather than cosign, because openssl is what the installer verifies with on the host.
+    log "Verifying the signature with the committed public key"
+    base64 -d < "${assets_dir}/SHA256SUMS.sig" > "${assets_dir}/SHA256SUMS.der"
+    openssl dgst -sha256 -verify "${WORK}/ci/cosign.pub" \
+        -signature "${assets_dir}/SHA256SUMS.der" \
+        "${assets_dir}/SHA256SUMS" > /dev/null \
+        || die "SHA256SUMS does not verify against ci/cosign.pub"
+    rm -f "${assets_dir}/SHA256SUMS.der"
 
     local notes_file
     notes_file=$(generate_notes "$NEW_TAG")
 
     log "Creating GitHub Release ${NEW_TAG}"
-    # Compose + systemd + config files travel with the script as assets so a
-    # downloader doesn't need to clone the repo.
-    for f in "${RENDER_OUT}/docker/"*.yaml \
-             "${RENDER_OUT}/systemctl/"*.service \
-             "${RENDER_OUT}/config/"*; do
-        [[ -e "$f" ]] && assets+=("$f")
-    done
-
     GH_REPO="$GITHUB_REPO" gh release create "$NEW_TAG" \
         --target "$RELEASE_SHA" \
         --title "VM Agent ${NEW_VERSION}" \
         ${notes_file:+--notes-file "$notes_file"} \
         --latest \
-        "${assets[@]}"
+        "${assets_dir}/crusoe_watch_agent.sh" \
+        "${assets_dir}/VERSION" \
+        "${assets_dir}/SHA256SUMS" \
+        "${assets_dir}/SHA256SUMS.sig" \
+        "${assets_dir}/"*.tar.gz
 }
 
 publish_k8s() {
@@ -137,12 +189,7 @@ publish_chart() {
     echo "$GHCR_TOKEN" | docker login -u "$GHCR_USERNAME" --password-stdin ghcr.io
 
     log "Signing chart digest"
-    local key=/tmp/cosign.key
-    echo "$COSIGN_PRIVATE_KEY_B64" | base64 -d > "$key"
-    chmod 600 "$key"
-    cosign sign --yes --key "$key" \
-        "${GHCR_REGISTRY}/charts/${chart}:${chart_version}"
-    rm -f "$key"
+    with_signing_key sign_oci "${GHCR_REGISTRY}/charts/${chart}:${chart_version}"
 
     # cwa-updater verifies every chart it upgrades to against the public key.
     log "Verifying the signature with the committed public key"
@@ -158,10 +205,12 @@ publish_chart() {
     notes_file=$(generate_notes "$NEW_TAG")
 
     log "Creating GitHub Release ${NEW_TAG}"
+    # --latest=false: the pointer belongs to the VM release.
     GH_REPO="$GITHUB_REPO" gh release create "$NEW_TAG" \
         --target "$RELEASE_SHA" \
         --title "$title" \
         ${notes_file:+--notes-file "$notes_file"} \
+        --latest=false \
         "${tgz}#${chart}-${chart_version}.tgz"
 }
 

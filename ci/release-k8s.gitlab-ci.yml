@@ -26,8 +26,9 @@ release:k8s:
     GITHUB_REPO: "crusoecloud/crusoe-watch-agent-v2"
   before_script:
     # docker-cli + buildx are needed for `docker buildx imagetools create`,
-    # which moves the chart's :latest pointer in ghcr.io.
-    - apk add --no-cache git bash curl jq cosign docker-cli docker-cli-buildx github-cli helm
+    # which moves the chart's :latest pointer in ghcr.io. cosign is pinned separately (.install-cosign).
+    - apk add --no-cache git bash curl jq docker-cli docker-cli-buildx github-cli helm
+    - !reference [.install-cosign, script]
     - git config --global user.name  "gitlab-ci"
     - git config --global user.email "gitlab-ci@crusoe.ai"
     - export GIT_PUSH_URL="https://ci-push-token:${REPO_ACCESS_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
