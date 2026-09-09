@@ -15,7 +15,7 @@ release:k8s:
   image: alpine:3.19
   resource_group: release-k8s
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main" || $CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_COMMIT_REF_PROTECTED == "true" && ($CI_COMMIT_BRANCH == "main" || $CI_PIPELINE_SOURCE == "web")'
       when: manual
       allow_failure: false
   variables:
@@ -31,8 +31,8 @@ release:k8s:
     - !reference [.install-cosign, script]
     - git config --global user.name  "gitlab-ci"
     - git config --global user.email "gitlab-ci@crusoe.ai"
-    - export GIT_PUSH_URL="https://ci-push-token:${REPO_ACCESS_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
-    - export GITHUB_TOKEN="${GHCR_TOKEN}"
+    - !reference [.git-push-credentials, script]
+    - export GIT_PUSH_URL="https://${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
     - git fetch --tags --quiet origin
   script:
     - ./ci/scripts/release.sh

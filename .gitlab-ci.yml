@@ -71,6 +71,17 @@ variables:
     - chmod +x /usr/local/bin/cosign
     - cosign version
 
+# Hands the tag-push token to git through a mode-0600 credential file.
+.git-push-credentials:
+  script:
+    - |
+      ( umask 077 && printf 'https://ci-push-token:%s@%s\n' \
+          "${REPO_ACCESS_TOKEN:?REPO_ACCESS_TOKEN required}" \
+          "${CI_SERVER_HOST}" > "${HOME}/.git-credentials" )
+    - git config --global credential.helper store
+    # A credential miss must fail the job rather than block on a password prompt.
+    - export GIT_TERMINAL_PROMPT=0
+
 # Renders the VM and K8s Vector config variants and runs `vector validate` on each.
 vector:validate:
   stage: test

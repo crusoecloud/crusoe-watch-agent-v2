@@ -11,7 +11,8 @@
 # Secrets that must exist as protected CI variables:
 #   GHCR_USERNAME, GHCR_TOKEN        ghcr push + GitHub Release auth
 #   COSIGN_PRIVATE_KEY_B64           cosign sign-blob signing key
-#   REPO_ACCESS_TOKEN                token with write_repository for tag push
+#   REPO_ACCESS_TOKEN                tag push; scope to this project with
+#                                    write_repository only, protected + masked
 
 release:vm:
   stage: release
@@ -20,7 +21,7 @@ release:vm:
   rules:
     # Manual button on main pipelines. Operators can also trigger via the
     # "Run pipeline" UI to override RELEASE_SHA/DRY_RUN.
-    - if: '$CI_COMMIT_BRANCH == "main" || $CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_COMMIT_REF_PROTECTED == "true" && ($CI_COMMIT_BRANCH == "main" || $CI_PIPELINE_SOURCE == "web")'
       when: manual
       allow_failure: false
   variables:
@@ -37,9 +38,9 @@ release:vm:
     - !reference [.install-cosign, script]
     - git config --global user.name  "gitlab-ci"
     - git config --global user.email "gitlab-ci@crusoe.ai"
-    # Push URL with a token that can write tags (the job token cannot push tags).
-    - export GIT_PUSH_URL="https://ci-push-token:${REPO_ACCESS_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
-    - export GITHUB_TOKEN="${GHCR_TOKEN}"
+    # Credential-free push URL; the tag-push token comes from the credential helper.
+    - !reference [.git-push-credentials, script]
+    - export GIT_PUSH_URL="https://${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
     # Private Go modules (gitlab.com/crusoeenergy/*) — same pattern as Dockerfile.
     - printf 'machine %s login gitlab-ci-token password %s\n' "${CI_SERVER_HOST}" "${CI_JOB_TOKEN}" > ~/.netrc
     - go env -w "GOPRIVATE=${CI_SERVER_HOST}"

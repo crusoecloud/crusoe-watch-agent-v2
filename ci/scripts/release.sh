@@ -10,9 +10,8 @@
 #   GHCR_TOKEN          ghcr push token
 #   GHCR_USERNAME       ghcr user
 #   GITHUB_REPO         e.g. crusoecloud/crusoe-watch-agent-v2
-#   GITHUB_TOKEN        used by gh CLI
 #   COSIGN_PRIVATE_KEY_B64
-#   GIT_PUSH_URL        e.g. https://<user>:<token>@gitlab.com/<group>/<proj>.git
+#   GIT_PUSH_URL        credential-free, e.g. https://gitlab.com/<group>/<proj>.git
 #
 # What it does, in order:
 #   1. Resolve RELEASE_SHA, compute next per-mode version (e.g. v1.4).
@@ -145,7 +144,7 @@ publish_vm() {
     notes_file=$(generate_notes "$NEW_TAG")
 
     log "Creating GitHub Release ${NEW_TAG}"
-    GH_REPO="$GITHUB_REPO" gh release create "$NEW_TAG" \
+    GH_REPO="$GITHUB_REPO" GH_TOKEN="$GHCR_TOKEN" gh release create "$NEW_TAG" \
         --target "$RELEASE_SHA" \
         --title "VM Agent ${NEW_VERSION}" \
         ${notes_file:+--notes-file "$notes_file"} \
@@ -206,7 +205,7 @@ publish_chart() {
 
     log "Creating GitHub Release ${NEW_TAG}"
     # --latest=false: the pointer belongs to the VM release.
-    GH_REPO="$GITHUB_REPO" gh release create "$NEW_TAG" \
+    GH_REPO="$GITHUB_REPO" GH_TOKEN="$GHCR_TOKEN" gh release create "$NEW_TAG" \
         --target "$RELEASE_SHA" \
         --title "$title" \
         ${notes_file:+--notes-file "$notes_file"} \
