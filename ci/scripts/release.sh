@@ -56,6 +56,11 @@ with_signing_key() {
     return $rc
 }
 
+# Push to GIT_PUSH_URL.
+git_push() {
+    git -c http.extraHeader= push "${GIT_PUSH_URL:?GIT_PUSH_URL required}" "$@"
+}
+
 # The two signing modes, chosen by artifact type: VM assets are plain files on a
 # GitHub Release, charts are objects addressed by digest in a registry.
 sign_blob() {
@@ -68,10 +73,9 @@ sign_oci() {
 
 # Write release notes to a temp file and echo the path.
 generate_notes() {
-    local new="$1"
     local out
     out=$(mktemp -t cwa-notes.XXXXXX)
-    "${WORK}/ci/scripts/generate-release-notes.sh" "$MODE" "$new" > "$out"
+    "${WORK}/ci/scripts/generate-release-notes.sh" "$MODE" "$RELEASE_SHA" > "$out"
     echo "$out"
 }
 
@@ -141,7 +145,7 @@ publish_vm() {
     rm -f "${assets_dir}/SHA256SUMS.der"
 
     local notes_file
-    notes_file=$(generate_notes "$NEW_TAG")
+    notes_file=$(generate_notes)
 
     log "Creating GitHub Release ${NEW_TAG}"
     GH_REPO="$GITHUB_REPO" GH_TOKEN="$GHCR_TOKEN" gh release create "$NEW_TAG" \
@@ -201,7 +205,7 @@ publish_chart() {
         "${GHCR_REGISTRY}/charts/${chart}:${chart_version}"
 
     local notes_file
-    notes_file=$(generate_notes "$NEW_TAG")
+    notes_file=$(generate_notes)
 
     log "Creating GitHub Release ${NEW_TAG}"
     # --latest=false: the pointer belongs to the VM release.
@@ -239,6 +243,12 @@ if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
     die "tag ${NEW_TAG} already exists — autobump is wrong or this is a re-run; investigate"
 fi
 
+# The tag push is the last step, so a credential or permission problem there strands
+# a published release with no tag. Ask the server first: --dry-run.
+log "Checking push access for ${NEW_TAG}"
+git_push --dry-run "${RELEASE_SHA}:refs/tags/${NEW_TAG}" \
+    || die "cannot push ${NEW_TAG} — fix repository credentials before publishing"
+
 if [[ "$DRY_RUN" == "true" ]]; then
     log "DRY_RUN — printing commit range and rendered output, then exiting."
     PREV_TAG=$(git tag -l "${MODE}/v*" | sort -V | tail -n1 || true)
@@ -273,6 +283,6 @@ esac
 
 log "Pushing tag ${NEW_TAG} to GitLab"
 git tag -a "$NEW_TAG" "$RELEASE_SHA" -m "Release ${NEW_TAG}"
-git push "${GIT_PUSH_URL:?GIT_PUSH_URL required}" "$NEW_TAG"
+git_push "$NEW_TAG"
 
 log "Release ${NEW_TAG} complete."

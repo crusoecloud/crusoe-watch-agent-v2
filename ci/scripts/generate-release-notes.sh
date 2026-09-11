@@ -6,8 +6,11 @@
 # the GitHub Release body. We never commit a CHANGELOG.md back to the repo.
 #
 # Usage:
-#   generate-release-notes.sh <mode> <new-tag>            (auto-finds prev tag)
-#   generate-release-notes.sh <mode> <prev-tag> <new-tag>
+#   generate-release-notes.sh <mode> <new-rev>            (auto-finds prev tag)
+#   generate-release-notes.sh <mode> <prev-rev> <new-rev>
+#
+# <new-rev> is normally RELEASE_SHA rather than the new tag, which does not exist
+# until the release has published.
 #
 # Conventional-commit grouping:
 #   feat:                              -> **Features**
@@ -24,8 +27,9 @@ set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-# Commit links in rendered notes point at the public GitHub mirror.
-COMMIT_URL_BASE="https://github.com/crusoecloud/crusoe-watch-agent-v2/commit/"
+# Rendered notes link to the public GitHub mirror.
+REPO_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2"
+COMMIT_URL_BASE="${REPO_URL}/commit/"
 
 # Per-mode path scope. dependencies.yaml counts for every mode since external
 # pin bumps land there.
@@ -41,10 +45,14 @@ mode_paths() {
 SOURCE_PATHS=""
 
 # Find the predecessor tag for this mode by version sort, excluding the new one.
+# Prints nothing when the mode has no prior tag.
 prev_tag_for() {
-    local mode="$1" new="$2"
-    git tag -l "${mode}/v*" \
-        | grep -v -F "$new" \
+    local mode="$1" new="$2" tags
+    tags=$(git tag -l "${mode}/v*")
+    [[ -n "$tags" ]] || return 0
+
+    printf '%s\n' "$tags" \
+        | { grep -v -F -x -- "$new" || true; } \
         | sort -V \
         | awk 'BEGIN{p=""} { p=$0 } END{ if (p) print p }'
 }
@@ -129,8 +137,13 @@ main() {
     if [[ $# -eq 1 ]]; then
         new="$1"
         prev=$(prev_tag_for "$mode" "$new")
-        # First release for this mode — diff from the repo's root commit.
-        [[ -n "$prev" ]] || prev=$(git rev-list --max-parents=0 HEAD | head -n1)
+        # No predecessor tag: summarizing from the root commit is noise, so emit a placeholder.
+        if [[ -z "$prev" ]]; then
+            echo "Generating first-release notes for ${mode}" >&2
+            echo "Initial release."
+
+            return 0
+        fi
     elif [[ $# -eq 2 ]]; then
         prev="$1"; new="$2"
     else
