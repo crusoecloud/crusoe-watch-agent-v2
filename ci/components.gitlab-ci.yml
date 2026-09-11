@@ -6,7 +6,8 @@
 #   - main pipelines touching the component's paths (publish :date-sha)
 #
 # Concrete jobs set IMAGE + DOCKERFILE and their own path-scoped rules; the shared
-# build/login/push logic lives in .build-image.
+# build/push/sign logic lives in .build-image. Images carry an SBOM and a cosign
+# signature over the index digest, verifiable with the committed ci/cosign.pub.
 #
 # TODO: two-hop publishing (build to internal GitLab registry, promote to ghcr.io at release time).
 
@@ -20,8 +21,10 @@
     # Overridable per job; amd64-only components (e.g. AMD ROCm) set PLATFORMS.
     PLATFORMS: "linux/amd64,linux/arm64"
   before_script:
+    - apk add --no-cache curl jq
     - until docker info > /dev/null 2>&1; do sleep 1; done
     - echo "$GHCR_TOKEN" | docker login -u "$GHCR_USERNAME" --password-stdin ghcr.io
+    - !reference [.install-cosign, script]
     - docker buildx create --use --driver docker-container
   script:
     - |
@@ -29,9 +32,13 @@
       # responsible for the human-facing release tags (vm/v1.4 etc.).
       DATE_TAG="$(date -u +%Y.%m.%d)-${CI_COMMIT_SHORT_SHA}"
       printf 'machine %s login gitlab-ci-token password %s\n' "${CI_SERVER_HOST}" "${CI_JOB_TOKEN}" > /tmp/netrc
+      # --sbom attaches an SPDX inventory (BuildKit runs syft) and --provenance a build statement.
       docker buildx build \
         --platform "${PLATFORMS}" \
         --push \
+        --sbom=true \
+        --provenance=mode=min \
+        --metadata-file /tmp/build-metadata.json \
         --secret id=netrc,src=/tmp/netrc \
         --build-arg "CI_SERVER_HOST=${CI_SERVER_HOST}" \
         --build-arg "VERSION=${DATE_TAG}" \
@@ -40,6 +47,28 @@
         .
       rm -f /tmp/netrc
       echo "Published ${IMAGE}:${DATE_TAG}"
+    - |
+      # Sign the index digest rather than the tag.
+      DIGEST=$(jq -r '."containerimage.digest" // empty' /tmp/build-metadata.json)
+      if [ -z "$DIGEST" ]; then
+        echo "buildx reported no image digest"
+        exit 1
+      fi
+      # COSIGN_PRIVATE_KEY_B64 is protected, so merge-request builds go unsigned. Everything from main is signed.
+      if [ "$CI_COMMIT_REF_PROTECTED" != "true" ]; then
+        echo "Unprotected ref, not signing ${IMAGE}@${DIGEST}"
+      else
+        (
+          set -e
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          echo "${COSIGN_PRIVATE_KEY_B64:?COSIGN_PRIVATE_KEY_B64 required}" | base64 -d > "$key"
+          cosign sign --yes --key "$key" "${IMAGE}@${DIGEST}"
+        )
+        # Verify with the committed public key, so a broken chain fails here, not at rollout.
+        cosign verify --key ci/cosign.pub "${IMAGE}@${DIGEST}" > /dev/null
+        echo "Signed and verified ${IMAGE}@${DIGEST}"
+      fi
 
 ###############################################################################
 # cwa-manager — built from the repo-root Dockerfile.
@@ -56,6 +85,7 @@ cwa-manager:build:
         - Makefile
         - cmd/cwa-manager/**/*
         - internal/**/*
+        - ci/components.gitlab-ci.yml
         - go.mod
         - go.sum
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -64,6 +94,7 @@ cwa-manager:build:
         - Makefile
         - cmd/cwa-manager/**/*
         - internal/**/*
+        - ci/components.gitlab-ci.yml
         - go.mod
         - go.sum
 
@@ -82,6 +113,7 @@ cwa-updater:build:
         - internal/upgrade/**/*
         - internal/version/**/*
         - ci/cosign.pub
+        - ci/components.gitlab-ci.yml
         - go.mod
         - go.sum
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -90,6 +122,7 @@ cwa-updater:build:
         - internal/upgrade/**/*
         - internal/version/**/*
         - ci/cosign.pub
+        - ci/components.gitlab-ci.yml
         - go.mod
         - go.sum
 
@@ -108,6 +141,7 @@ report-runner:build:
         - internal/bugreport/**/*
         - internal/vector/**/*
         - internal/version/**/*
+        - ci/components.gitlab-ci.yml
         - go.mod
         - go.sum
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -116,6 +150,7 @@ report-runner:build:
         - internal/bugreport/**/*
         - internal/vector/**/*
         - internal/version/**/*
+        - ci/components.gitlab-ci.yml
         - go.mod
         - go.sum
 
@@ -135,6 +170,7 @@ report-runner-amd:build:
         - internal/bugreport/**/*
         - internal/vector/**/*
         - internal/version/**/*
+        - ci/components.gitlab-ci.yml
         - go.mod
         - go.sum
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -143,5 +179,6 @@ report-runner-amd:build:
         - internal/bugreport/**/*
         - internal/vector/**/*
         - internal/version/**/*
+        - ci/components.gitlab-ci.yml
         - go.mod
         - go.sum

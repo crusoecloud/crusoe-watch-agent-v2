@@ -56,9 +56,18 @@ with_signing_key() {
     return $rc
 }
 
-# Push to GIT_PUSH_URL.
+# Push to GIT_PUSH_URL. The runner's clone header carries CI_JOB_TOKEN, which
+# git sends before consulting the credential helper; the server then answers 403
+# (a job token cannot push) instead of the 401 that would invoke the helper.
 git_push() {
-    git -c http.extraHeader= push "${GIT_PUSH_URL:?GIT_PUSH_URL required}" "$@"
+    : "${GIT_PUSH_URL:?GIT_PUSH_URL required}"
+
+    local key
+    while read -r key; do
+        git config --local --unset-all "$key"
+    done < <(git config --local --name-only --list | grep -i '\.extraheader$' || true)
+
+    git push "$GIT_PUSH_URL" "$@"
 }
 
 # The two signing modes, chosen by artifact type: VM assets are plain files on a
@@ -246,8 +255,12 @@ fi
 # The tag push is the last step, so a credential or permission problem there strands
 # a published release with no tag. Ask the server first: --dry-run.
 log "Checking push access for ${NEW_TAG}"
-git_push --dry-run "${RELEASE_SHA}:refs/tags/${NEW_TAG}" \
-    || die "cannot push ${NEW_TAG} — fix repository credentials before publishing"
+if ! git_push --dry-run "${RELEASE_SHA}:refs/tags/${NEW_TAG}"; then
+    # Names only, the values hold tokens.
+    log "git config keys in play:"
+    git config --list --name-only | grep -E '^(http|credential)' >&2 || true
+    die "cannot push ${NEW_TAG} — fix repository credentials before publishing"
+fi
 
 if [[ "$DRY_RUN" == "true" ]]; then
     log "DRY_RUN — printing commit range and rendered output, then exiting."

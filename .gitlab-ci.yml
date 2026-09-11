@@ -58,11 +58,11 @@ variables:
   TAG_PREFIX: ""
   CI_IMAGE: "registry.gitlab.com/crusoeenergy/tools/go-ci-1.26"
   CI_IMAGE_TAG: "master"
-  # Pinned cosign for the release jobs — see .install-cosign. Held on the 2.x line.
+  # Pinned cosign for the release and image-build jobs — see .install-cosign.
   COSIGN_VERSION: "v2.6.5"
 
-# Installs the pinned cosign. Release runners are amd64. To check the binary by
-# hand, compare sha256sum against cosign_checksums.txt on the release page:
+# Installs the pinned cosign. Release and build runners are amd64. To check the
+# binary by hand, compare sha256sum against cosign_checksums.txt on the release page:
 #   https://github.com/sigstore/cosign/releases/tag/${COSIGN_VERSION}
 .install-cosign:
   script:
