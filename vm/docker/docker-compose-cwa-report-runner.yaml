@@ -1,6 +1,6 @@
 services:
   cwa-report-runner:
-    image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/report-runner:${REPORT_RUNNER_VERSION}
+    image: ${IMAGE_REGISTRY_GHCR:-ghcr.io}/crusoecloud/crusoe-watch-agent-v2/report-runner:${REPORT_RUNNER_VERSION}
     container_name: cwa-report-runner
     hostname: cwa-report-runner
     # nvidia-bug-report.sh needs GPU/driver access plus host diagnostics.

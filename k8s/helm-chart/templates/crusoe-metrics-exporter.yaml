@@ -39,7 +39,7 @@ spec:
         {{- toYaml .Values.tolerations | nindent 8 }}
       containers:
         - name: crusoe-metrics-exporter
-          image: "{{ .Values.cme.image }}:{{ .Values.cme.tag }}"
+          image: {{ include "cwa.image" (dict "ctx" $ "upstream" "ghcr" "repository" .Values.cme.image "tag" .Values.cme.tag) | quote }}
           ports:
             - name: metrics
               containerPort: {{ .Values.cme.port }}

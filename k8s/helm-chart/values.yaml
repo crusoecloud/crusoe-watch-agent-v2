@@ -1,5 +1,23 @@
 namespace: crusoe-system
 
+# Settings shared across the chart's images.
+global:
+  # global.registry -- Where container images are pulled from: ghcr (default) or ccr.
+  registry: ghcr
+
+  # global.region -- Crusoe region, e.g. "eu-iceland2-a". Auto-detected from the
+  # topology.kubernetes.io/region node label; only set it for `helm template`
+  # or --dry-run, which render without cluster access.
+  region: ""
+
+  # global.ccr -- Preconfigured CCR pull-through cache projects, keyed by region.
+  ccr:
+    endpointFormat: "registry.%s.ccr.crusoecloudcompute.com"
+    projects:
+      eu-iceland2-a:
+        ghcr: "cwa-ghcr.33d1748b"
+        dockerhub: "cwa-docker.33d1748b"
+
 # Image pull secrets for private registries.
 imagePullSecrets: []
 # - name: gitlab-registry
@@ -16,16 +34,16 @@ existingSecret: crusoe-secrets
 # and stores it in a Kubernetes secret.
 # TODO: manual IMDS endpoint to obtain a short-lived JWT; no manual monitoring token creation required
 tokenJob:
-  image: ghcr.io/crusoecloud/crusoe-watch-agent/token-job
+  image: crusoecloud/crusoe-watch-agent/token-job
   tag: "@@TOKEN_JOB_VERSION@@"
   ttlSecondsAfterFinished: 300
 
 vector:
-  image: ghcr.io/vectordotdev/vector
+  image: vectordotdev/vector
   tag: "@@VECTOR_VERSION@@-debian"
 
 cwaManager:
-  image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/cwa-manager
+  image: crusoecloud/crusoe-watch-agent-v2/cwa-manager
   tag: "@@CWA_MANAGER_VERSION@@"
   # Health endpoint cwa-updater polls per pod after an upgrade, fronted by the
   # headless Service.
@@ -87,7 +105,7 @@ cme:
   enabled: true
   port: 9500
   scrapeInterval: 60
-  image: ghcr.io/crusoecloud/crusoe-metrics-exporter/crusoe-metrics-exporter
+  image: crusoecloud/crusoe-metrics-exporter/crusoe-metrics-exporter
   tag: "@@CRUSOE_METRICS_EXPORTER_VERSION@@"
 
 customMetrics:
@@ -109,7 +127,7 @@ reportRunner:
   nvidia:
     # Enable on bundled-NVIDIA (GB200) nodes.
     enabled: true
-    image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/report-runner
+    image: crusoecloud/crusoe-watch-agent-v2/report-runner
     tag: "@@REPORT_RUNNER_VERSION@@"
     # Render nodeAffinity In on SKUs with driver on host.
     instanceTypes:
@@ -117,7 +135,7 @@ reportRunner:
       - gb200-186gb-nvl.4x
   amd:
     enabled: true
-    image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/report-runner-amd
+    image: crusoecloud/crusoe-watch-agent-v2/report-runner-amd
     tag: "@@REPORT_RUNNER_VERSION@@"
     nodeSelector:
       feature.node.kubernetes.io/amd-gpu: "true"

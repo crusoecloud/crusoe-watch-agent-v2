@@ -1,6 +1,6 @@
 services:
   cwa-report-runner:
-    image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/report-runner-amd:${REPORT_RUNNER_VERSION}
+    image: ${IMAGE_REGISTRY_GHCR:-ghcr.io}/crusoecloud/crusoe-watch-agent-v2/report-runner-amd:${REPORT_RUNNER_VERSION}
     container_name: cwa-report-runner
     hostname: cwa-report-runner
     # rocm_techsupport.sh needs GPU access plus host diagnostics.

@@ -35,7 +35,7 @@ spec:
       containers:
         # --- Vector ---
         - name: vector
-          image: "{{ .Values.vector.image }}:{{ .Values.vector.tag }}"
+          image: {{ include "cwa.image" (dict "ctx" $ "upstream" "ghcr" "repository" .Values.vector.image "tag" .Values.vector.tag) | quote }}
           command:
             - /bin/sh
             - -c
@@ -92,7 +92,7 @@ spec:
 
         # --- cwa-manager ---
         - name: cwa-manager
-          image: "{{ .Values.cwaManager.image }}:{{ .Values.cwaManager.tag }}"
+          image: {{ include "cwa.image" (dict "ctx" $ "upstream" "ghcr" "repository" .Values.cwaManager.image "tag" .Values.cwaManager.tag) | quote }}
           ports:
             - name: health
               containerPort: {{ .Values.cwaManager.healthPort }}

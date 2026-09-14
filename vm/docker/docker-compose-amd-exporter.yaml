@@ -1,6 +1,6 @@
 services:
   crusoe-amd-exporter:
-    image: rocm/device-metrics-exporter:${AMD_EXPORTER_VERSION}
+    image: ${IMAGE_REGISTRY_DOCKERHUB:-docker.io}/rocm/device-metrics-exporter:${AMD_EXPORTER_VERSION}
     container_name: crusoe-amd-exporter
     hostname: crusoe-amd-exporter
     devices:

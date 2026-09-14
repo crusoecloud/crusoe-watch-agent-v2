@@ -52,7 +52,7 @@ spec:
       {{- end }}
       containers:
         - name: report-runner
-          image: "{{ $cfg.image }}:{{ $cfg.tag }}"
+          image: {{ include "cwa.image" (dict "ctx" $ "upstream" "ghcr" "repository" $cfg.image "tag" $cfg.tag) | quote }}
           env:
             - name: NODE_NAME
               valueFrom:

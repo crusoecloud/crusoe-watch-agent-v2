@@ -1,6 +1,6 @@
 services:
   cwa-manager:
-    image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/cwa-manager:${CWA_MANAGER_VERSION}
+    image: ${IMAGE_REGISTRY_GHCR:-ghcr.io}/crusoecloud/crusoe-watch-agent-v2/cwa-manager:${CWA_MANAGER_VERSION}
     container_name: cwa-manager
     hostname: cwa-manager
     volumes:
