@@ -38,11 +38,13 @@ release:vm:
     - !reference [.install-cosign, script]
     - git config --global user.name  "gitlab-ci"
     - git config --global user.email "gitlab-ci@crusoe.ai"
-    # Credential-free push URL; the tag-push token comes from the credential helper.
+    # Sets GIT_PUSH_URL and the push credential.
     - !reference [.git-push-credentials, script]
-    - export GIT_PUSH_URL="https://${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
     # Private Go modules (gitlab.com/crusoeenergy/*) — same pattern as Dockerfile.
-    - printf 'machine %s login gitlab-ci-token password %s\n' "${CI_SERVER_HOST}" "${CI_JOB_TOKEN}" > ~/.netrc
+    # GOPRIVATE resolves them over git, so this has to be git's own ~/.netrc.
+    - |
+      ( umask 077 && printf 'machine %s login gitlab-ci-token password %s\n' \
+          "${CI_SERVER_HOST}" "${CI_JOB_TOKEN}" > ~/.netrc )
     - go env -w "GOPRIVATE=${CI_SERVER_HOST}"
     - git fetch --tags --quiet origin
   script:

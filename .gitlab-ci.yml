@@ -71,14 +71,25 @@ variables:
     - chmod +x /usr/local/bin/cosign
     - cosign version
 
-# Hands the tag-push token to git through a mode-0600 credential file.
+# Hands the tag-push token to git as an Authorization header, and exports the
+# push URL. A header goes out on the first request; a credential helper is only
+# consulted after a 401, and that path 403s here. Scoped to this repo.
 .git-push-credentials:
   script:
+    - export GIT_PUSH_URL="https://${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
     - |
-      ( umask 077 && printf 'https://ci-push-token:%s@%s\n' \
-          "${REPO_ACCESS_TOKEN:?REPO_ACCESS_TOKEN required}" \
-          "${CI_SERVER_HOST}" > "${HOME}/.git-credentials" )
-    - git config --global credential.helper store
+      umask 077
+      : >> "${HOME}/.gitconfig"
+      chmod 600 "${HOME}/.gitconfig"
+      basic=$(printf 'ci-push-token:%s' \
+          "${REPO_ACCESS_TOKEN:?REPO_ACCESS_TOKEN required}" | base64 | tr -d '\n')
+      printf '[http "%s"]\n\textraHeader = "Authorization: Basic %s"\n' \
+          "$GIT_PUSH_URL" "$basic" >> "${HOME}/.gitconfig"
+      unset basic
+    # Confirm git resolves the header for the push URL.
+    - |
+      git config --get-urlmatch http.extraHeader "$GIT_PUSH_URL" > /dev/null \
+          || { echo "push credential did not resolve for ${GIT_PUSH_URL}"; exit 1; }
     # A credential miss must fail the job rather than block on a password prompt.
     - export GIT_TERMINAL_PROMPT=0
 

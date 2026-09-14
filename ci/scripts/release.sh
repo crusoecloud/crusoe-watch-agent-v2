@@ -56,18 +56,9 @@ with_signing_key() {
     return $rc
 }
 
-# Push to GIT_PUSH_URL. The runner's clone header carries CI_JOB_TOKEN, which
-# git sends before consulting the credential helper; the server then answers 403
-# (a job token cannot push) instead of the 401 that would invoke the helper.
+# Push to GIT_PUSH_URL, authenticated by the header .git-push-credentials installs.
 git_push() {
-    : "${GIT_PUSH_URL:?GIT_PUSH_URL required}"
-
-    local key
-    while read -r key; do
-        git config --local --unset-all "$key"
-    done < <(git config --local --name-only --list | grep -i '\.extraheader$' || true)
-
-    git push "$GIT_PUSH_URL" "$@"
+    git push "${GIT_PUSH_URL:?GIT_PUSH_URL required}" "$@"
 }
 
 # The two signing modes, chosen by artifact type: VM assets are plain files on a
