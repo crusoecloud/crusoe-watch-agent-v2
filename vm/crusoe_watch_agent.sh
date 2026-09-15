@@ -14,11 +14,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Version pins are stamped at release time from dependencies.yaml.
 AGENT_VERSION="@@AGENT_VERSION@@"
 CWA_MANAGER_VERSION="@@CWA_MANAGER_VERSION@@"
+CWA_UPDATER_VERSION="@@CWA_UPDATER_VERSION@@"
 REPORT_RUNNER_VERSION="@@REPORT_RUNNER_VERSION@@"
 VECTOR_VERSION="@@VECTOR_VERSION@@"
 CME_VERSION="@@CRUSOE_METRICS_EXPORTER_VERSION@@"
 AMD_EXPORTER_VERSION="@@AMD_EXPORTER_VERSION@@"
-for v in AGENT_VERSION CWA_MANAGER_VERSION REPORT_RUNNER_VERSION VECTOR_VERSION CME_VERSION AMD_EXPORTER_VERSION; do
+for v in AGENT_VERSION CWA_MANAGER_VERSION CWA_UPDATER_VERSION REPORT_RUNNER_VERSION VECTOR_VERSION CME_VERSION AMD_EXPORTER_VERSION; do
     case "${!v}" in @@*@@) printf -v "$v" '%s' "dev" ;; esac
 done
 
@@ -60,6 +61,12 @@ MONITORING_TOKEN=""
 INGRESS_URL=""
 DCGM_EXPORTER_SKIP="false"   # set in dcgm_setup; leaves an existing Docker exporter untouched
 DCGM_REINSTALLED="false"     # set in dcgm_apt_install; the hostengine restarted, so exporters must too
+
+# cwa-updater is upgraded out of band and is never replaced by an agent upgrade.
+CWA_UPDATER_SKIP="false"
+if [[ "${CWA_UPGRADE:-}" == "1" ]]; then
+    CWA_UPDATER_SKIP="true"
+fi
 
 ###############################################################################
 # Helpers
@@ -588,6 +595,7 @@ TELEMETRY_INGRESS_ENDPOINT='${cms_url}/ingest'
 LOGS_INGRESS_ENDPOINT='${cms_url}/logs/ingest'
 AGENT_VERSION='${AGENT_VERSION}'
 CWA_MANAGER_VERSION='${CWA_MANAGER_VERSION}'
+CWA_UPDATER_VERSION='${CWA_UPDATER_VERSION}'
 REPORT_RUNNER_VERSION='${REPORT_RUNNER_VERSION}'
 VECTOR_VERSION='${VECTOR_VERSION}'
 INSTALL_TYPE='${install_type}'
@@ -682,6 +690,15 @@ install_systemd_units() {
         install_compose_unit "cwa-manager.service" "docker-compose-cwa-manager.yaml"
     else
         install_unit "cwa-manager.service" "${INSTALL_DIR}/cwa-manager"
+    fi
+
+    # cwa-updater. Left alone during an upgrade: it is driving this install.
+    if [[ "$CWA_UPDATER_SKIP" == "true" ]]; then
+        status "Keeping the existing cwa-updater.service unit."
+    elif [[ "$INSTALL_MODE" == "docker" ]]; then
+        install_compose_unit "cwa-updater.service" "docker-compose-cwa-updater.yaml"
+    else
+        install_unit "cwa-updater.service" "${INSTALL_DIR}/cwa-updater"
     fi
 
     # Vector
@@ -871,6 +888,10 @@ do_install() {
         install_release_binary cwa-manager
         # report-runner collects GPU bug reports; native mode is NVIDIA-only.
         [[ "$GPU_TYPE" == "nvidia" ]] && install_release_binary report-runner
+        [[ "$CWA_UPDATER_SKIP" == "false" ]] && install_release_binary cwa-updater
+    elif [[ "$CWA_UPDATER_SKIP" == "false" ]]; then
+        download_file "vm/docker/docker-compose-cwa-updater.yaml" \
+            "${CONFIG_DIR}/docker-compose-cwa-updater.yaml"
     fi
 
     # Install Vector.
@@ -901,15 +922,26 @@ do_install() {
     systemctl daemon-reload
 
     if [[ "$INSTALL_MODE" == "docker" ]]; then
-        pull_images "cwa-manager" "${CONFIG_DIR}/docker-compose-cwa-manager.yaml"
+        pull_images "cwa-manager and cwa-updater" \
+            "${CONFIG_DIR}/docker-compose-cwa-manager.yaml" \
+            "${CONFIG_DIR}/docker-compose-cwa-updater.yaml"
+    fi
+
+    # cwa-updater first: cwa-manager polls its health on every heartbeat, and
+    # reads any result it is holding from an upgrade that just completed.
+    if [[ "$CWA_UPDATER_SKIP" == "false" ]]; then
+        systemctl enable cwa-updater.service
+        systemctl restart cwa-updater.service
     fi
 
     systemctl enable cwa-manager.service
     systemctl restart cwa-manager.service
 
-    # Gate on the container first, so the config wait below times the manager, not Docker.
+    # Gate on the containers first, so the config wait below times the manager, not Docker.
     if [[ "$INSTALL_MODE" == "docker" ]]; then
-        wait_for_containers cwa-manager
+        local started=(cwa-manager)
+        [[ "$CWA_UPDATER_SKIP" == "false" ]] && started+=(cwa-updater)
+        wait_for_containers "${started[@]}"
     fi
 
     status "Waiting for cwa-manager to write ${VECTOR_CONFIG}..."
@@ -943,6 +975,7 @@ do_install() {
     echo ""
     status "Install complete. Check status:"
     echo "  systemctl status cwa-manager"
+    echo "  systemctl status cwa-updater"
     echo "  systemctl status cwa-vector"
     [[ "$GPU_TYPE" == "nvidia" ]] && echo "  systemctl status crusoe-dcgm-exporter"
     [[ "$GPU_TYPE" == "amd" ]]    && echo "  systemctl status crusoe-amd-exporter"
@@ -958,6 +991,7 @@ do_uninstall() {
     status "Stopping and disabling services..."
     local all_services=(
         cwa-manager.service
+        cwa-updater.service
         cwa-report-runner.service
         cwa-vector.service
         crusoe-dcgm-exporter.service
@@ -983,6 +1017,7 @@ do_uninstall() {
         rm -f "${SYSTEMCTL_DIR}/${svc}"
     done
     rm -f "${INSTALL_DIR}/cwa-manager"
+    rm -f "${INSTALL_DIR}/cwa-updater"
     rm -f "${INSTALL_DIR}/report-runner"
     rm -f "${VECTOR_CONFIG}"
     rm -rf "${CONFIG_DIR}"

@@ -96,8 +96,10 @@ stage_bundle() {
         return
     fi
 
+    # cwa-updater rides along so a fresh install has it. An upgrade skips
+    # installing it (CWA_UPDATER_SKIP): it is the process driving that install.
     local cmd
-    for cmd in cwa-manager report-runner; do
+    for cmd in cwa-manager cwa-updater report-runner; do
         install -m 0755 "${RENDER_OUT}/${cmd}-linux-${arch}" "${dir}/${cmd}"
     done
 }
@@ -110,7 +112,7 @@ publish_vm() {
     local ldflags="-s -w -X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${NEW_VERSION}'"
     local arch cmd
     for arch in amd64 arm64; do
-        for cmd in cwa-manager report-runner; do
+        for cmd in cwa-manager cwa-updater report-runner; do
             log "Building ${cmd}-linux-${arch}"
             ( cd "$WORK" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
                 -ldflags "$ldflags" \
@@ -119,7 +121,8 @@ publish_vm() {
         done
     done
 
-    # One tarball per install mode; cwa-updater ships its own.
+    # One tarball per install mode. cwa-updater's chart is a separate release mode;
+    # only its VM binary rides along here.
     log "Building release bundles"
     stage_bundle docker "" "${src_dir}/docker"
     tar -czf "${assets_dir}/cwa-docker.tar.gz" -C "${src_dir}/docker" .

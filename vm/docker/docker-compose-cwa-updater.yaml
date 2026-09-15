@@ -1,0 +1,16 @@
+services:
+  cwa-updater:
+    image: ghcr.io/crusoecloud/crusoe-watch-agent-v2/cwa-updater:${CWA_UPDATER_VERSION}
+    container_name: cwa-updater
+    hostname: cwa-updater
+    volumes:
+      # Carries .install-mode, which tells cwa-updater it is a Docker install,
+      # and holds the upgrade record it persists.
+      - /etc/crusoe:/etc/crusoe
+    env_file:
+      - /etc/crusoe/crusoe_watch_agent/.env
+    # Host networking puts cwa-updater on localhost:8786, where cwa-manager's
+    # client looks for it by default.
+    network_mode: host
+    restart: always
+    stop_grace_period: 30s

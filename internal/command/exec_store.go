@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/atomicfile"
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
@@ -65,7 +66,11 @@ func (s *ExecStore) Begin(execID, command string) error {
 		return fmt.Errorf("marshaling exec record: %w", err)
 	}
 
-	return writeFileAtomic(s.path(execID), data)
+	if err := atomicfile.Write(s.path(execID), data, stateFilePerm); err != nil {
+		return fmt.Errorf("persisting exec record: %w", err)
+	}
+
+	return nil
 }
 
 // Complete removes a command's record. Call once it has a terminal result, and
@@ -145,63 +150,4 @@ func RecoverInterrupted(store *ExecStore, sink ResultSink, logger *slog.Logger) 
 				"execution_id", rec.ExecutionID, "error", rmErr)
 		}
 	}
-}
-
-// writeFileAtomic durably writes data to path via temp file + rename, so neither
-// a reader nor a crash ever sees a partial or missing-after-reboot file.
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-
-		return fmt.Errorf("writing temp file: %w", err)
-	}
-
-	if err := tmp.Chmod(stateFilePerm); err != nil {
-		_ = tmp.Close()
-
-		return fmt.Errorf("chmod temp file: %w", err)
-	}
-
-	// fsync the contents before the rename so the renamed file is never empty.
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-
-		return fmt.Errorf("syncing temp file: %w", err)
-	}
-
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("renaming temp file: %w", err)
-	}
-
-	return fsyncDir(dir)
-}
-
-// fsyncDir flushes a directory entry change (the rename above) to disk so it
-// survives a hard reboot or power loss.
-func fsyncDir(dir string) error {
-	dirFile, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("opening dir for fsync: %w", err)
-	}
-	defer func() { _ = dirFile.Close() }()
-
-	if err := dirFile.Sync(); err != nil {
-		return fmt.Errorf("syncing dir: %w", err)
-	}
-
-	return nil
 }

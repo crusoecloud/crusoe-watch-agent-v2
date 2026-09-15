@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +35,18 @@ const (
 	readHeaderTimeout = 10 * time.Second
 	shutdownTimeout   = 5 * time.Second
 
+	// Where cwa-updater persists an upgrade on VM targets. On disk, not under
+	// the /run tmpfs: a power loss mid-upgrade must not drop the record. Docker
+	// reaches the same file because the containers mount /etc/crusoe itself.
+	vmStatePath = "/etc/crusoe/crusoe_watch_agent/upgrade-request.json"
+
+	// installModeFile is written by the VM installer. cwa-manager reads the same
+	// file, so the two processes cannot disagree about the host they share.
+	installModeFile = "/etc/crusoe/crusoe_watch_agent/.install-mode"
+
+	// envK8sServiceHost is present in every pod, and only in a pod.
+	envK8sServiceHost = "KUBERNETES_SERVICE_HOST"
+
 	defaultHandoffConfigMap = "cwa-upgrade-handoff"
 	defaultAgentDaemonSet   = "crusoe-watch-agent"
 	defaultAgentRelease     = "crusoe-watch-agent"
@@ -49,6 +62,25 @@ const (
 // errMissingNamespace is fatal: without a namespace there is no handoff ConfigMap
 // to read, and an updater that cannot recover its state must not report idle.
 var errMissingNamespace = errors.New("POD_NAMESPACE is not set")
+
+// errUnknownInstallMode is fatal for the same reason: an updater that cannot
+// tell where its state lives would report idle over an upgrade left in flight.
+var errUnknownInstallMode = errors.New("cannot determine the install mode")
+
+// errNoVMExecutor is what a VM upgrade fails with until the bundle executor lands.
+var errNoVMExecutor = errors.New("upgrade execution is not implemented on VM targets yet")
+
+// installMode is where cwa-updater is running, which decides how it persists
+// state and how it executes an upgrade.
+type installMode string
+
+// Install modes. The VM values are the strings the installer writes; Kubernetes
+// is detected from the environment and never appears in that file.
+const (
+	modeKubernetes installMode = "kubernetes"
+	modeNative     installMode = "native"
+	modeDocker     installMode = "docker"
+)
 
 // healthResponse is the /health body. /health answers 200 in every upgrade
 // state; the status field carries the state.
@@ -109,9 +141,80 @@ func run() error {
 	return serve(ctx, logger, &server{logger: logger, upgrade: upgrades})
 }
 
-// buildUpgradeService wires the Kubernetes-backed upgrade state. VM targets get
-// a file-backed store when systemd and Docker packaging lands.
+// buildUpgradeService wires the upgrade state for the host this is running on.
 func buildUpgradeService(logger *slog.Logger) (*upgrade.Service, error) {
+	mode, err := detectInstallMode(installModeFile)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Info("install mode detected", "mode", mode)
+
+	if mode == modeKubernetes {
+		return buildKubernetesService(logger)
+	}
+
+	return buildVMService(logger, mode), nil
+}
+
+// detectInstallMode reports where cwa-updater is running, from the same two
+// signals cwa-manager uses: cluster environment, then mode file the VM installer wrote.
+func detectInstallMode(modeFile string) (installMode, error) {
+	if os.Getenv(envK8sServiceHost) != "" {
+		return modeKubernetes, nil
+	}
+
+	data, err := os.ReadFile(modeFile)
+	if err != nil {
+		return "", fmt.Errorf("%w: reading %s: %w", errUnknownInstallMode, modeFile, err)
+	}
+
+	switch mode := installMode(strings.TrimSpace(string(data))); mode {
+	case modeNative, modeDocker:
+		return mode, nil
+	case modeKubernetes:
+		return "", fmt.Errorf("%w: %s names kubernetes on a host that is not in a cluster",
+			errUnknownInstallMode, modeFile)
+	default:
+		return "", fmt.Errorf("%w: %s holds %q", errUnknownInstallMode, modeFile, mode)
+	}
+}
+
+// buildVMService wires the file-backed upgrade state used on systemd and Docker
+// hosts. One cwa-manager runs per host, so the collection window closes on its
+// handoff and there is no fan-in to wait for.
+func buildVMService(logger *slog.Logger, mode installMode) *upgrade.Service {
+	ackTimeout := minutesFromEnv(logger, "UPGRADE_ACK_TIMEOUT_MIN")
+
+	logger.Info("upgrade state wired",
+		"mode", mode, "state_path", vmStatePath, "ack_timeout", ackTimeout)
+
+	return upgrade.New(upgrade.Config{
+		Store:      upgrade.NewFileStore(vmStatePath),
+		Counter:    upgrade.SingleAgentCounter{},
+		Executor:   vmExecutor{},
+		Logger:     logger,
+		AckTimeout: ackTimeout,
+	})
+}
+
+// vmExecutor stands in until the bundle executor lands, so a VM cwa-updater can
+// accept, persist, recover and report a handoff before it can act on one.
+type vmExecutor struct{}
+
+// Upgrade always fails; nothing on the host is touched.
+func (vmExecutor) Upgrade(context.Context, *upgrade.State) error {
+	return errNoVMExecutor
+}
+
+// Rollback succeeds because Upgrade installed nothing, so the host is already on
+// rollback_version. The result the control plane sees is rolled_back, and its reason names this executor.
+func (vmExecutor) Rollback(context.Context, *upgrade.State) error {
+	return nil
+}
+
+// buildKubernetesService wires the ConfigMap-backed upgrade state.
+func buildKubernetesService(logger *slog.Logger) (*upgrade.Service, error) {
 	namespace := os.Getenv("POD_NAMESPACE")
 	if namespace == "" {
 		return nil, errMissingNamespace
