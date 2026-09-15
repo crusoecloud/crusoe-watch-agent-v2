@@ -1,5 +1,5 @@
 {{- /*
-report-runner DaemonSets for bundled-driver GPU nodes (NVIDIA GB200 + AMD).
+report-runner DaemonSets for bundled-driver GPU nodes (NVIDIA GB200/GB300 + AMD).
 */ -}}
 {{- range $vendor := list "nvidia" "amd" }}
 {{- $cfg := index $.Values.reportRunner $vendor }}

@@ -43,6 +43,10 @@ DCGM_EXPORTER_PORT=9400
 AMD_EXPORTER_PORT=5000
 CME_PORT=9500
 
+# dcgm-exporter upstream release tag, cloned by native mode. The Docker image tags
+# below are this same release plus a base-OS suffix, so both modes ship one exporter.
+DCGM_EXPORTER_RELEASE="@@DCGM_EXPORTER_RELEASE@@"
+
 # dcgm-exporter Docker image by Ubuntu version.
 declare -A DCGM_EXPORTER_VERSION_MAP=(
   ["20.04"]="@@DCGM_EXPORTER_UBUNTU2004_VERSION@@"
@@ -52,6 +56,8 @@ declare -A DCGM_EXPORTER_VERSION_MAP=(
 for k in "${!DCGM_EXPORTER_VERSION_MAP[@]}"; do
     case "${DCGM_EXPORTER_VERSION_MAP[$k]}" in @@*@@) DCGM_EXPORTER_VERSION_MAP[$k]="dev" ;; esac
 done
+# Unrendered dev script: build the default branch rather than a bogus tag.
+case "$DCGM_EXPORTER_RELEASE" in @@*@@) DCGM_EXPORTER_RELEASE="" ;; esac
 
 # A CCR pull-through cache project maps to exactly one upstream registry, so
 # each region has a separate project mirroring ghcr.io and docker.io.
@@ -508,7 +514,12 @@ install_dcgm_exporter_native() {
         export PATH="/usr/local/go/bin:$PATH"
     fi
 
-    git clone https://github.com/NVIDIA/dcgm-exporter.git "$BUILD_DIR" || error_exit "Failed to clone dcgm-exporter."
+    local clone_opts=(--depth 1)
+    if [[ -n "$DCGM_EXPORTER_RELEASE" ]]; then
+        clone_opts+=(--branch "$DCGM_EXPORTER_RELEASE")
+    fi
+    git clone "${clone_opts[@]}" https://github.com/NVIDIA/dcgm-exporter.git "$BUILD_DIR" \
+        || error_exit "Failed to clone dcgm-exporter ${DCGM_EXPORTER_RELEASE:-default branch}."
     make -C "$BUILD_DIR" binary || error_exit "Failed to build dcgm-exporter."
     make -C "$BUILD_DIR" install || error_exit "Failed to install dcgm-exporter."
     rm -rf "$BUILD_DIR"

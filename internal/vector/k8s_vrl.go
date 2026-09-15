@@ -57,6 +57,126 @@ const vrlParseReportRunnerLogsK8s = "\n.log_source = \"cwa-report-runner\"\n" + 
 
 const vrlParseCwaUpdaterLogsK8s = "\n.log_source = \"cwa-updater\"\n" + vrlParseK8sAgentBody
 
+// vrlParseOperatorLogsK8s parses the GPU / network operator Deployment logs.
+const vrlParseOperatorLogsK8s = `
+# Three log formats across these Deployments; first match wins, and klog is
+# tried before zap console, which is lenient enough to claim its lines.
+# Anything else keeps its raw text as _msg with no level.
+#   json         gpu-operator (zap), nv-ipam-controller (zapr)
+#   klog         node-feature-discovery master + gc
+#   zap console  network-operator controller
+
+# The namespace minus its optional nvidia- prefix, so the prefixed and
+# unprefixed installs of the same operator converge on one value.
+.log_source = replace(to_string(.kubernetes.pod_namespace) ?? "", r'^nvidia-', "")
+
+# Drop node-feature-discovery's ~75 hardware-capability labels, which
+# kubernetes_logs copies onto every line. Other node labels stay.
+if is_object(.kubernetes.node_labels) {
+    .kubernetes.node_labels = filter(object!(.kubernetes.node_labels)) -> |key, _value| {
+        !starts_with(key, "feature.node.kubernetes.io/")
+    }
+}
+
+msg = to_string(.message) ?? ""
+if msg != "" {
+    ._msg = msg
+}
+
+matched = false
+
+json_fields = object(parse_json(msg) ?? {}) ?? {}
+if !is_empty(json_fields) {
+    matched = true
+    # Lift the parsed fields onto the event so they ship as payload.<field>.
+    # Merging under the event keeps vector's metadata on a name collision.
+    . = merge(json_fields, ., deep: true)
+    # zap uses "msg"; logrus and the k8s libraries use "message".
+    if exists(json_fields.msg) {
+        ._msg = to_string(json_fields.msg) ?? msg
+    } else if exists(json_fields.message) {
+        ._msg = to_string(json_fields.message) ?? msg
+    }
+    # enrich_logs normalizes the enum and drops anything unrecognized.
+    if exists(json_fields.level) {
+        .level = to_string(json_fields.level) ?? ""
+    } else if exists(json_fields.severity) {
+        .level = to_string(json_fields.severity) ?? ""
+    } else if exists(json_fields.error) || exists(json_fields.err) {
+        # zapr omits the level key: Error() emits an error field and no v,
+        # Info() emits v and no error field. The key is "error" or "err".
+        .level = "error"
+    } else if exists(json_fields.v) {
+        # v is verbosity, not severity: V(0) is Info, higher is Debug.
+        verbosity = to_int(json_fields.v) ?? 0
+        .level = "debug"
+        if verbosity == 0 {
+            .level = "info"
+        }
+    }
+}
+
+if !matched {
+    klog_fields = object(parse_klog(msg) ?? {})
+    if !is_empty(klog_fields) {
+        matched = true
+        if exists(klog_fields.message) {
+            klog_msg = to_string(klog_fields.message)
+            ._msg = klog_msg
+            # klog's structured form is: "message" key=value ... -- unwrap the
+            # message, lift the trailing pairs to payload.<field>.
+            unwrapped = object(parse_regex(klog_msg, r'^"(?P<msg>[^"]*)"(?P<fields>.*)$') ?? {})
+            if !is_empty(unwrapped) {
+                ._msg = unwrapped.msg
+                klog_tail = to_string(unwrapped.fields)
+                if match(klog_tail, r'\S+=') {
+                    logfmt_fields = object(parse_logfmt(klog_tail) ?? {})
+                    if !is_empty(logfmt_fields) {
+                        . = merge(logfmt_fields, ., deep: true)
+                    }
+                }
+            }
+        }
+        if exists(klog_fields.level) {
+            .level = klog_fields.level
+        }
+        if exists(klog_fields.timestamp) {
+            ._time = klog_fields.timestamp
+        }
+    }
+}
+
+if !matched {
+    # Tab separated: <ts> <LEVEL> [logger] <message> [{fields}].
+    zap = object(parse_regex(msg, r'^[^\t]+\t(?P<level>[A-Z]+)\t(?P<rest>.*)$') ?? {})
+    if !is_empty(zap) {
+        zap_level = downcase(to_string(zap.level))
+        # Guard on a real level word so tabbed plain text is not claimed.
+        if includes(["debug", "info", "warn", "warning", "error", "fatal"], zap_level) {
+            .level = zap_level
+            rest = to_string(zap.rest)
+            # Lift the optional trailing {...} object to payload.<field>.
+            zap_tail = object(parse_regex(rest, r'\t(?P<fields>\{.*\})$') ?? {})
+            if !is_empty(zap_tail) {
+                zap_fields = object(parse_json(to_string(zap_tail.fields)) ?? {}) ?? {}
+                if !is_empty(zap_fields) {
+                    . = merge(zap_fields, ., deep: true)
+                }
+            }
+            # Drop the optional trailing field object, then the optional logger.
+            rest = replace(rest, r'\t\{.*\}$', "")
+            tail = object(parse_regex(rest, r'(?P<msg>[^\t]*)$') ?? {})
+            if !is_empty(tail) {
+                ._msg = tail.msg
+            }
+        }
+    }
+}
+
+# The raw line still ships verbatim as payload.message, alongside the parsed
+# payload.<field> and the scratch ._msg / ._time / .level / .log_source.
+`
+
 // vrlEnrichLogsK8s is the K8s version of the envelope assembly.
 // crusoe_watch_version is populated from AGENT_VERSION (helm AppVersion).
 const vrlEnrichLogsK8s = vrlEnrichLogsPrefix +

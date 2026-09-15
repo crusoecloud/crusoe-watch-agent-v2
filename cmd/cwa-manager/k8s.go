@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -110,7 +111,7 @@ func (r *k8sRuntime) startWatcher(
 
 // buildK8sGenerator wires the report.bug generator for K8s: operator-exec into the driver
 // pod for GPU Operator NVIDIA nodes, and the bundled-driver host report-runner (over a
-// unix socket) for AMD and GB200 nodes. The router picks per node at collection time.
+// unix socket) for AMD and GB200/GB300 nodes. The router picks per node at collection time.
 func (r *k8sRuntime) buildK8sGenerator() command.Generator {
 	gpu := vector.DetectGPUAt(hostSysModuleDir)
 	outputDir := getEnvOrDefault(bugreport.EnvReportDir, bugreport.DefaultReportDir)
@@ -159,9 +160,29 @@ func buildK8sConfig() vector.K8sConfig {
 		CustomMetricsDefaultPath:   getEnvOrDefault("CUSTOM_METRICS_DEFAULT_PATH", "/metrics"),
 		CustomMetricsDefaultScrape: getEnvInt("CUSTOM_METRICS_DEFAULT_SCRAPE", defaultCustomMetricsScrape),
 		LogsEnabled:                getEnvBool("LOGS_ENABLED", true),
+		OperatorLogNamespaces:      operatorLogNamespaces(),
 		SinkEndpoint:               os.Getenv("CMS_ENDPOINT"),
 		Proxy:                      buildProxyConfig(),
 	}
+}
+
+// operatorLogNamespaces reads OPERATOR_LOG_NAMESPACES, a comma-separated list set by the
+// chart. Both namespace names are listed per operator so either NVIDIA install layout
+// matches; an explicitly empty value disables operator log collection.
+func operatorLogNamespaces() []string {
+	raw, set := os.LookupEnv("OPERATOR_LOG_NAMESPACES")
+	if !set {
+		return []string{"nvidia-gpu-operator", "gpu-operator", "nvidia-network-operator", "network-operator"}
+	}
+
+	var namespaces []string
+	for _, namespace := range strings.Split(raw, ",") {
+		if namespace = strings.TrimSpace(namespace); namespace != "" {
+			namespaces = append(namespaces, namespace)
+		}
+	}
+
+	return namespaces
 }
 
 func slurmDefaultPaths() []string {

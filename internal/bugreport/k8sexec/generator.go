@@ -18,7 +18,7 @@ import (
 )
 
 // K8sGenerator routes a K8s bug-report collection by where the GPU driver lives:
-//   - Bundled driver (AMD, or NVIDIA GB200): host report-runner over a unix socket (same as VM mode).
+//   - Bundled driver (AMD, or NVIDIA GB200/GB300): host report-runner over a unix socket (same as VM mode).
 //   - GPU Operator NVIDIA (rest of the fleet): exec into the driver pod.
 type K8sGenerator struct {
 	exec     reportGenerator
@@ -129,11 +129,23 @@ const nodeLabelInstanceType = "node.kubernetes.io/instance-type"
 
 // K8sBundledDriver reports whether a node's GPU driver is bundled on the host (collect via
 // the host runner) rather than deployed as a GPU Operator driver pod (collect via exec).
-// AMD always bundles its driver; NVIDIA bundles only on GB200.
+// AMD always bundles its driver; NVIDIA bundles only on GB200 / GB300.
 func K8sBundledDriver(gpu vector.GPUType, instanceType string) bool {
 	if gpu == vector.GPUAMD {
 		return true
 	}
 
-	return gpu == vector.GPUNvidia && strings.Contains(strings.ToLower(instanceType), "gb200")
+	if gpu != vector.GPUNvidia {
+		return false
+	}
+
+	// Matched as a substring: the instance type carries a size suffix.
+	instanceType = strings.ToLower(instanceType)
+	for _, family := range []string{"gb200", "gb300"} {
+		if strings.Contains(instanceType, family) {
+			return true
+		}
+	}
+
+	return false
 }

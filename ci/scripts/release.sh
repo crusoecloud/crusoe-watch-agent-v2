@@ -32,9 +32,10 @@ log() { echo "==> $*" >&2; }
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPTS="${REPO_ROOT}/ci/scripts"
 
-MODE_PATHS_vm="vm/ dependencies.yaml"
-MODE_PATHS_k8s="k8s/helm-chart/ dependencies.yaml"
-MODE_PATHS_updater="k8s/cwa-updater-chart/ cmd/cwa-updater/ dependencies.yaml"
+# Keep in sync with mode_paths() in generate-release-notes.sh.
+MODE_PATHS_vm="vm/ cmd/ internal/ dependencies.yaml go.mod go.sum"
+MODE_PATHS_k8s="k8s/helm-chart/ cmd/ internal/ Dockerfile dependencies.yaml go.mod go.sum"
+MODE_PATHS_updater="k8s/cwa-updater-chart/ cmd/cwa-updater/ internal/ dependencies.yaml go.mod go.sum"
 
 mode_paths() {
     local v="MODE_PATHS_${1}"

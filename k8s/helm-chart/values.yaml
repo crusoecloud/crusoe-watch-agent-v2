@@ -116,6 +116,14 @@ customMetrics:
 
 logs:
   enabled: true
+  # Deployment pods in these namespaces are collected; the DaemonSets, which log
+  # once per node, are not. Both namespace names are listed so either NVIDIA
+  # install layout matches. Empty disables operator log collection.
+  operatorNamespaces:
+    - nvidia-gpu-operator
+    - gpu-operator
+    - nvidia-network-operator
+    - network-operator
 
 # Bug-report (report.bug command) settings.
 bugReport:
@@ -125,7 +133,7 @@ bugReport:
 # report-runner: the agent-owned bug-report collector for bundled-driver GPU nodes.
 reportRunner:
   nvidia:
-    # Enable on bundled-NVIDIA (GB200) nodes.
+    # Enable on bundled-NVIDIA (GB200/GB300) nodes.
     enabled: true
     image: crusoecloud/crusoe-watch-agent-v2/report-runner
     tag: "@@REPORT_RUNNER_VERSION@@"
@@ -133,6 +141,8 @@ reportRunner:
     instanceTypes:
       - gb200-186gb-nvl-ib.4x
       - gb200-186gb-nvl.4x
+      - gb300-288gb-nvl-ib.4x
+      - gb300-288gb-nvl.4x
   amd:
     enabled: true
     image: crusoecloud/crusoe-watch-agent-v2/report-runner-amd

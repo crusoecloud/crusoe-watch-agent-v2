@@ -71,13 +71,15 @@ func TestK8sGenerator_RoutesAMDToRunner(t *testing.T) {
 	assert.False(t, exec.called, "AMD should not exec into a driver pod")
 }
 
-func TestK8sGenerator_RoutesGB200ToRunner(t *testing.T) {
-	gen, exec, runner := newK8sGen(vector.GPUNvidia, "gb200-320gb.1x")
+func TestK8sGenerator_RoutesBundledNvidiaToRunner(t *testing.T) {
+	for _, instanceType := range []string{"gb200-320gb.1x", "gb300-288gb-nvl-ib.4x"} {
+		gen, exec, runner := newK8sGen(vector.GPUNvidia, instanceType)
 
-	_, err := gen.Generate(context.Background(), vector.GPUNvidia, "evt")
-	require.NoError(t, err)
-	assert.True(t, runner.called, "GB200 has a bundled host driver -> runner")
-	assert.False(t, exec.called)
+		_, err := gen.Generate(context.Background(), vector.GPUNvidia, "evt")
+		require.NoError(t, err)
+		assert.Truef(t, runner.called, "%s has a bundled host driver -> runner", instanceType)
+		assert.Falsef(t, exec.called, "%s should not exec into a driver pod", instanceType)
+	}
 }
 
 func TestK8sGenerator_RoutesOperatorNvidiaToExec(t *testing.T) {
@@ -129,6 +131,8 @@ func TestK8sBundledDriver(t *testing.T) {
 		{vector.GPUAMD, "mi300x.1x", true},
 		{vector.GPUNvidia, "gb200-320gb.1x", true},
 		{vector.GPUNvidia, "GB200-320GB.1X", true}, // case-insensitive
+		{vector.GPUNvidia, "gb300-288gb-nvl-ib.4x", true},
+		{vector.GPUNvidia, "gb300-288gb-nvl.4x", true},
 		{vector.GPUNvidia, "a100-80gb.1x", false},
 		{vector.GPUNvidia, "", false},
 		{vector.GPUNone, "gb200-320gb.1x", false},

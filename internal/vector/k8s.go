@@ -103,6 +103,10 @@ type K8sConfig struct {
 	CustomMetricsDefaultScrape int // default scrape interval for custom metrics
 	LogsEnabled                bool
 
+	// OperatorLogNamespaces are the namespaces whose GPU / network operator
+	// Deployment logs are collected. Empty disables operator log collection.
+	OperatorLogNamespaces []string
+
 	SinkEndpoint string // base URL, e.g. "https://cms-monitoring.crusoecloud.com"
 	Proxy        ProxyConfig
 
@@ -156,6 +160,12 @@ const (
 	scrapeTimeoutPct       = 0.7
 	scrapeIntervalMinK8s   = 5
 	defaultCustomScrapeInt = 30
+
+	operatorLogsSourceName    = "operator_kubernetes_logs"
+	operatorLogsTransformName = "parse_operator_logs"
+	// pod-template-hash is stamped on every Deployment pod and on no DaemonSet pod, so
+	// it selects the operator Deployments without depending on names, which NVIDIA can change.
+	operatorDeploymentSelector = "pod-template-hash"
 
 	dcgmSourceName           = "dcgm_exporter_scrape"
 	amdSourceName            = "amd_exporter_scrape"
@@ -505,40 +515,100 @@ func applyLogs(sources, transforms, sinks map[string]any, cfg K8sConfig) {
 	sources["vector_internal_logs"] = map[string]any{
 		"type": "internal_logs",
 	}
-	// Each kubernetes_logs source reads one agent container via include_paths_glob_patterns.
-	sources["cwa_manager_logs"] = map[string]any{
-		"type":                        "kubernetes_logs",
-		"include_paths_glob_patterns": []string{"/var/log/pods/*/cwa-manager/*.log"},
-		"read_from":                   "beginning",
-	}
-	sources["report_runner_logs"] = map[string]any{
-		"type":                        "kubernetes_logs",
-		"include_paths_glob_patterns": []string{"/var/log/pods/*/report-runner/*.log"},
-		"read_from":                   "beginning",
-	}
-	sources["cwa_updater_logs"] = map[string]any{
-		"type":                        "kubernetes_logs",
-		"include_paths_glob_patterns": []string{"/var/log/pods/*/cwa-updater/*.log"},
-		"read_from":                   "beginning",
-	}
-
 	transforms["filter_journald_noise"] = filterTransform([]string{"journald_logs"}, vrlFilterJournaldNoise)
 	transforms["parse_journald_logs"] = remapTransform([]string{"filter_journald_noise"}, vrlParseJournaldLogsK8s)
 	transforms["parse_internal_logs"] = remapTransform([]string{"vector_internal_logs"}, vrlParseInternalLogs)
-	transforms["parse_cwa_manager_logs"] = remapTransform([]string{"cwa_manager_logs"}, vrlParseCwaManagerLogsK8s)
-	transforms["parse_report_runner_logs"] = remapTransform([]string{"report_runner_logs"}, vrlParseReportRunnerLogsK8s)
-	transforms["parse_cwa_updater_logs"] = remapTransform([]string{"cwa_updater_logs"}, vrlParseCwaUpdaterLogsK8s)
-	transforms["enrich_logs"] = remapTransform(
-		[]string{
-			"parse_journald_logs",
-			"parse_internal_logs",
-			"parse_cwa_manager_logs",
-			"parse_report_runner_logs",
-			"parse_cwa_updater_logs",
+	enrichInputs := []string{"parse_journald_logs", "parse_internal_logs"}
+
+	// The glob's leading wildcard is <namespace>_<pod>_<uid>, so each source picks up its container in every namespace.
+	for _, spec := range []k8sLogSpec{
+		{
+			sourceName:    "cwa_manager_logs",
+			transformName: "parse_cwa_manager_logs",
+			globs:         []string{"/var/log/pods/*/cwa-manager/*.log"},
+			readFrom:      "beginning",
+			transformVRL:  vrlParseCwaManagerLogsK8s,
 		},
-		vrlEnrichLogsK8s)
+		{
+			sourceName:    "report_runner_logs",
+			transformName: "parse_report_runner_logs",
+			globs:         []string{"/var/log/pods/*/report-runner/*.log"},
+			readFrom:      "beginning",
+			transformVRL:  vrlParseReportRunnerLogsK8s,
+		},
+		{
+			sourceName:    "cwa_updater_logs",
+			transformName: "parse_cwa_updater_logs",
+			globs:         []string{"/var/log/pods/*/cwa-updater/*.log"},
+			readFrom:      "beginning",
+			transformVRL:  vrlParseCwaUpdaterLogsK8s,
+		},
+	} {
+		enrichInputs = append(enrichInputs, applyK8sLog(sources, transforms, spec))
+	}
+	if operatorTransform := applyOperatorLogs(sources, transforms, cfg); operatorTransform != "" {
+		enrichInputs = append(enrichInputs, operatorTransform)
+	}
+	transforms["enrich_logs"] = remapTransform(enrichInputs, vrlEnrichLogsK8s)
 
 	sinks["crusoe_ingest"] = buildLogsSink(cfg)
+}
+
+// k8sLogSpec describes one kubernetes_logs source and the transform that parses it.
+// Every source carries its own VRL, so namespaces and containers added later are not
+// forced through a shared transform.
+type k8sLogSpec struct {
+	sourceName    string
+	transformName string
+	globs         []string
+	// labelSelector is an optional extra_label_selector narrowing which pods are read.
+	labelSelector string
+	// readFrom is Vector's read_from: "beginning" for the whole file, "end" for new lines only.
+	readFrom     string
+	transformVRL string
+}
+
+// applyK8sLog wires a kubernetes_logs source into its parse transform and returns the
+// transform name, for feeding into enrich_logs. Names are Vector's global component
+// namespace: a reused name overwrites the earlier component.
+func applyK8sLog(sources, transforms map[string]any, spec k8sLogSpec) string {
+	source := map[string]any{
+		"type":                        "kubernetes_logs",
+		"include_paths_glob_patterns": spec.globs,
+		"read_from":                   spec.readFrom,
+	}
+	if spec.labelSelector != "" {
+		source["extra_label_selector"] = spec.labelSelector
+	}
+	sources[spec.sourceName] = source
+	transforms[spec.transformName] = remapTransform([]string{spec.sourceName}, spec.transformVRL)
+
+	return spec.transformName
+}
+
+// applyOperatorLogs adds the GPU / network operator Deployment log pipeline and returns its
+// transform name, or "" when no namespaces are configured. It gets its own source so the
+// Deployment-only label selector stays scoped to these namespaces: DaemonSet log files are
+// never opened, so the glob and the selector are exact and no filter transform is needed.
+func applyOperatorLogs(sources, transforms map[string]any, cfg K8sConfig) string {
+	if len(cfg.OperatorLogNamespaces) == 0 {
+		return ""
+	}
+
+	globs := make([]string, len(cfg.OperatorLogNamespaces))
+	for i, namespace := range cfg.OperatorLogNamespaces {
+		globs[i] = "/var/log/pods/" + namespace + "_*/*/*.log"
+	}
+
+	return applyK8sLog(sources, transforms, k8sLogSpec{
+		sourceName:    operatorLogsSourceName,
+		transformName: operatorLogsTransformName,
+		globs:         globs,
+		labelSelector: operatorDeploymentSelector,
+		// Collect from agent install forward.
+		readFrom:     "end",
+		transformVRL: vrlParseOperatorLogsK8s,
+	})
 }
 
 func buildLogsSink(cfg K8sConfig) map[string]any {

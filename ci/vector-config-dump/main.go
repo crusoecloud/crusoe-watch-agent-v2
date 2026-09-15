@@ -112,6 +112,7 @@ func renderK8s() ([]byte, error) {
 		CustomMetricsDefaultPath:   "/metrics",
 		CustomMetricsDefaultScrape: fastScrapeSecs,
 		LogsEnabled:                true,
+		OperatorLogNamespaces:      []string{"nvidia-gpu-operator", "nvidia-network-operator"},
 
 		SinkEndpoint: "https://cms-monitoring.example.com",
 		NodeLabels: vector.NodeLabels{

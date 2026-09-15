@@ -166,6 +166,8 @@ spec:
               value: {{ .Values.customMetrics.defaultScrape | quote }}
             - name: LOGS_ENABLED
               value: {{ .Values.logs.enabled | quote }}
+            - name: OPERATOR_LOG_NAMESPACES
+              value: {{ join "," (.Values.logs.operatorNamespaces | default list) | quote }}
             - name: NVIDIA_DRIVER_NAMESPACE
               value: {{ .Values.bugReport.driverNamespace | quote }}
             {{- if .Values.proxy.enabled }}

@@ -49,6 +49,7 @@ func testK8sConfig() K8sConfig {
 		CustomMetricsDefaultPath:   "/metrics",
 		CustomMetricsDefaultScrape: 30,
 		LogsEnabled:                true,
+		OperatorLogNamespaces:      []string{"nvidia-gpu-operator", "gpu-operator"},
 		SinkEndpoint:               "https://cms-monitoring.example.com",
 		NodeLabels: NodeLabels{
 			VMID:         "test-vm-id",
@@ -346,14 +347,15 @@ func TestApplyLogs(t *testing.T) {
 	assert.Contains(t, transforms, "parse_cwa_updater_logs")
 	assert.Contains(t, transforms, "enrich_logs")
 
-	// Enrich logs converges five parsers (journald + internal + cwa-manager +
-	// report-runner + cwa-updater).
+	// Enrich logs converges six parsers (journald + internal + cwa-manager +
+	// report-runner + cwa-updater + operator).
 	enrich := transforms["enrich_logs"].(map[string]any)
 	inputs := enrich["inputs"].([]any)
-	assert.Len(t, inputs, 5)
+	assert.Len(t, inputs, 6)
 	assert.Contains(t, inputs, "parse_cwa_manager_logs")
 	assert.Contains(t, inputs, "parse_report_runner_logs")
 	assert.Contains(t, inputs, "parse_cwa_updater_logs")
+	assert.Contains(t, inputs, "parse_operator_logs")
 
 	sinks := getSinks(cfg)
 	assert.Contains(t, sinks, "crusoe_ingest")
@@ -425,6 +427,41 @@ func TestK8sLogsSinkUserAgent(t *testing.T) {
 	sink := sinks["crusoe_ingest"].(map[string]any)
 	headers := sink["request"].(map[string]any)["headers"].(map[string]any)
 	assert.Equal(t, "CrusoeWatchAgent/CMK-${AGENT_VERSION}", headers["User-Agent"])
+}
+
+func TestApplyOperatorLogs(t *testing.T) {
+	cfg := buildAndParse(t, nil, nil, testK8sConfig())
+
+	source := getSources(cfg)["operator_kubernetes_logs"].(map[string]any)
+	assert.Equal(t, "kubernetes_logs", source["type"])
+	// The Deployment-only selector plus the per-namespace globs are exact: no
+	// DaemonSet log file is ever opened, so no filter transform is needed.
+	assert.Equal(t, "pod-template-hash", source["extra_label_selector"])
+	assert.Equal(t, "end", source["read_from"])
+	assert.Equal(t, []any{
+		"/var/log/pods/nvidia-gpu-operator_*/*/*.log",
+		"/var/log/pods/gpu-operator_*/*/*.log",
+	}, source["include_paths_glob_patterns"])
+
+	parse := getTransforms(cfg)["parse_operator_logs"].(map[string]any)
+	assert.Equal(t, []any{"operator_kubernetes_logs"}, parse["inputs"])
+	// The parser must set the fields enrich_logs lifts out of the envelope.
+	src := parse["source"].(string)
+	for _, field := range []string{".log_source", "._msg", "._time", ".level"} {
+		assert.Containsf(t, src, field, "operator parser must set %s", field)
+	}
+}
+
+func TestApplyOperatorLogsNoNamespaces(t *testing.T) {
+	k := testK8sConfig()
+	k.OperatorLogNamespaces = nil
+	cfg := buildAndParse(t, nil, nil, k)
+
+	assert.NotContains(t, getSources(cfg), "operator_kubernetes_logs")
+	assert.NotContains(t, getTransforms(cfg), "parse_operator_logs")
+	// The rest of the log pipeline is unaffected.
+	assert.Contains(t, getSources(cfg), "journald_logs")
+	assert.Len(t, getTransforms(cfg)["enrich_logs"].(map[string]any)["inputs"].([]any), 5)
 }
 
 func TestApplyLogsDisabled(t *testing.T) {

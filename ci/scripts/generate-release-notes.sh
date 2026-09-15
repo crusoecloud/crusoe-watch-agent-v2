@@ -31,13 +31,14 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 REPO_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2"
 COMMIT_URL_BASE="${REPO_URL}/commit/"
 
-# Per-mode path scope. dependencies.yaml counts for every mode since external
-# pin bumps land there.
+# Per-mode path scope: the packaging directory plus the Go sources compiled into
+# that mode's artifact. dependencies.yaml and go.mod/go.sum count for every mode
+# since pin bumps land there. internal/ is shared.
 mode_paths() {
     case "$1" in
-        vm)      echo "vm/ dependencies.yaml" ;;
-        k8s)     echo "k8s/helm-chart/ dependencies.yaml" ;;
-        updater) echo "k8s/cwa-updater-chart/ cmd/cwa-updater/ dependencies.yaml" ;;
+        vm)      echo "vm/ cmd/ internal/ dependencies.yaml go.mod go.sum" ;;
+        k8s)     echo "k8s/helm-chart/ cmd/ internal/ Dockerfile dependencies.yaml go.mod go.sum" ;;
+        updater) echo "k8s/cwa-updater-chart/ cmd/cwa-updater/ internal/ dependencies.yaml go.mod go.sum" ;;
         *)       die "unknown mode: $1 (expected vm, k8s or updater)" ;;
     esac
 }
