@@ -39,6 +39,10 @@ ENV_FILE="${CONFIG_DIR}/.env"
 VECTOR_CONFIG="/etc/crusoe/shared/vector.yaml"
 SYSTEMCTL_DIR="/etc/systemd/system"
 
+# Docker's apt signing key, pinned so a substituted key fails the install instead
+# of being trusted. Published at docs.docker.com/engine/install/ubuntu.
+DOCKER_APT_KEY_FPR="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+
 DCGM_EXPORTER_PORT=9400
 AMD_EXPORTER_PORT=5000
 CME_PORT=9500
@@ -302,13 +306,52 @@ ensure_openssl() {
     fi
 }
 
+ensure_gpg() {
+    if ! command_exists gpg; then
+        status "Installing gnupg..."
+        { apt-get update -qq && apt-get install -y -qq gnupg; } \
+            || error_exit "Failed to install gnupg, which is required to verify apt signing keys."
+    fi
+}
+
+# Confirms the armored key at $1 is the key we expect ($2, a 40-char fingerprint).
+verify_apt_key() {
+    local keyfile="$1" expected="$2" name="$3"
+
+    ensure_gpg
+
+    # Keep gpg stderr: an unreadable key and a mismatched one need different fixes.
+    local listing rc=0
+    listing=$(gpg --show-keys --with-colons "$keyfile" 2>&1) || rc=$?
+    (( rc == 0 )) \
+        || error_exit "Could not read the ${name} apt signing key (gpg exit ${rc}): ${listing}"
+
+    local got
+    got=$(printf '%s\n' "$listing" | awk -F: '$1 == "fpr" { print $10; exit }')
+    [[ "$got" == "$expected" ]] \
+        || error_exit "${name} apt signing key fingerprint is ${got:-unreadable}, expected ${expected}. Refusing to continue."
+}
+
+# Installs Docker from Docker's own apt repo, so apt verifies every package
+# against the keyring. Piping get.docker.com into a root shell does not.
 ensure_docker() {
     if command_exists docker; then
         status "Docker already installed: $(docker --version)"
         return
     fi
     status "Installing Docker..."
-    wget -qO- https://get.docker.com | sh
+
+    install -m 0755 -d /etc/apt/keyrings
+    wget --https-only --tries=3 --timeout=30 -qO /etc/apt/keyrings/docker.asc \
+        https://download.docker.com/linux/ubuntu/gpg \
+        || error_exit "Failed to download the Docker apt signing key."
+    verify_apt_key /etc/apt/keyrings/docker.asc "$DOCKER_APT_KEY_FPR" "Docker"
+    echo "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+        > /etc/apt/sources.list.d/docker.list
+
+    apt-get update -qq || error_exit "Failed to update package lists after adding the Docker repo."
+    apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin \
+        || error_exit "Failed to install Docker."
     systemctl enable --now docker
 }
 
@@ -351,7 +394,16 @@ install_vector_native() {
         status "Installing Vector ${VECTOR_VERSION} via APT."
     fi
 
-    bash -c "$(curl -L https://setup.vector.dev)" || error_exit "Failed to add Vector APT repository."
+    # Vector ships from Datadog's apt repo. setup.vector.dev adds the same repo,
+    # but only by running its own unverified body as root.
+    install -m 0755 -d /etc/apt/keyrings
+    wget --https-only --tries=3 --timeout=30 -qO /etc/apt/keyrings/vector.asc \
+        https://keys.datadoghq.com/DATADOG_APT_KEY_CURRENT.public \
+        || error_exit "Failed to download the Vector apt signing key."
+    echo "deb [signed-by=/etc/apt/keyrings/vector.asc] https://apt.vector.dev/ stable vector-0" \
+        > /etc/apt/sources.list.d/vector.list
+
+    apt-get update -qq || error_exit "Failed to update package lists after adding the Vector repo."
     apt-get install -y "vector=${VECTOR_VERSION}-1" || error_exit "Failed to install Vector ${VECTOR_VERSION}-1."
     systemctl disable --now vector.service 2>/dev/null || true
 }
@@ -747,9 +799,10 @@ install_unit() {
 
 # Install a systemd unit whose ExecStart/ExecStop drive a Compose file.
 #   $1 = unit filename; $2 = compose filename under CONFIG_DIR
+# --no-log-prefix: the container's stdout is this unit's journal, and Vector parses it as logfmt.
 install_compose_unit() {
     install_unit "$1" \
-        "/usr/bin/docker compose -f ${CONFIG_DIR}/$2 up" \
+        "/usr/bin/docker compose -f ${CONFIG_DIR}/$2 up --no-log-prefix" \
         "/usr/bin/docker compose -f ${CONFIG_DIR}/$2 down"
 }
 
@@ -963,7 +1016,7 @@ do_install() {
         [[ "$GPU_TYPE" == "nvidia" ]] && install_release_binary report-runner
         [[ "$CWA_UPDATER_SKIP" == "false" ]] && install_release_binary cwa-updater
     elif [[ "$CWA_UPDATER_SKIP" == "false" ]]; then
-        download_file "vm/docker/docker-compose-cwa-updater.yaml" \
+        copy_asset "vm/docker/docker-compose-cwa-updater.yaml" \
             "${CONFIG_DIR}/docker-compose-cwa-updater.yaml"
     fi
 

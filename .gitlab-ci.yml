@@ -102,11 +102,13 @@ vector:validate:
     - echo -e "machine ${CI_SERVER_HOST} login gitlab-ci-token password ${CI_JOB_TOKEN}" > ~/.netrc
     - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
     - VECTOR_VERSION=$(grep '^vector:' dependencies.yaml | awk '{print $2}' | tr -d '"')
-    - curl -fsSL https://sh.vector.dev | VECTOR_VERSION="${VECTOR_VERSION}" bash -s -- -y --prefix /usr/local
-    - export PATH="/usr/local/bin:$PATH"
+    # Vector from Datadog's apt repo, so apt verifies the package against the keyring.
+    - install -m 0755 -d /etc/apt/keyrings
+    - curl -fsSL -o /etc/apt/keyrings/vector.asc https://keys.datadoghq.com/DATADOG_APT_KEY_CURRENT.public
+    - echo "deb [signed-by=/etc/apt/keyrings/vector.asc] https://apt.vector.dev/ stable vector-0" > /etc/apt/sources.list.d/vector.list
+    - apt-get update && apt-get install -y --no-install-recommends "vector=${VECTOR_VERSION}-1"
     - vector --version
   script:
-    - export PATH="/usr/local/bin:$PATH"
     - make vector-validate
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'

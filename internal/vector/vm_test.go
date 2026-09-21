@@ -475,29 +475,17 @@ func TestGenerateVM_TLSConfig(t *testing.T) {
 	}
 }
 
-// TestGenerateVM_DockerModeSources asserts that DockerMode uses
-// docker_logs sources for cwa-manager and report-runner.
-func TestGenerateVM_DockerModeSources(t *testing.T) {
-	cfg := parsedVM(t, VMConfig{GPUType: GPUNone, DockerMode: true})
-	src := sources(cfg)
-
-	cwaLogs := src["cwa_manager_logs"].(map[string]any)
-	assert.Equal(t, "docker_logs", cwaLogs["type"])
-	containers := cwaLogs["include_containers"].([]any)
-	assert.Contains(t, containers, "cwa-manager")
-
-	runnerLogs := src["report_runner_logs"].(map[string]any)
-	assert.Equal(t, "docker_logs", runnerLogs["type"])
-	runnerContainers := runnerLogs["include_containers"].([]any)
-	assert.Contains(t, runnerContainers, "cwa-report-runner")
-}
-
-// TestGenerateVM_NativeModeSources asserts that the journald sources
-// stay when DockerMode is false.
-func TestGenerateVM_NativeModeSources(t *testing.T) {
+// TestGenerateVM_AgentLogSources asserts that both install modes read the agent
+// logs from the units' journals; nothing reads the Docker socket.
+func TestGenerateVM_AgentLogSources(t *testing.T) {
 	cfg := parsedVM(t, VMConfig{GPUType: GPUNone})
 	src := sources(cfg)
 
 	cwaLogs := src["cwa_manager_logs"].(map[string]any)
 	assert.Equal(t, "journald", cwaLogs["type"])
+	assert.Contains(t, cwaLogs["include_units"].([]any), "cwa-manager.service")
+
+	runnerLogs := src["report_runner_logs"].(map[string]any)
+	assert.Equal(t, "journald", runnerLogs["type"])
+	assert.Contains(t, runnerLogs["include_units"].([]any), "cwa-report-runner.service")
 }

@@ -8,7 +8,6 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /var/log/journal:/var/log/journal:ro
-      - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/vector:/var/lib/vector
     env_file:
       - /etc/crusoe/crusoe_watch_agent/.env
@@ -16,7 +15,12 @@ services:
     environment:
       - PROCFS_ROOT=/host/proc
       - SYSFS_ROOT=/host/sys
-    privileged: true
+    cap_drop: [ALL]
+    # Journal files are 0640 root:systemd-journal.
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
     entrypoint: /bin/sh -c "sleep 5 && /usr/bin/vector --config /etc/vector/vector.yaml --watch-config"
+    # Scrapes the exporters on host loopback, which is what lets them bind 127.0.0.1.
     network_mode: host
     restart: always

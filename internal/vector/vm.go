@@ -65,8 +65,6 @@ type VMConfig struct {
 	// requests per minute; the RateLimitAll key sets the default for sinks
 	// without their own entry. Empty leaves Vector's default (unlimited).
 	RateLimits map[string]int
-
-	DockerMode bool
 }
 
 // GenerateVMBase returns the static VM base config: data_dir, api, all sources
@@ -143,11 +141,6 @@ func ApplyVM(baseCfg map[string]any, cfg VMConfig) {
 	if cfg.IngestionBlocked {
 		removeExternalSinks(sinks)
 	}
-
-	if cfg.DockerMode {
-		sources["cwa_manager_logs"] = dockerLogsSource("cwa-manager")
-		sources["report_runner_logs"] = dockerLogsSource("cwa-report-runner")
-	}
 }
 
 // applyEndpointOverrides replaces the ${...} env-var placeholders in the logs
@@ -211,15 +204,6 @@ func journaldUnitSource(unit string) map[string]any {
 		"journal_directory": "/var/log/journal",
 		"since_now":         false,
 		"include_units":     []string{unit},
-	}
-}
-
-// dockerLogsSource builds a docker_logs source for one container.
-// The Vector container must mount the Docker socket.
-func dockerLogsSource(containerName string) map[string]any {
-	return map[string]any{
-		"type":               "docker_logs",
-		"include_containers": []string{containerName},
 	}
 }
 
