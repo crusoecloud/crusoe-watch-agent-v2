@@ -430,6 +430,16 @@ func TestK8sLogsSinkUserAgent(t *testing.T) {
 	assert.Equal(t, "CrusoeWatchAgent/CMK-${AGENT_VERSION}", headers["User-Agent"])
 }
 
+func TestK8sMetricsSinkHeaders(t *testing.T) {
+	cfg := buildAndParse(t, nil, nil, testK8sConfig())
+	sinks := getSinks(cfg)
+
+	sink := sinks["cms_gateway_node_metrics"].(map[string]any)
+	headers := sink["request"].(map[string]any)["headers"].(map[string]any)
+	assert.Equal(t, "${VM_ID:-unknown}", headers["X-Crusoe-Vm-Id"])
+	assert.Equal(t, "CrusoeWatchAgent/CMK-${AGENT_VERSION}", headers["User-Agent"])
+}
+
 func TestApplyOperatorLogs(t *testing.T) {
 	cfg := buildAndParse(t, nil, nil, testK8sConfig())
 

@@ -432,6 +432,16 @@ func TestGenerateVM_LogsSinkUserAgent(t *testing.T) {
 	assert.Equal(t, "CrusoeWatchAgent/VM-${AGENT_VERSION}", headers["User-Agent"])
 }
 
+func TestGenerateVM_MetricsSinkHeaders(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{GPUType: GPUNone})
+	sk := sinks(cfg)
+
+	metrics := sk["cms_gateway"].(map[string]any)
+	headers := metrics["request"].(map[string]any)["headers"].(map[string]any)
+	assert.Equal(t, "${VM_ID}", headers["X-Crusoe-Vm-Id"])
+	assert.Equal(t, "CrusoeWatchAgent/VM-${AGENT_VERSION}", headers["User-Agent"])
+}
+
 func TestGenerateVM_HostMetricsCollectors(t *testing.T) {
 	cfg := parsedVM(t, VMConfig{GPUType: GPUNone})
 	src := sources(cfg)

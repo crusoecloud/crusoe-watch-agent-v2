@@ -650,10 +650,17 @@ func buildPromRemoteWriteSink(endpoint, tenantID string, proxy ProxyConfig) map[
 		"auth":        map[string]any{"strategy": "bearer", "token": "${CRUSOE_MONITORING_TOKEN}"},
 		"healthcheck": map[string]any{"enabled": false},
 		"compression": "snappy",
-		"request":     map[string]any{"concurrency": "adaptive", "timeout_secs": requestTimeoutSecs},
-		"batch":       map[string]any{"max_bytes": metricBatchMaxBytes, "aggregate": false},
-		"buffer":      diskBufferConfig(),
-		"tls":         tlsConfig(proxy.Enabled),
+		"request": map[string]any{
+			"headers": map[string]any{
+				"X-Crusoe-Vm-Id": "${VM_ID:-unknown}",
+				"User-Agent":     "CrusoeWatchAgent/CMK-${AGENT_VERSION}",
+			},
+			"concurrency":  "adaptive",
+			"timeout_secs": requestTimeoutSecs,
+		},
+		"batch":  map[string]any{"max_bytes": metricBatchMaxBytes, "aggregate": false},
+		"buffer": diskBufferConfig(),
+		"tls":    tlsConfig(proxy.Enabled),
 	}
 	if proxy.Enabled {
 		cfg["proxy"] = proxy.toMap()

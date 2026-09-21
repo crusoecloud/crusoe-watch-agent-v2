@@ -269,7 +269,14 @@ func metricsRemoteWriteSink(inputs []string) map[string]any {
 		"tenant_id":   "cri:vm/${VM_ID}",
 		"auth":        map[string]any{"strategy": "bearer", "token": "${CRUSOE_MONITORING_TOKEN}"}, // TODO: Replace with JWT
 		"healthcheck": map[string]any{"enabled": false},
-		"request":     map[string]any{"concurrency": "adaptive", "timeout_secs": requestTimeoutSecs},
+		"request": map[string]any{
+			"headers": map[string]any{
+				"X-Crusoe-Vm-Id": "${VM_ID}",
+				"User-Agent":     "CrusoeWatchAgent/VM-${AGENT_VERSION}",
+			},
+			"concurrency":  "adaptive",
+			"timeout_secs": requestTimeoutSecs,
+		},
 		"batch":       map[string]any{"max_bytes": metricBatchMaxBytes, "aggregate": false},
 		"buffer":      diskBufferConfig(),
 		"compression": "snappy",
