@@ -43,6 +43,7 @@ type CollectRequest struct {
 
 // CollectResponse returns the archive path the runner wrote, or an error message.
 // The message already leads with a CWA-BR code, so the manager can relay it without re-tagging.
+// Only Path's base name is honored, see ResolveReportFile.
 type CollectResponse struct {
 	Path  string `json:"path,omitempty"`
 	Error string `json:"error,omitempty"`
@@ -59,16 +60,18 @@ type runnerError struct{ msg string }
 func (e *runnerError) Error() string { return e.msg }
 
 // RunnerClient is cwa-manager's end of the protocol: it triggers a collection over the
-// unix socket and returns the archive path the runner wrote.
+// unix socket and returns the archive path, resolved against reportDir.
 type RunnerClient struct {
 	socketPath string
+	reportDir  string
 	client     *http.Client
 }
 
 // NewRunnerClient builds a client that talks to the runner at socketPath.
-func NewRunnerClient(socketPath string) *RunnerClient {
+func NewRunnerClient(socketPath, reportDir string) *RunnerClient {
 	return &RunnerClient{
 		socketPath: socketPath,
+		reportDir:  reportDir,
 		client: &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -111,7 +114,7 @@ func (c *RunnerClient) Generate(ctx context.Context, gpu vector.GPUType, eventID
 		return "", &runnerError{msg: out.Error}
 	}
 
-	return out.Path, nil
+	return ResolveReportFile(c.reportDir, out.Path)
 }
 
 // Health polls the report-runner's /health route and returns its version.

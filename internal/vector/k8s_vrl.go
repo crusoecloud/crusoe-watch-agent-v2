@@ -2,6 +2,7 @@ package vector
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -244,15 +245,17 @@ includes(metrics_allowlist, .name)
 
 // buildNodeMetricsTransformVRL generates VRL that tags host metrics with node identity.
 func buildNodeMetricsTransformVRL(labels NodeLabels) string {
-	vrl := fmt.Sprintf(`.tags.nodepool = "%s"
+	// Node labels are not agent-authored, so they are quoted like every other
+	// string position here, matching buildCustomMetricsEnrichVRL.
+	vrl := fmt.Sprintf(`.tags.nodepool = %q
 .tags.cluster_id = "${CRUSOE_CLUSTER_ID}"
 .tags.vm_id = "${VM_ID}"
-.tags.vm_instance_type = "%s"
-.tags.node = "%s"
+.tags.vm_instance_type = %q
+.tags.node = %q
 `, labels.NodepoolID, labels.InstanceType, labels.Hostname)
 
 	if labels.PodID != "" {
-		vrl += fmt.Sprintf("if \"%s\" != \"\" { .tags.pod_id = \"%s\" }\n", labels.PodID, labels.PodID)
+		vrl += fmt.Sprintf("if %q != \"\" { .tags.pod_id = %q }\n", labels.PodID, labels.PodID)
 	}
 
 	vrl += `.tags.crusoe_resource = "vm"` + "\n"
@@ -292,12 +295,22 @@ func buildCustomMetricsFilterVRL(deploymentCfg map[string]any) []string {
 	return lines
 }
 
+// validLabelIdent matches a VRL path segment. ConfigMap-supplied identifiers land in
+// a path position (.tags.<ident>), which cannot be quoted, so bad ones are dropped.
+var validLabelIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // buildCustomMetricsLabelVRL generates VRL lines that drop/add labels per deployment config.
 func buildCustomMetricsLabelVRL(deploymentCfg map[string]any) []string {
 	var lines []string
+	rejected := 0
 
 	if dropLabels, found := toStringSlice(deploymentCfg["dropLabels"]); found {
 		for _, label := range dropLabels {
+			if !validLabelIdent.MatchString(label) {
+				rejected++
+
+				continue
+			}
 			lines = append(lines, fmt.Sprintf("del(.tags.%s)", label))
 		}
 	}
@@ -306,10 +319,20 @@ func buildCustomMetricsLabelVRL(deploymentCfg map[string]any) []string {
 		for _, entry := range addLabels {
 			if labelMap, isMap := entry.(map[string]any); isMap {
 				for key, val := range labelMap {
+					if !validLabelIdent.MatchString(key) {
+						rejected++
+
+						continue
+					}
 					lines = append(lines, fmt.Sprintf(".tags.%s = %q", key, fmt.Sprint(val)))
 				}
 			}
 		}
+	}
+
+	// Count only: a newline in the rejected text would end the comment.
+	if rejected > 0 {
+		lines = append(lines, fmt.Sprintf("# %d label identifier(s) rejected: not a valid VRL path segment", rejected))
 	}
 
 	return lines

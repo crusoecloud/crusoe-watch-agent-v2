@@ -166,3 +166,36 @@ func ReportBase(eventID string, now time.Time) string {
 func sanitize(s string) string {
 	return unsafeChars.ReplaceAllString(s, "_")
 }
+
+// reportFileRe matches the archive names ReportBase produces, plus the .log.gz both
+// collectors append. Keep in step with ReportBase and sanitize.
+var reportFileRe = regexp.MustCompile(`^bug-report-(?:[A-Za-z0-9._-]+-)?[0-9]{8}-[0-9]{6}\.log\.gz$`)
+
+var ErrBadReportPath = errors.New("report path is not inside the report directory")
+
+// ResolveReportFile maps a path reported by the report-runner onto the caller's own
+// report directory, honoring only the base name and rejecting symlinks out of dir.
+// The runner is a separate privileged process and the caller uploads then deletes
+// whatever it is handed, so the reported directory is not trusted.
+func ResolveReportFile(dir, reported string) (string, error) {
+	name := filepath.Base(reported)
+	if !reportFileRe.MatchString(name) {
+		return "", CodeNoOutput.Errorf("runner reported an unexpected report name %q: %w", name, ErrBadReportPath)
+	}
+
+	resolved, err := filepath.EvalSymlinks(filepath.Join(dir, name))
+	if err != nil {
+		return "", CodeNoOutput.Errorf("resolving report %q: %w", name, err)
+	}
+
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", CodeInternal.Errorf("resolving report dir %q: %w", dir, err)
+	}
+
+	if filepath.Dir(resolved) != resolvedDir {
+		return "", CodeNoOutput.Errorf("report %q resolves outside %s: %w", name, resolvedDir, ErrBadReportPath)
+	}
+
+	return resolved, nil
+}

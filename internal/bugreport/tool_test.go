@@ -163,3 +163,83 @@ func TestToolGenerate_NoReportProduced(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no report")
 }
+
+// writeValidReport creates a valid report archive in dir and returns its name.
+func writeValidReport(t *testing.T, dir string) string {
+	t.Helper()
+
+	name := ReportBase("evt-1", time.Date(2026, 7, 9, 12, 30, 0, 0, time.UTC)) + ".log.gz"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("archive"), ReportPerm))
+
+	return name
+}
+
+func TestResolveReportFile_AcceptsArchiveInReportDir(t *testing.T) {
+	dir := t.TempDir()
+	name := writeValidReport(t, dir)
+
+	got, err := ResolveReportFile(dir, filepath.Join(dir, name))
+	require.NoError(t, err)
+
+	want, err := filepath.EvalSymlinks(filepath.Join(dir, name))
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+// A correctly named report claimed to live elsewhere is looked for in dir.
+func TestResolveReportFile_IgnoresReportedDirectory(t *testing.T) {
+	dir := t.TempDir()
+	name := writeValidReport(t, dir)
+
+	got, err := ResolveReportFile(dir, filepath.Join("/some/other/place", name))
+	require.NoError(t, err)
+
+	// ResolveReportFile returns the symlink-evaluated path.
+	wantDir, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	assert.Equal(t, wantDir, filepath.Dir(got))
+}
+
+func TestResolveReportFile_RejectsUnexpectedNames(t *testing.T) {
+	dir := t.TempDir()
+
+	for _, reported := range []string{
+		"/etc/shadow",
+		"/var/run/secrets/kubernetes.io/serviceaccount/token",
+		"../../etc/shadow",
+		"report.log.gz",                     // not a ReportBase name
+		"bug-report-20260709-123000.tar.gz", // wrong extension
+		"bug-report-evt-1-20260709.log.gz",  // no time component
+		"",
+	} {
+		_, err := ResolveReportFile(dir, reported)
+		require.Error(t, err, "reported=%q must be rejected", reported)
+		assert.ErrorIs(t, err, ErrBadReportPath, "reported=%q", reported)
+	}
+}
+
+// A planted symlink must not redirect the upload, nor the delete that follows.
+func TestResolveReportFile_RejectsSymlinkOutOfDir(t *testing.T) {
+	dir := t.TempDir()
+
+	outside := filepath.Join(t.TempDir(), "secret")
+	require.NoError(t, os.WriteFile(outside, []byte("secret"), ReportPerm))
+
+	name := ReportBase("evt-1", time.Date(2026, 7, 9, 12, 30, 0, 0, time.UTC)) + ".log.gz"
+	require.NoError(t, os.Symlink(outside, filepath.Join(dir, name)))
+
+	_, err := ResolveReportFile(dir, name)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrBadReportPath)
+}
+
+// A well-named archive that is not there fails rather than uploading blind.
+func TestResolveReportFile_RejectsMissingFile(t *testing.T) {
+	dir := t.TempDir()
+
+	name := ReportBase("evt-1", time.Date(2026, 7, 9, 12, 30, 0, 0, time.UTC)) + ".log.gz"
+
+	_, err := ResolveReportFile(dir, name)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), string(CodeNoOutput))
+}

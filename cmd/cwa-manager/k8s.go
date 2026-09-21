@@ -118,7 +118,8 @@ func (r *k8sRuntime) buildK8sGenerator() command.Generator {
 	driverNS := getEnvOrDefault("NVIDIA_DRIVER_NAMESPACE", defaultDriverNamespace)
 
 	exec := k8sexec.NewExecGenerator(r.client, r.restCfg, outputDir, r.nodeName, driverNS)
-	runner := bugreport.NewRunnerClient(getEnvOrDefault(bugreport.EnvSocketPath, bugreport.DefaultSocketPath))
+	runner := bugreport.NewRunnerClient(
+		getEnvOrDefault(bugreport.EnvSocketPath, bugreport.DefaultSocketPath), outputDir)
 
 	return k8sexec.NewK8sGenerator(r.client, exec, runner, r.nodeName, gpu)
 }

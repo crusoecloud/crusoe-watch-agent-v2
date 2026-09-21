@@ -1,6 +1,7 @@
 package vector
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -652,4 +653,69 @@ func TestBuildEndpoints(t *testing.T) {
 	ec := ExporterConfig{Port: 8080, Paths: []string{"/a", "/b"}}
 	eps := ec.BuildEndpoints("10.0.0.1")
 	assert.Equal(t, []string{"http://10.0.0.1:8080/a", "http://10.0.0.1:8080/b"}, eps)
+}
+
+// A non-identifier would close the generated statement and append arbitrary VRL.
+func TestBuildCustomMetricsLabelVRL_RejectsNonIdentifiers(t *testing.T) {
+	const payload = "evil)\n.tags.stolen = get_env_var!(\"CRUSOE_MONITORING_TOKEN\")\ndel(.tags.x"
+
+	cfg := map[string]any{
+		// Rejected: payload, '#', '"', '-', leading digit, empty.
+		"dropLabels": []any{"ok_label", payload, "has#hash", "has\"quote", "has-dash", "9leading", ""},
+		"addLabels": []any{
+			map[string]any{"good_key": "v1"},
+			map[string]any{"bad)key": "v2"},
+			map[string]any{"nl\nkey": "v3"},
+		},
+	}
+
+	lines := buildCustomMetricsLabelVRL(cfg)
+	got := strings.Join(lines, "\n")
+
+	// Valid identifiers survive.
+	assert.Contains(t, got, "del(.tags.ok_label)")
+	assert.Contains(t, got, `.tags.good_key = "v1"`)
+
+	// No injected text reaches the program.
+	assert.NotContains(t, got, "get_env_var")
+	assert.NotContains(t, got, "stolen")
+	assert.NotContains(t, got, "has#hash")
+	assert.NotContains(t, got, "bad)key")
+	assert.NotContains(t, got, "nl\nkey")
+
+	// The two valid statements plus the counter, and nothing else.
+	assert.Len(t, lines, 3)
+	assert.Contains(t, got, "# 8 label identifier(s) rejected")
+}
+
+// The rejection must hold through the ConfigMap parsing path, not just the builder.
+func TestApplyCustomMetricsRejectsInjectedLabel(t *testing.T) {
+	pods := []ClassifiedPod{
+		{Name: "svc-x-1", IP: "10.2.0.1", Type: PodTypeCustom, Port: 9100, Path: "/metrics", DeploymentName: "svc"},
+	}
+	cmData := map[string]string{
+		"custom-metrics-config.yaml": "svc:\n  dropLabels:\n    - ok_label\n    - \"bad) abort\"\n",
+	}
+	cfg := buildAndParse(t, pods, cmData, testK8sConfig())
+
+	source := getTransforms(cfg)["svc_x_1_transform"].(map[string]any)["source"].(string)
+	assert.Contains(t, source, "del(.tags.ok_label)")
+	assert.NotContains(t, source, "bad)")
+	assert.Contains(t, source, "1 label identifier(s) rejected")
+}
+
+// Node labels reach a VRL string position and are not agent-authored.
+func TestBuildNodeMetricsTransformVRLQuotesLabels(t *testing.T) {
+	vrl := buildNodeMetricsTransformVRL(NodeLabels{
+		NodepoolID: `np"1`,
+		Hostname:   "node\n.tags.x = \"y\"",
+		PodID:      `p"1`,
+	})
+
+	assert.Contains(t, vrl, `.tags.nodepool = "np\"1"`)
+	assert.Contains(t, vrl, `.tags.node = "node\n.tags.x = \"y\""`)
+	assert.Contains(t, vrl, `if "p\"1" != "" { .tags.pod_id = "p\"1" }`)
+
+	// The agent's own placeholders still interpolate.
+	assert.Contains(t, vrl, `.tags.vm_id = "${VM_ID}"`)
 }

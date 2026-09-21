@@ -15,10 +15,11 @@ func buildGenerator(
 	deps command.Deps, k8sRT *k8sRuntime, logger *slog.Logger,
 ) (command.Generator, []command.ReportBugOption) {
 	socket := getEnvOrDefault(bugreport.EnvSocketPath, bugreport.DefaultSocketPath)
+	reportDir := getEnvOrDefault(bugreport.EnvReportDir, bugreport.DefaultReportDir)
 
 	switch deps.InstallType {
 	case pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD, pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER:
-		return bugreport.NewRunnerClient(socket), nil
+		return bugreport.NewRunnerClient(socket, reportDir), nil
 	case pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES:
 		if k8sRT == nil {
 			logger.Error("k8s runtime unavailable, report.bug disabled")

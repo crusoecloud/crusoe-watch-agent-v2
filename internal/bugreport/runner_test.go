@@ -66,11 +66,14 @@ func serveRunner(t *testing.T, gen reportGenerator) string {
 	return socket
 }
 
-// startRunner serves gen and returns a client generator wired to its socket.
+// startRunner serves gen and returns a client wired to its socket, whose directory
+// doubles as the report directory as it does in production.
 func startRunner(t *testing.T, gen reportGenerator) *RunnerClient {
 	t.Helper()
 
-	return NewRunnerClient(serveRunner(t, gen))
+	socket := serveRunner(t, gen)
+
+	return NewRunnerClient(socket, filepath.Dir(socket))
 }
 
 // socketClient builds a raw HTTP client dialing socket, for tests that send
@@ -88,17 +91,33 @@ func socketClient(socket string) *http.Client {
 }
 
 func TestRunnerClient_RoundTrip(t *testing.T) {
-	gen := &fakeGen{path: "/etc/crusoe/bug-reports/report.log.gz"}
+	gen := &fakeGen{}
 	client := startRunner(t, gen)
+
+	// The runner writes into the shared report directory.
+	name := writeValidReport(t, client.reportDir)
+	gen.path = filepath.Join(client.reportDir, name)
 
 	path, err := client.Generate(context.Background(), vector.GPUNvidia, "evt-42")
 	require.NoError(t, err)
 
 	// The archive path round-trips, and the request reached the generator intact.
-	assert.Equal(t, "/etc/crusoe/bug-reports/report.log.gz", path)
+	want, err := filepath.EvalSymlinks(gen.path)
+	require.NoError(t, err)
+	assert.Equal(t, want, path)
 	assert.True(t, gen.called)
 	assert.Equal(t, vector.GPUNvidia, gen.gotGPU)
 	assert.Equal(t, "evt-42", gen.gotEvt)
+}
+
+// A path outside the report directory is refused.
+func TestRunnerClient_RejectsPathOutsideReportDir(t *testing.T) {
+	gen := &fakeGen{path: "/etc/shadow"}
+	client := startRunner(t, gen)
+
+	_, err := client.Generate(context.Background(), vector.GPUNvidia, "evt-42")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrBadReportPath)
 }
 
 func TestRunnerServer_RejectsNonPOST(t *testing.T) {
@@ -149,7 +168,7 @@ func TestRunnerClient_Health(t *testing.T) {
 
 func TestRunnerClient_Health_Unreachable(t *testing.T) {
 	// Point at a socket that was never bound so the dial fails.
-	client := NewRunnerClient(filepath.Join(t.TempDir(), "absent.sock"))
+	client := NewRunnerClient(filepath.Join(t.TempDir(), "absent.sock"), t.TempDir())
 
 	_, err := client.Health(context.Background())
 	require.Error(t, err)

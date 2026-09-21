@@ -200,8 +200,9 @@ func newHealthCollector(ident *identity.Identity, gpu vector.GPUType, logger *sl
 	}
 
 	socket := getEnvOrDefault(bugreport.EnvSocketPath, bugreport.DefaultSocketPath)
+	reportDir := getEnvOrDefault(bugreport.EnvReportDir, bugreport.DefaultReportDir)
 
-	return health.NewCollector(logger, ident.InstallType, bugreport.NewRunnerClient(socket))
+	return health.NewCollector(logger, ident.InstallType, bugreport.NewRunnerClient(socket, reportDir))
 }
 
 // reportRunnerExpected reports whether the report-runner bug-report collector is deployed on this host.
