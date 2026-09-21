@@ -2,8 +2,8 @@ services:
   crusoe-metrics-exporter:
     image: ${IMAGE_REGISTRY_GHCR:-ghcr.io}/crusoecloud/crusoe-metrics-exporter/crusoe-metrics-exporter:${CME_VERSION}
     container_name: crusoe-metrics-exporter
-    pid: "host"
     hostname: crusoe-metrics-exporter
+    read_only: true
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
@@ -16,6 +16,7 @@ services:
       - MOUNTSTATS_PATH=/host/proc/1/mountstats
       - OBJSTORE_ENDPOINT_FQDN=${OBJSTORE_ENDPOINT_FQDN:-}
     ports:
-      - "${CRUSOE_METRICS_EXPORTER_PORT:-9500}:${CRUSOE_METRICS_EXPORTER_PORT:-9500}"
-    privileged: true
+      # Loopback only: Vector scrapes this from the same host.
+      - "127.0.0.1:${CRUSOE_METRICS_EXPORTER_PORT:-9500}:${CRUSOE_METRICS_EXPORTER_PORT:-9500}"
+    privileged: true  # Needed for statfs via /host/proc/1/root (AppArmor ptrace).
     restart: always

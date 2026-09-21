@@ -29,7 +29,10 @@ spec:
         app.kubernetes.io/name: crusoe-metrics-exporter
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
-      hostPID: true
+      # No hostPID: every /proc read goes through the /host/proc mount below.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       serviceAccountName: crusoe-metrics-exporter
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -76,14 +79,14 @@ spec:
               mountPath: /host/proc
               readOnly: true
             # Kernel log stream for the soft-lockup collector (CME >= 0.2.7).
-            # CAP_SYSLOG (needed to read /dev/kmsg) is already granted by privileged: true below.
             - name: dev-kmsg
               mountPath: /dev/kmsg
               readOnly: true
           resources:
             {{- toYaml .Values.resources.cme | nindent 12 }}
           securityContext:
-            privileged: true
+            privileged: true  # Needed for /dev/kmsg (device cgroup) and statfs via /host/proc/1/root (AppArmor ptrace).
+            readOnlyRootFilesystem: true
       volumes:
         - name: proc
           hostPath:

@@ -1,6 +1,5 @@
 # Headless Service over the DaemonSet pods: cwa-updater reads its EndpointSlices
-# to poll per-pod health after a rolling update. The pods are hostNetwork, so
-# these addresses are node IPs.
+# to poll per-pod health after a rolling update.
 apiVersion: v1
 kind: Service
 metadata:

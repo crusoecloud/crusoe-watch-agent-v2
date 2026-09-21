@@ -19,12 +19,11 @@ spec:
     spec:
       serviceAccountName: {{ include "cwa.serviceAccountName" . }}
       automountServiceAccountToken: true
-      hostNetwork: true
-      # Required with hostNetwork: the node's resolver can't resolve
-      # cwa-updater.<ns>.svc.cluster.local.
-      dnsPolicy: ClusterFirstWithHostNet
       # 35 - 5s preStop = 30s SIGTERM grace; must exceed the heartbeat shutdown budget (heartbeat.go).
       terminationGracePeriodSeconds: 35
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -70,11 +69,10 @@ spec:
               mountPath: /etc/vector
             - name: vector-data
               mountPath: /vector-data-dir
-            - name: var-log
-              mountPath: /var/log
-              readOnly: true
-            - name: var-lib
-              mountPath: /var/lib
+            # Only the agent's own container logs; the kubernetes_logs sources glob
+            # /var/log/pods/*/{cwa-manager,report-runner,cwa-updater}/*.log.
+            - name: var-log-pods
+              mountPath: /var/log/pods
               readOnly: true
             - name: host-proc
               mountPath: /host/proc
@@ -87,8 +85,15 @@ spec:
               readOnly: true
           resources:
             {{- toYaml .Values.resources.vector | nindent 12 }}
+          # Vector only reads host logs and the journal, so the one privilege it
+          # keeps is the read-permission bypass those root-owned files need.
           securityContext:
-            privileged: true
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add: [DAC_READ_SEARCH]
 
         # --- cwa-manager ---
         - name: cwa-manager
@@ -215,6 +220,13 @@ spec:
               mountPath: {{ .Values.bugReport.socketMountPath | default "/etc/crusoe/bug-reports" }}
           resources:
             {{- toYaml .Values.resources.cwaManager | nindent 12 }}
+          # Talks to the API server and the report-runner socket; needs no capabilities.
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
 
       volumes:
         - name: crusoe-shared
@@ -223,14 +235,10 @@ spec:
           hostPath:
             path: /var/lib/vector
             type: DirectoryOrCreate
-        - name: var-log
+        - name: var-log-pods
           hostPath:
-            path: /var/log
-            type: Directory
-        - name: var-lib
-          hostPath:
-            path: /var/lib
-            type: Directory
+            path: /var/log/pods
+            type: DirectoryOrCreate
         - name: host-proc
           hostPath:
             path: /proc

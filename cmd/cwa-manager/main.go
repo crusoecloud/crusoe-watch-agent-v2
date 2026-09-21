@@ -176,7 +176,7 @@ func wireCommands(
 
 // startHealthServer serves cwa-manager's own /health in the background.
 func startHealthServer(ctx context.Context, installType pb.CwaInstallType, loop *heartbeat.Loop, logger *slog.Logger) {
-	// K8s agent pods are hostNetwork, so kubelet and cwa-updater reach this on the node IP.
+	// On K8s, bind all interfaces so kubelet and cwa-updater can reach the pod.
 	host := "127.0.0.1"
 	if installType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
 		host = ""

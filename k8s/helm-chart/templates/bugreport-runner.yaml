@@ -26,8 +26,11 @@ spec:
     spec:
       # The runner talks only to cwa-manager over the socket; it needs no API access.
       automountServiceAccountToken: false
-      # nvidia-bug-report.sh / rocm_techsupport.sh inspect host processes and driver state.
-      hostPID: true
+      # No hostPID: neither nvidia-bug-report.sh nor rocm_techsupport.sh needs the
+      # host process table, the docker-mode deployment has always run without it.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       {{- with $cfg.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
