@@ -147,6 +147,8 @@ spec:
               value: {{ .Values.ksm.enabled | quote }}
             - name: KSM_PORT
               value: {{ .Values.ksm.port | quote }}
+            - name: KSM_TELEMETRY_PORT
+              value: {{ .Values.ksm.telemetryPort | quote }}
             - name: KSM_SCRAPE_INTERVAL
               value: {{ .Values.ksm.scrapeInterval | quote }}
             - name: SLURM_ENABLED

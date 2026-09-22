@@ -188,6 +188,23 @@ const vrlEnrichLogsK8s = vrlEnrichLogsPrefix +
 // Metric transforms (K8s mode)
 // ---------------------------------------------------------------------------
 
+// Every CMK-emitted series carries service; job is the vmagent scrape job name,
+// which only the pod-scraped pipelines have.
+const (
+	serviceLabelCMK = "CMK"
+
+	jobDCGM       = "nvidia-dcgm-exporter"
+	jobAMD        = "amd-device-metrics-exporter"
+	jobScrapedPod = "kubernetes-pods"
+)
+
+// vrlSetScrapeTag sets a scrape-owned tag, moving any value the target already
+// carries to exported_<tag> the way a Prometheus scrape would.
+func vrlSetScrapeTag(tag, value string) string {
+	return fmt.Sprintf(`if exists(.tags.%[1]s) { .tags.exported_%[1]s = del(.tags.%[1]s) }
+.tags.%[1]s = %[2]q`, tag, value)
+}
+
 // vrlAddInternalLabelsK8s tags filtered internal metrics with cluster identity and version.
 // Differs from VM mode: adds cluster_id for cluster identification. install_type is
 // "kubernetes" here, set explicitly on the Vector container in the daemonset.
@@ -197,7 +214,14 @@ const vrlAddInternalLabelsK8s = `
 .tags.crusoe_resource = "vm"
 .tags.chart_version = "${AGENT_VERSION}"
 .tags.install_type = "${INSTALL_TYPE:-unspecified}"
+.tags.service = "CMK"
 `
+
+// vrlTagJob builds the standalone remap that stamps a scrape job name onto a
+// pipeline whose source cannot set it.
+func vrlTagJob(job string) string {
+	return fmt.Sprintf(".tags.job = %q\n", job)
+}
 
 // vrlEnrichKSM tags kube-state-metrics with cluster identity.
 const vrlEnrichKSM = `
@@ -205,6 +229,19 @@ const vrlEnrichKSM = `
 .tags.project_id = "${CRUSOE_PROJECT_ID}"
 .tags.crusoe_resource = "cmk"
 .tags.metrics_source = "kube-state-metrics"
+.tags.service = "CMK"
+.tags.job = "kube-state-metrics"
+`
+
+// vrlEnrichKSMTelemetry tags KSM's own telemetry port, which reports on the
+// exporter rather than on cluster objects and so gets its own job.
+const vrlEnrichKSMTelemetry = `
+.tags.cluster_id = "${CRUSOE_CLUSTER_ID}"
+.tags.project_id = "${CRUSOE_PROJECT_ID}"
+.tags.crusoe_resource = "cmk"
+.tags.metrics_source = "kube-state-metrics"
+.tags.service = "CMK"
+.tags.job = "kube-state-metrics-telemetry"
 `
 
 // vrlEnrichSlurm tags slurm metrics with cluster identity.
@@ -213,6 +250,7 @@ const vrlEnrichSlurm = `
 .tags.project_id = "${CRUSOE_PROJECT_ID}"
 .tags.crusoe_resource = "cmk"
 .tags.metrics_source = "slurm-metrics"
+.tags.service = "CMK"
 `
 
 // vrlAmdAllowlistFilter is a VRL condition that keeps only approved AMD GPU metrics.
@@ -260,6 +298,7 @@ func buildNodeMetricsTransformVRL(labels NodeLabels) string {
 
 	vrl += `.tags.crusoe_resource = "vm"` + "\n"
 	vrl += `.tags.metrics_source = "node-metrics"` + "\n"
+	vrl += `.tags.service = "CMK"` + "\n"
 
 	return vrl
 }
@@ -270,6 +309,7 @@ const vrlEnrichCME = `.tags.cluster_id = "${CRUSOE_CLUSTER_ID}"
 .tags.vm_id = "${VM_ID}"
 .tags.crusoe_resource = "vm_custom_infra"
 .tags.metrics_source = "crusoe-metrics-exporter"
+.tags.service = "CMK"
 `
 
 // buildCustomMetricsFilterVRL generates VRL lines that apply allowlist or droplist filtering.
@@ -347,6 +387,8 @@ func buildCustomMetricsEnrichVRL(pod ClassifiedPod, labels NodeLabels) []string 
 			fmt.Sprintf(".tags.app_id = %q", pod.AppID),
 			fmt.Sprintf(".tags.pod_ip = %q", pod.IP),
 			fmt.Sprintf(".tags.pod_name = %q", pod.Name),
+			vrlSetScrapeTag("service", serviceLabelCMK),
+			vrlSetScrapeTag("job", jobScrapedPod),
 		}
 	}
 
@@ -364,6 +406,8 @@ func buildCustomMetricsEnrichVRL(pod ClassifiedPod, labels NodeLabels) []string 
 		`.tags.metrics_source = "custom-metrics"`,
 		fmt.Sprintf(".tags.pod_ip = %q", pod.IP),
 		fmt.Sprintf(".tags.pod_name = %q", pod.Name),
+		vrlSetScrapeTag("service", serviceLabelCMK),
+		vrlSetScrapeTag("job", jobScrapedPod),
 	)
 
 	return lines

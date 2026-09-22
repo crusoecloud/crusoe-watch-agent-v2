@@ -33,6 +33,12 @@ func testK8sConfig() K8sConfig {
 			Paths:          []string{"/metrics"},
 			ScrapeInterval: 60,
 		},
+		KSMTelemetry: ExporterConfig{
+			Enabled:        true,
+			Port:           8081,
+			Paths:          []string{"/metrics"},
+			ScrapeInterval: 60,
+		},
 		Slurm: ExporterConfig{
 			Enabled:        false,
 			Port:           6817,
@@ -111,11 +117,16 @@ func TestApplyDCGM(t *testing.T) {
 	assert.Len(t, eps, 1)
 	assert.Equal(t, "http://10.0.0.1:9400/metrics", eps[0])
 
-	// Verify DCGM wired into enrich_node_metrics inputs.
+	// DCGM reaches enrich_node_metrics through its job tagger, not directly.
 	transforms := getTransforms(cfg)
+	jobTransform := transforms["tag_dcgm_job"].(map[string]any)
+	assert.Equal(t, []any{"dcgm_exporter_scrape"}, jobTransform["inputs"])
+	assert.Contains(t, jobTransform["source"], `.tags.job = "nvidia-dcgm-exporter"`)
+
 	nodeTransform := transforms["enrich_node_metrics"].(map[string]any)
 	inputs := nodeTransform["inputs"].([]any)
-	assert.Contains(t, inputs, "dcgm_exporter_scrape")
+	assert.Contains(t, inputs, "tag_dcgm_job")
+	assert.NotContains(t, inputs, "dcgm_exporter_scrape")
 }
 
 func TestApplyDCGMDisabled(t *testing.T) {
@@ -163,10 +174,15 @@ func TestApplyAMD(t *testing.T) {
 	filter := transforms["amd_allowed_filter"].(map[string]any)
 	assert.Equal(t, "filter", filter["type"])
 
-	// AMD filter wired into enrich_node_metrics.
+	// The filter feeds the job tagger, which is what enrich_node_metrics reads.
+	jobTransform := transforms["tag_amd_job"].(map[string]any)
+	assert.Equal(t, []any{"amd_allowed_filter"}, jobTransform["inputs"])
+	assert.Contains(t, jobTransform["source"], `.tags.job = "amd-device-metrics-exporter"`)
+
 	nodeTransform := transforms["enrich_node_metrics"].(map[string]any)
 	inputs := nodeTransform["inputs"].([]any)
-	assert.Contains(t, inputs, "amd_allowed_filter")
+	assert.Contains(t, inputs, "tag_amd_job")
+	assert.NotContains(t, inputs, "amd_allowed_filter")
 }
 
 // ---------------------------------------------------------------------------
@@ -186,11 +202,42 @@ func TestApplyKSM(t *testing.T) {
 	assert.Equal(t, "remap", xform["type"])
 	assert.Contains(t, xform["source"], "kube-state-metrics")
 
+	assert.Contains(t, xform["source"], `.tags.service = "CMK"`)
+	assert.Contains(t, xform["source"], `.tags.job = "kube-state-metrics"`)
+
 	sinks := getSinks(cfg)
 	assert.Contains(t, sinks, "kube_state_metrics_sink")
 	sink := sinks["kube_state_metrics_sink"].(map[string]any)
 	assert.Equal(t, "prometheus_remote_write", sink["type"])
 	assert.Contains(t, sink["endpoint"].(string), "/cluster")
+}
+
+// KSM's telemetry port rides the same pod as the resource metrics but scrapes a
+// second port and lands under its own job.
+func TestApplyKSMTelemetry(t *testing.T) {
+	pods := []ClassifiedPod{{Name: "ksm-1", IP: "10.0.0.3", Type: PodTypeKSM}}
+	cfg := buildAndParse(t, pods, nil, testK8sConfig())
+
+	src := getSources(cfg)["kube_state_metrics_telemetry_scrape"].(map[string]any)
+	assert.Equal(t, []any{"http://10.0.0.3:8081/metrics"}, src["endpoints"])
+
+	xform := getTransforms(cfg)["enrich_kube_state_metrics_telemetry"].(map[string]any)
+	assert.Contains(t, xform["source"], `.tags.job = "kube-state-metrics-telemetry"`)
+	assert.Contains(t, xform["source"], `.tags.service = "CMK"`)
+
+	sink := getSinks(cfg)["kube_state_metrics_telemetry_sink"].(map[string]any)
+	assert.Equal(t, []any{"enrich_kube_state_metrics_telemetry"}, sink["inputs"])
+	assert.Contains(t, sink["endpoint"].(string), "/cluster")
+}
+
+func TestApplyKSMTelemetryDisabled(t *testing.T) {
+	pods := []ClassifiedPod{{Name: "ksm-1", IP: "10.0.0.3", Type: PodTypeKSM}}
+	k := testK8sConfig()
+	k.KSMTelemetry.Enabled = false
+	cfg := buildAndParse(t, pods, nil, k)
+
+	assert.NotContains(t, getSources(cfg), "kube_state_metrics_telemetry_scrape")
+	assert.Contains(t, getSources(cfg), "kube_state_metrics_scrape")
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +546,56 @@ func TestNodeMetricsTransformHasNodeLabels(t *testing.T) {
 	assert.Contains(t, source, "test-instance-type")
 	assert.Contains(t, source, "test-node")
 	assert.Contains(t, source, "node-metrics")
+}
+
+// ---------------------------------------------------------------------------
+// CMK label parity (service, job)
+// ---------------------------------------------------------------------------
+
+// Everything CMK emits carries service="CMK"; job is the vmagent scrape job
+// name, so only pipelines vmagent would scrape itself get one.
+func TestCMKServiceLabelOnEveryPipeline(t *testing.T) {
+	pods := []ClassifiedPod{
+		{Name: "ksm-1", IP: "10.0.0.3", Type: PodTypeKSM},
+		{Name: "slurm-1", IP: "10.0.0.4", Type: PodTypeSlurm},
+		{Name: "cme-1", IP: "10.0.0.5", Type: PodTypeCME},
+	}
+	k := testK8sConfig()
+	k.Slurm.Enabled = true
+	transforms := getTransforms(buildAndParse(t, pods, nil, k))
+
+	for _, name := range []string{
+		"enrich_node_metrics",
+		"add_internal_labels",
+		"enrich_kube_state_metrics",
+		"enrich_slurm_metrics",
+		"enrich_crusoe_metrics_exporter",
+	} {
+		assert.Contains(t, transforms[name].(map[string]any)["source"], `.tags.service = "CMK"`, name)
+	}
+
+	// KSM is the only cluster pipeline vmagent also scrapes.
+	for _, name := range []string{"enrich_node_metrics", "enrich_slurm_metrics", "enrich_crusoe_metrics_exporter"} {
+		assert.NotContains(t, transforms[name].(map[string]any)["source"], ".tags.job", name)
+	}
+}
+
+// Custom metrics come from user pods, which may already carry job/service, so
+// the scrape-owned value wins and the pod's own moves to exported_<tag>.
+func TestCustomMetricsFollowScrapeLabelCollisionRules(t *testing.T) {
+	pods := []ClassifiedPod{
+		{Name: "svc-x-1", IP: "10.2.0.1", Type: PodTypeCustom, Port: 9100, Path: "/metrics", DeploymentName: "svc"},
+		{Name: "managed-1", IP: "10.2.0.2", Type: PodTypeCustom, Port: 9100, Path: "/metrics", AppID: "my-app"},
+	}
+	transforms := getTransforms(buildAndParse(t, pods, nil, testK8sConfig()))
+
+	for _, name := range []string{"svc_x_1_transform", "managed_1_transform"} {
+		source := transforms[name].(map[string]any)["source"].(string)
+		assert.Contains(t, source, `if exists(.tags.job) { .tags.exported_job = del(.tags.job) }`, name)
+		assert.Contains(t, source, `.tags.job = "kubernetes-pods"`, name)
+		assert.Contains(t, source, `if exists(.tags.service) { .tags.exported_service = del(.tags.service) }`, name)
+		assert.Contains(t, source, `.tags.service = "CMK"`, name)
+	}
 }
 
 // ---------------------------------------------------------------------------

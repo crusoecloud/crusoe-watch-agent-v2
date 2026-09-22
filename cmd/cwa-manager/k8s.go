@@ -32,6 +32,7 @@ const (
 	defaultAMDPort             = 5000
 	defaultAMDScrape           = 60
 	defaultKSMPort             = 8080
+	defaultKSMTelemetryPort    = 8081
 	defaultKSMScrape           = 60
 	defaultSlurmPort           = 6817
 	defaultSlurmScrape         = 60
@@ -125,6 +126,16 @@ func (r *k8sRuntime) buildK8sGenerator() command.Generator {
 }
 
 func buildK8sConfig() vector.K8sConfig {
+	ksm := vector.ExporterConfig{
+		Enabled:        getEnvBool("KSM_ENABLED", true),
+		Port:           getEnvInt("KSM_PORT", defaultKSMPort),
+		Paths:          []string{"/metrics"},
+		ScrapeInterval: getEnvInt("KSM_SCRAPE_INTERVAL", defaultKSMScrape),
+	}
+	// Same pod, same cadence, second port.
+	ksmTelemetry := ksm
+	ksmTelemetry.Port = getEnvInt("KSM_TELEMETRY_PORT", defaultKSMTelemetryPort)
+
 	return vector.K8sConfig{
 		DCGM: vector.ExporterConfig{
 			Enabled:        getEnvBool("DCGM_ENABLED", true),
@@ -138,12 +149,8 @@ func buildK8sConfig() vector.K8sConfig {
 			Paths:          []string{"/metrics"},
 			ScrapeInterval: getEnvInt("AMD_SCRAPE_INTERVAL", defaultAMDScrape),
 		},
-		KSM: vector.ExporterConfig{
-			Enabled:        getEnvBool("KSM_ENABLED", true),
-			Port:           getEnvInt("KSM_PORT", defaultKSMPort),
-			Paths:          []string{"/metrics"},
-			ScrapeInterval: getEnvInt("KSM_SCRAPE_INTERVAL", defaultKSMScrape),
-		},
+		KSM:          ksm,
+		KSMTelemetry: ksmTelemetry,
 		Slurm: vector.ExporterConfig{
 			Enabled:        getEnvBool("SLURM_ENABLED", false),
 			Port:           getEnvInt("SLURM_PORT", defaultSlurmPort),

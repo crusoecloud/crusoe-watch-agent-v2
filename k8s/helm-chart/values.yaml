@@ -94,6 +94,7 @@ amd:
 ksm:
   enabled: true
   port: 8080
+  telemetryPort: 8081
   scrapeInterval: 60
 
 slurm:

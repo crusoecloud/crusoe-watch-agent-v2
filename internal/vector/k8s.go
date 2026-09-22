@@ -97,6 +97,10 @@ type K8sConfig struct {
 	Slurm ExporterConfig
 	CME   ExporterConfig
 
+	// KSMTelemetry scrapes kube-state-metrics' self-telemetry port. It is the
+	// same pod as KSM and mirrors its settings apart from the port.
+	KSMTelemetry ExporterConfig
+
 	CustomMetricsEnabled       bool
 	CustomMetricsDefaultPort   int
 	CustomMetricsDefaultPath   string
@@ -171,6 +175,10 @@ const (
 	amdSourceName            = "amd_exporter_scrape"
 	nodeMetricsTransformName = "enrich_node_metrics"
 	amdFilterTransformName   = "amd_allowed_filter"
+	// The GPU pipelines merge into enrich_node_metrics, which is shared with host
+	// metrics, so each stamps its own scrape job in a transform of its own first.
+	dcgmJobTransformName = "tag_dcgm_job"
+	amdJobTransformName  = "tag_amd_job"
 )
 
 var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9_]`)
@@ -303,6 +311,16 @@ func buildDynamicConfig(
 			cfg.clusterEndpoint(), "cri:cmk/${CRUSOE_CLUSTER_ID}", cfg.Proxy,
 		),
 	})
+	applyClusterExporter(sources, transforms, sinks, podsByType.ksmIP, clusterExporterSpec{
+		runtime:       cfg.KSMTelemetry,
+		sourceName:    "kube_state_metrics_telemetry_scrape",
+		transformName: "enrich_kube_state_metrics_telemetry",
+		sinkName:      "kube_state_metrics_telemetry_sink",
+		transformVRL:  vrlEnrichKSMTelemetry,
+		sinkConfig: buildPromRemoteWriteSink(
+			cfg.clusterEndpoint(), "cri:cmk/${CRUSOE_CLUSTER_ID}", cfg.Proxy,
+		),
+	})
 	applyClusterExporter(sources, transforms, sinks, podsByType.slurmIP, clusterExporterSpec{
 		runtime:       cfg.Slurm,
 		sourceName:    "slurm_metrics_scrape",
@@ -342,7 +360,8 @@ func applyDCGM(sources, transforms map[string]any, podIP string, cfg K8sConfig) 
 		"scrape_interval_secs": cfg.DCGM.ScrapeInterval,
 		"scrape_timeout_secs":  int(float64(cfg.DCGM.ScrapeInterval) * scrapeTimeoutPct),
 	}
-	wireIntoTransform(transforms, nodeMetricsTransformName, dcgmSourceName)
+	transforms[dcgmJobTransformName] = remapTransform([]string{dcgmSourceName}, vrlTagJob(jobDCGM))
+	wireIntoTransform(transforms, nodeMetricsTransformName, dcgmJobTransformName)
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +380,8 @@ func applyAMD(sources, transforms map[string]any, podIP string, cfg K8sConfig) {
 		"scrape_timeout_secs":  int(float64(cfg.AMD.ScrapeInterval) * scrapeTimeoutPct),
 	}
 	transforms[amdFilterTransformName] = filterTransform([]string{amdSourceName}, vrlAmdAllowlistFilter)
-	wireIntoTransform(transforms, nodeMetricsTransformName, amdFilterTransformName)
+	transforms[amdJobTransformName] = remapTransform([]string{amdFilterTransformName}, vrlTagJob(jobAMD))
+	wireIntoTransform(transforms, nodeMetricsTransformName, amdJobTransformName)
 }
 
 // ---------------------------------------------------------------------------

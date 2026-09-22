@@ -21,12 +21,13 @@ var (
 // Representative K8s exporter ports and scrape intervals. Values mirror the
 // production defaults exercised by internal/vector's tests.
 const (
-	dcgmPort   = 9400
-	amdPort    = 5000
-	ksmPort    = 8080
-	cmePort    = 9500
-	slurmPort  = 6817
-	customPort = 9100
+	dcgmPort    = 9400
+	amdPort     = 5000
+	ksmPort     = 8080
+	ksmTelePort = 8081
+	cmePort     = 9500
+	slurmPort   = 6817
+	customPort  = 9100
 
 	fastScrapeSecs = 30
 	slowScrapeSecs = 60
@@ -101,9 +102,12 @@ func renderK8s() ([]byte, error) {
 	metrics := []string{"/metrics"}
 	slurmPaths := []string{"/metrics/nodes"}
 	cfg := vector.K8sConfig{
-		DCGM:  vector.ExporterConfig{Enabled: true, Port: dcgmPort, Paths: metrics, ScrapeInterval: fastScrapeSecs},
-		AMD:   vector.ExporterConfig{Enabled: true, Port: amdPort, Paths: metrics, ScrapeInterval: slowScrapeSecs},
-		KSM:   vector.ExporterConfig{Enabled: true, Port: ksmPort, Paths: metrics, ScrapeInterval: slowScrapeSecs},
+		DCGM: vector.ExporterConfig{Enabled: true, Port: dcgmPort, Paths: metrics, ScrapeInterval: fastScrapeSecs},
+		AMD:  vector.ExporterConfig{Enabled: true, Port: amdPort, Paths: metrics, ScrapeInterval: slowScrapeSecs},
+		KSM:  vector.ExporterConfig{Enabled: true, Port: ksmPort, Paths: metrics, ScrapeInterval: slowScrapeSecs},
+		KSMTelemetry: vector.ExporterConfig{
+			Enabled: true, Port: ksmTelePort, Paths: metrics, ScrapeInterval: slowScrapeSecs,
+		},
 		CME:   vector.ExporterConfig{Enabled: true, Port: cmePort, Paths: metrics, ScrapeInterval: slowScrapeSecs},
 		Slurm: vector.ExporterConfig{Enabled: true, Port: slurmPort, Paths: slurmPaths, ScrapeInterval: slowScrapeSecs},
 
