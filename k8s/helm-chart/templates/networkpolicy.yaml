@@ -1,0 +1,71 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- if $np.defaultDeny.ingress }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cwa.fullname" . }}-default-deny
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cwa.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    {{- if $np.defaultDeny.egress }}
+    - Egress
+    {{- end }}
+{{- end }}
+{{- if .Values.cme.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: crusoe-metrics-exporter
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: crusoe-metrics-exporter
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: crusoe-metrics-exporter
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  {{- with $np.nodeCIDRs }}
+  # Node-local scrape and kubelet probes.
+  ingress:
+    - from:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        - port: {{ $.Values.cme.port }}
+          protocol: TCP
+  {{- end }}
+{{- end }}
+{{- range $vendor := list "nvidia" "amd" }}
+{{- if (index $.Values.reportRunner $vendor).enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "cwa.fullname" $ }}-report-runner-{{ $vendor }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    {{- include "cwa.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: report-runner
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "cwa.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: report-runner-{{ $vendor }}
+  policyTypes:
+    - Ingress
+    - Egress
+{{- end }}
+{{- end }}
+{{- end }}

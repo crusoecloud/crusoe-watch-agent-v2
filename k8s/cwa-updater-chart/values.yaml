@@ -44,6 +44,14 @@ resources:
     cpu: 200m
     memory: 256Mi
 
+networkPolicy:
+  enabled: true
+  # TLS egress ports: chart pull, cosign, apiserver. Add the proxy's port when
+  # proxy.enabled and it isn't 443.
+  egressPorts:
+    - 443
+    - 6443
+
 # Proxy settings (optional) — applies to artifact pulls at upgrade time.
 proxy:
   enabled: false

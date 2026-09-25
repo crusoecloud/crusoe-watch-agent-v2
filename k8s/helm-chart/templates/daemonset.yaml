@@ -19,6 +19,8 @@ spec:
     spec:
       serviceAccountName: {{ include "cwa.serviceAccountName" . }}
       automountServiceAccountToken: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       # 35 - 5s preStop = 30s SIGTERM grace; must exceed the heartbeat shutdown budget (heartbeat.go).
       terminationGracePeriodSeconds: 35
       securityContext:

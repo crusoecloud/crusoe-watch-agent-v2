@@ -158,6 +158,18 @@ reportRunner:
       cpu: "1"
       memory: 2Gi
 
+# Covers crusoe-metrics-exporter and report-runner; see
+# templates/networkpolicy.yaml.
+networkPolicy:
+  enabled: true
+  # Namespace-wide baseline.
+  defaultDeny:
+    ingress: true
+    egress: false
+  # Scrape and kubelet probe sources for crusoe-metrics-exporter. Leave empty
+  # unless the CNI filters host traffic to local pods.
+  nodeCIDRs: []
+
 # Proxy settings (optional).
 proxy:
   enabled: false
