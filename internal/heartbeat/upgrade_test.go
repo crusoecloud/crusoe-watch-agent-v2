@@ -286,16 +286,6 @@ func TestNilReporterIsANoOp(t *testing.T) {
 	reporter.Sent(context.Background())
 }
 
-func TestCapabilitiesAdvertiseUpgradeOnlyWhereTheUpdaterRuns(t *testing.T) {
-	t.Parallel()
-
-	assert.Contains(t, capabilities(pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES), "auto_upgrade")
-	// No cwa-updater is deployed on VM targets yet, so claiming the capability
-	// would invite an upgrade nothing can carry out.
-	assert.NotContains(t, capabilities(pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD), "auto_upgrade")
-	assert.NotContains(t, capabilities(pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER), "auto_upgrade")
-}
-
 func TestReporterSkipsCwaUpdaterOnTheShutdownFlush(t *testing.T) {
 	t.Parallel()
 

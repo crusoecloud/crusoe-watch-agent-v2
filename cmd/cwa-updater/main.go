@@ -55,6 +55,10 @@ const (
 	defaultAgentHealthSvc   = "crusoe-watch-agent"
 	defaultAgentHealthPort  = 8787
 
+	// Where cwa-manager answers on a VM host: in native mode it and cwa-updater
+	// are both plain processes sharing the host network.
+	agentHealthHost = "localhost"
+
 	// maxRequestBytes caps the handoff body; a handoff is a few hundred bytes.
 	maxRequestBytes = 16 << 10
 )
@@ -66,9 +70,6 @@ var errMissingNamespace = errors.New("POD_NAMESPACE is not set")
 // errUnknownInstallMode is fatal for the same reason: an updater that cannot
 // tell where its state lives would report idle over an upgrade left in flight.
 var errUnknownInstallMode = errors.New("cannot determine the install mode")
-
-// errNoVMExecutor is what a VM upgrade fails with until the bundle executor lands.
-var errNoVMExecutor = errors.New("upgrade execution is not implemented on VM targets yet")
 
 // installMode is where cwa-updater is running, which decides how it persists
 // state and how it executes an upgrade.
@@ -192,25 +193,27 @@ func buildVMService(logger *slog.Logger, mode installMode) *upgrade.Service {
 	return upgrade.New(upgrade.Config{
 		Store:      upgrade.NewFileStore(vmStatePath),
 		Counter:    upgrade.SingleAgentCounter{},
-		Executor:   vmExecutor{},
+		Executor:   buildVMExecutor(logger, mode),
 		Logger:     logger,
 		AckTimeout: ackTimeout,
 	})
 }
 
-// vmExecutor stands in until the bundle executor lands, so a VM cwa-updater can
-// accept, persist, recover and report a handoff before it can act on one.
-type vmExecutor struct{}
+// buildVMExecutor wires the executor both VM modes share: the installer on the
+// host owns the upgrade, and Docker only changes what it does once it runs.
+func buildVMExecutor(logger *slog.Logger, mode installMode) upgrade.Executor {
+	healthPort := portFromEnv(logger, "AGENT_HEALTH_PORT", defaultAgentHealthPort)
+	rollbackWindow := minutesFromEnv(logger, "UPGRADE_ROLLBACK_WINDOW_MIN")
 
-// Upgrade always fails; nothing on the host is touched.
-func (vmExecutor) Upgrade(context.Context, *upgrade.State) error {
-	return errNoVMExecutor
-}
+	logger.Info("upgrade executor wired", "mode", mode,
+		"health_port", healthPort, "rollback_window", rollbackWindow)
 
-// Rollback succeeds because Upgrade installed nothing, so the host is already on
-// rollback_version. The result the control plane sees is rolled_back, and its reason names this executor.
-func (vmExecutor) Rollback(context.Context, *upgrade.State) error {
-	return nil
+	return upgrade.NewScriptExecutor(upgrade.ScriptConfig{
+		Runner:         upgrade.NewScriptRunner(logger),
+		Verifier:       upgrade.NewHostVerifier(logger, agentHealthHost, healthPort),
+		Logger:         logger,
+		RollbackWindow: rollbackWindow,
+	})
 }
 
 // buildKubernetesService wires the ConfigMap-backed upgrade state.

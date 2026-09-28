@@ -82,7 +82,7 @@ generate_notes() {
 
 # Lay out one install mode's bundle tree. The layout mirrors vm/ because the
 # installer extracts it and resolves every asset from there.
-#   $1 docker | native   $2 arch (native only)   $3 destination directory
+#   $1 docker | native   $2 arch   $3 destination directory
 stage_bundle() {
     local mode="$1" arch="$2" dir="$3"
 
@@ -90,17 +90,19 @@ stage_bundle() {
     cp "${RENDER_OUT}/config/"*           "${dir}/config/"
     cp "${RENDER_OUT}/systemctl/"*.service "${dir}/systemctl/"
 
+    # cwa-updater is a host binary in both modes. Included so a fresh install
+    # has it; an upgrade skips it (CWA_UPDATER_SKIP).
+    local binaries=(cwa-updater)
+
     if [[ "$mode" == "docker" ]]; then
         mkdir -p "${dir}/docker"
         cp "${RENDER_OUT}/docker/"*.yaml "${dir}/docker/"
-
-        return
+    else
+        binaries+=(cwa-manager report-runner)
     fi
 
-    # cwa-updater rides along so a fresh install has it. An upgrade skips
-    # installing it (CWA_UPDATER_SKIP): it is the process driving that install.
     local cmd
-    for cmd in cwa-manager cwa-updater report-runner; do
+    for cmd in "${binaries[@]}"; do
         install -m 0755 "${RENDER_OUT}/${cmd}-linux-${arch}" "${dir}/${cmd}"
     done
 }
@@ -109,7 +111,7 @@ publish_vm() {
     local assets_dir="${RENDER_OUT}/assets" src_dir="${RENDER_OUT}/bundle-src"
     mkdir -p "$assets_dir" "$src_dir"
 
-    # Native-mode binaries for both host architectures. NVIDIA hosts are amd64 except GB200, which are arm64.
+    # Host binaries for both architectures. NVIDIA hosts are amd64 except GB200, which are arm64.
     local ldflags="-s -w -X 'gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/version.Version=${NEW_VERSION}'"
     local arch cmd
     for arch in amd64 arm64; do
@@ -122,14 +124,15 @@ publish_vm() {
         done
     done
 
-    # One tarball per install mode. cwa-updater's chart is a separate release mode;
-    # only its VM binary rides along here.
+    # One tarball per install mode and architecture. cwa-updater's chart is a
+    # separate release mode; only its VM binary is published here.
     log "Building release bundles"
-    stage_bundle docker "" "${src_dir}/docker"
-    tar -czf "${assets_dir}/cwa-docker.tar.gz" -C "${src_dir}/docker" .
-    for arch in amd64 arm64; do
-        stage_bundle native "$arch" "${src_dir}/native-${arch}"
-        tar -czf "${assets_dir}/cwa-native-${arch}.tar.gz" -C "${src_dir}/native-${arch}" .
+    local mode
+    for mode in docker native; do
+        for arch in amd64 arm64; do
+            stage_bundle "$mode" "$arch" "${src_dir}/${mode}-${arch}"
+            tar -czf "${assets_dir}/cwa-${mode}-${arch}.tar.gz" -C "${src_dir}/${mode}-${arch}" .
+        done
     done
 
     cp "${RENDER_OUT}/crusoe_watch_agent.sh" "${RENDER_OUT}/VERSION" "$assets_dir"

@@ -33,9 +33,9 @@ type Updater interface {
 }
 
 // UpgradeExecute is the upgrade.execute handler. A SUCCEEDED result means the
-// handoff is durable, not that the agent is upgraded: cwa-updater collects every
-// agent's handoff, then upgrades them at once, replacing the pod running this
-// command. The outcome arrives as last_upgrade_result on a later heartbeat.
+// handoff is durable, not that the agent is upgraded: cwa-updater owns execution
+// from that point and replaces the process running this command. The outcome
+// arrives as last_upgrade_result on a later heartbeat.
 type UpgradeExecute struct {
 	client    Updater
 	agentID   func() string

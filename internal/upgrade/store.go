@@ -36,5 +36,7 @@ type Executor interface {
 	// Rollback restores state.RollbackVersion. It is called both when Upgrade
 	// fails and when a restart finds an upgrade interrupted mid-execution, so it
 	// must tolerate a target version that was never deployed.
+	// It skips the health check Upgrade runs: the result is terminal either way,
+	// and an agent still unhealthy surfaces through its heartbeats.
 	Rollback(ctx context.Context, state *State) error
 }

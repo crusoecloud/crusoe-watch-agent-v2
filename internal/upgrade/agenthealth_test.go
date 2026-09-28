@@ -2,12 +2,12 @@ package upgrade
 
 import (
 	"context"
-	"io"
-	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +18,123 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 )
+
+// agentServer serves one agent's /health with the given body.
+func agentServer(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+// hostPort splits a test server's address so it can be polled, or published as
+// a Kubernetes endpoint.
+func hostPort(t *testing.T, srv *httptest.Server) (string, int) {
+	t.Helper()
+
+	parsed, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+
+	port, err := strconv.Atoi(parsed.Port())
+	require.NoError(t, err)
+
+	return parsed.Hostname(), port
+}
+
+// hostVerifier polls host:port, checking often enough that the tests do not wait
+// out the production interval.
+func hostVerifier(host string, port int) *HostVerifier {
+	verifier := NewHostVerifier(discardLogger(), host, port)
+	verifier.interval = time.Millisecond
+
+	return verifier
+}
+
+// closedPort is a port nothing is listening on, for the connection-refused case.
+func closedPort(t *testing.T) (string, int) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	host, rawPort, err := net.SplitHostPort(listener.Addr().String())
+	require.NoError(t, err)
+	require.NoError(t, listener.Close())
+
+	port, err := strconv.Atoi(rawPort)
+	require.NoError(t, err)
+
+	return host, port
+}
+
+// ---------------------------------------------------------------------------
+// VM
+// ---------------------------------------------------------------------------
+
+func TestHostVerifierPassesOnAHealthyAgent(t *testing.T) {
+	host, port := hostPort(t, agentServer(t, http.StatusOK, `{"status":"healthy"}`))
+
+	require.NoError(t, hostVerifier(host, port).Verify(context.Background()))
+}
+
+// A 200 alone is not enough: cwa-manager answers as soon as it is listening, and
+// an agent that has not reached the control plane cannot report the result.
+func TestHostVerifierWaitsOutAnUnhealthyAgent(t *testing.T) {
+	host, port := hostPort(t, agentServer(t, http.StatusOK, `{"status":"degraded"}`))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := hostVerifier(host, port).Verify(ctx)
+
+	require.ErrorIs(t, err, errAgentUnhealthy)
+	assert.Contains(t, err.Error(), "degraded", "the reason the agent was unhealthy was lost")
+}
+
+// The reported reason must name what kept the agent from coming back, not the
+// deadline that ended the wait.
+func TestHostVerifierReportsTheAgentFailureNotTheDeadline(t *testing.T) {
+	host, port := closedPort(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := hostVerifier(host, port).Verify(ctx)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "connect", "the connection failure was replaced by the deadline")
+}
+
+// An agent that comes back part way through the window still passes.
+func TestHostVerifierPassesOnceTheAgentRecovers(t *testing.T) {
+	var polls atomic.Int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if polls.Add(1) < 3 {
+			_, _ = w.Write([]byte(`{"status":"starting"}`))
+
+			return
+		}
+
+		_, _ = w.Write([]byte(`{"status":"healthy"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	host, port := hostPort(t, server)
+
+	require.NoError(t, hostVerifier(host, port).Verify(context.Background()))
+	assert.GreaterOrEqual(t, polls.Load(), int64(3))
+}
+
+// ---------------------------------------------------------------------------
+// Kubernetes
+// ---------------------------------------------------------------------------
 
 const testHealthService = "crusoe-watch-agent"
 
@@ -46,37 +163,10 @@ func agentEndpoints(ready, notReady []string) *discoveryv1.EndpointSlice {
 	}
 }
 
-// agentServer serves one agent's /health with the given body.
-func agentServer(t *testing.T, status int, body string) *httptest.Server {
-	t.Helper()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(body))
-	}))
-	t.Cleanup(srv.Close)
-
-	return srv
-}
-
-// hostPort splits a test server's address so it can be published as an endpoint.
-func hostPort(t *testing.T, srv *httptest.Server) (string, int) {
-	t.Helper()
-
-	parsed, err := url.Parse(srv.URL)
-	require.NoError(t, err)
-
-	port, err := strconv.Atoi(parsed.Port())
-	require.NoError(t, err)
-
-	return parsed.Hostname(), port
-}
-
 func newTestVerifier(port int, objects ...runtime.Object) *EndpointVerifier {
 	verifier := NewEndpointVerifier(
 		fake.NewSimpleClientset(objects...),
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		discardLogger(),
 		testNamespace, testHealthService, port,
 	)
 	// Keep the retry loop from dominating test runtime.

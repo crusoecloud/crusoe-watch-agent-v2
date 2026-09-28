@@ -132,7 +132,6 @@ render_vm() {
     substitute_file "$dst" \
         AGENT_VERSION                       "$agent_version" \
         CWA_MANAGER_VERSION                 "$CWA_MANAGER" \
-        CWA_UPDATER_VERSION                 "$CWA_UPDATER" \
         REPORT_RUNNER_VERSION               "$REPORT_RUNNER" \
         VECTOR_VERSION                      "$VECTOR" \
         CRUSOE_METRICS_EXPORTER_VERSION     "$CRUSOE_METRICS_EXPORTER" \

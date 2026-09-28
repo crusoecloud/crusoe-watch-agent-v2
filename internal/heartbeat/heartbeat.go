@@ -33,8 +33,8 @@ const (
 	heartbeatFlushGrace = 5 * time.Second
 )
 
-func capabilities(installType pb.CwaInstallType) []string {
-	caps := []string{
+func capabilities() []string {
+	return []string{
 		"heartbeat",
 		"config_apply",
 		"config_get",
@@ -42,15 +42,8 @@ func capabilities(installType pb.CwaInstallType) []string {
 		"ingestion_unblock",
 		"report_bug",
 		"rate_limit",
+		"auto_upgrade",
 	}
-
-	// Only Kubernetes deploys cwa-updater today, so VM targets must not claim
-	// they can be upgraded.
-	if installType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
-		caps = append(caps, "auto_upgrade")
-	}
-
-	return caps
 }
 
 // optional renders a value for a proto3 optional field: nil when unset.
@@ -152,7 +145,7 @@ func (l *Loop) Register(ctx context.Context) (string, error) {
 		VmId:           l.identity.VMID,
 		InstallType:    l.identity.InstallType,
 		Version:        version.Agent(),
-		CapabilityList: capabilities(l.identity.InstallType),
+		CapabilityList: capabilities(),
 		Location:       l.identity.Region,
 		ProjectId:      optional(l.identity.ProjectID),
 		ClusterId:      optional(l.identity.ClusterID),
@@ -230,7 +223,7 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 		AgentId:           l.identity.AgentID,
 		InstallType:       l.identity.InstallType,
 		Version:           version.Agent(),
-		CapabilityList:    capabilities(l.identity.InstallType),
+		CapabilityList:    capabilities(),
 		AgentStatus:       deriveAgentStatus(components, l.upgrades.InProgress()),
 		Components:        components,
 		LastUpgradeResult: lastUpgrade,

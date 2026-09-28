@@ -29,6 +29,7 @@ build-cwa-updater:
 cross:
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ${BUILDDIR}/cwa-manager ${GO_LDFLAGS} ./cmd/cwa-manager
 	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ${BUILDDIR}/report-runner ${GO_LDFLAGS} ./cmd/report-runner
+	@GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ${BUILDDIR}/cwa-updater ${GO_LDFLAGS} ./cmd/cwa-updater
 
 .PHONY: test
 test:

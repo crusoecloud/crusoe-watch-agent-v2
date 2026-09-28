@@ -14,28 +14,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Version pins are stamped at release time from dependencies.yaml.
 AGENT_VERSION="@@AGENT_VERSION@@"
 CWA_MANAGER_VERSION="@@CWA_MANAGER_VERSION@@"
-CWA_UPDATER_VERSION="@@CWA_UPDATER_VERSION@@"
 REPORT_RUNNER_VERSION="@@REPORT_RUNNER_VERSION@@"
 VECTOR_VERSION="@@VECTOR_VERSION@@"
 CME_VERSION="@@CRUSOE_METRICS_EXPORTER_VERSION@@"
 AMD_EXPORTER_VERSION="@@AMD_EXPORTER_VERSION@@"
-for v in AGENT_VERSION CWA_MANAGER_VERSION CWA_UPDATER_VERSION REPORT_RUNNER_VERSION VECTOR_VERSION CME_VERSION AMD_EXPORTER_VERSION; do
+for v in AGENT_VERSION CWA_MANAGER_VERSION REPORT_RUNNER_VERSION VECTOR_VERSION CME_VERSION AMD_EXPORTER_VERSION; do
     case "${!v}" in @@*@@) printf -v "$v" '%s' "dev" ;; esac
 done
 
 CMS_BASE_URL="https://cms-monitoring.crusoecloud.com"
 
-# GITHUB_LATEST_RELEASE_URL — used only by `do_upgrade` to fetch the newest available release.
-if [[ "$AGENT_VERSION" == "dev" ]]; then
-    GITHUB_RELEASE_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2/releases/latest/download"
-else
-    GITHUB_RELEASE_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2/releases/download/vm/${AGENT_VERSION}"
-fi
+# Where a named version's assets live, and whatever holds the "latest" pointer.
+GITHUB_RELEASE_BASE_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2/releases/download"
 GITHUB_LATEST_RELEASE_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2/releases/latest/download"
+if [[ "$AGENT_VERSION" == "dev" ]]; then
+    GITHUB_RELEASE_URL="$GITHUB_LATEST_RELEASE_URL"
+else
+    GITHUB_RELEASE_URL="${GITHUB_RELEASE_BASE_URL}/vm/${AGENT_VERSION}"
+fi
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/crusoe/crusoe_watch_agent"
 SECRETS_DIR="/etc/crusoe/secrets"
 ENV_FILE="${CONFIG_DIR}/.env"
+# The crusoe-metrics-exporter release installed natively.
+CME_VERSION_FILE="${CONFIG_DIR}/CME_VERSION"
+# Verified release assets per version, so a rollback needs no network.
+RELEASES_DIR="${CONFIG_DIR}/releases"
+# The installed version and the one a rollback would restore.
+RELEASES_KEEP=2
 VECTOR_CONFIG="/etc/crusoe/shared/vector.yaml"
 SYSTEMCTL_DIR="/etc/systemd/system"
 
@@ -163,15 +169,12 @@ fetch_bundle() {
         return
     fi
 
-    # The agent bundle (cwa-updater ships separately).
-    local bundle
-    if [[ "$INSTALL_MODE" == "docker" ]]; then
-        bundle="cwa-docker.tar.gz"
-    else
-        bundle="cwa-native-$(dpkg --print-architecture).tar.gz"
-    fi
+    # One bundle per install mode and architecture.
+    local arch bundle
+    arch=$(dpkg --print-architecture)
+    bundle="cwa-${INSTALL_MODE}-${arch}.tar.gz"
 
-    fetch_verified "$GITHUB_RELEASE_URL" "$bundle"
+    fetch_verified "$GITHUB_RELEASE_URL" "$bundle" "$AGENT_VERSION"
 
     status "Extracting ${bundle}..."
     tar -xzf "${DOWNLOAD_DIR}/${bundle}" -C "$DOWNLOAD_DIR" \
@@ -182,12 +185,23 @@ fetch_bundle() {
 
 # Download $2 and the signed manifest from release URL $1 into a fresh temp
 # directory, verify $2 against the manifest, and leave the path in DOWNLOAD_DIR.
+# $3 is the version the verified asset is cached under.
 # Every artifact this installer fetches from a Crusoe release comes through here.
 fetch_verified() {
-    local base_url="$1" name="$2"
+    local base_url="$1" name="$2" version="$3"
+    local cache="${RELEASES_DIR}/${version}"
 
     DOWNLOAD_DIR=$(mktemp -d)
     trap 'rm -rf "${DOWNLOAD_DIR}"' EXIT
+
+    # Re-verified below like a fresh download: the cache saves the transfer, not the check.
+    if cached_release_usable "$cache" "$name"; then
+        status "Using the cached ${name} for ${version}."
+        cp "${cache}/${name}" "${cache}/SHA256SUMS" "${cache}/SHA256SUMS.sig" "${DOWNLOAD_DIR}/"
+        verify_download "$DOWNLOAD_DIR" "$name"
+
+        return
+    fi
 
     status "Downloading ${name}..."
     local f
@@ -197,6 +211,57 @@ fetch_verified() {
     done
 
     verify_download "$DOWNLOAD_DIR" "$name"
+    cache_release_asset "$version" "$name"
+}
+
+# Present, and still matching its signed digest. A half-written entry is
+# downloaded again rather than blocking a rollback.
+cached_release_usable() {
+    local cache="$1" name="$2" digest_line
+
+    [[ -f "${cache}/${name}" && -f "${cache}/SHA256SUMS" && -f "${cache}/SHA256SUMS.sig" ]] || return 1
+
+    digest_line=$(awk -v n="$name" '$2 == n { print; found = 1 } END { exit !found }' \
+        "${cache}/SHA256SUMS") || return 1
+
+    ( cd "$cache" && printf '%s\n' "$digest_line" | sha256sum -c --status - ) || return 1
+}
+
+# Keep the asset with the manifest and signature that vouch for it.
+cache_release_asset() {
+    local version="$1" name="$2"
+    local cache="${RELEASES_DIR}/${version}"
+
+    mkdir -p "$cache"
+    chmod 0700 "$RELEASES_DIR" "$cache"
+    cp "${DOWNLOAD_DIR}/${name}" "${DOWNLOAD_DIR}/SHA256SUMS" "${DOWNLOAD_DIR}/SHA256SUMS.sig" "${cache}/"
+
+    prune_release_cache "$version"
+}
+
+# Drop the oldest cached releases. $1 survives however it sorts: a rollback
+# caches an older version than the one installed.
+prune_release_cache() {
+    local keep="$1"
+    local -a older=()
+    local path version
+
+    while IFS= read -r path; do
+        [[ -d "$path" ]] || continue
+
+        version=$(basename "$path")
+        [[ "$version" == "$keep" ]] || older+=("$version")
+    done < <(printf '%s\n' "${RELEASES_DIR}"/*/ | sort -V)
+
+    # +1 for the kept version, which the list above excludes.
+    local drop=$(( ${#older[@]} + 1 - RELEASES_KEEP ))
+    (( drop > 0 )) || return 0
+
+    local i
+    for (( i = 0; i < drop; i++ )); do
+        status "Dropping the cached release ${older[i]}."
+        rm -rf "${RELEASES_DIR:?}/${older[i]:?}"
+    done
 }
 
 # Check the release signature over SHA256SUMS in directory $1, then $2's digest
@@ -259,9 +324,6 @@ validate_os_support() {
 }
 
 validate_nvidia_deps() {
-    if ! command_exists nvidia-smi; then
-        error_exit "nvidia-smi not found. NVIDIA drivers must be installed."
-    fi
     # nvidia-ctk is required for Docker GPU containers (DCGM exporter).
     if [[ "$INSTALL_MODE" == "docker" ]] && ! command_exists nvidia-ctk; then
         error_exit "nvidia-ctk not found. Install the NVIDIA Container Toolkit."
@@ -602,6 +664,15 @@ cme_setup() {
 }
 
 install_metrics_exporter_native() {
+    local installed_ver=""
+    [[ -f "$CME_VERSION_FILE" ]] && installed_ver=$(cat "$CME_VERSION_FILE")
+
+    # Skip the download entirely when the pinned release is already on the host.
+    if [[ "$installed_ver" == "$CME_VERSION" && -x "${INSTALL_DIR}/crusoe-metrics-exporter" ]]; then
+        echo "crusoe-metrics-exporter ${CME_VERSION} already installed; leaving as-is."
+        return
+    fi
+
     local arch
     arch=$(dpkg --print-architecture)
     local tarball="crusoe-metrics-exporter-${CME_VERSION}-linux-${arch}.tar.gz"
@@ -624,6 +695,7 @@ install_metrics_exporter_native() {
     install -m 0755 "${stage}/crusoe-metrics-exporter" "${INSTALL_DIR}/crusoe-metrics-exporter"
     install -m 0644 "${stage}/crusoe-metrics-exporter.service" "$SYSTEMCTL_DIR/crusoe-metrics-exporter.service"
 
+    echo "$CME_VERSION" > "$CME_VERSION_FILE"
     rm -rf "$tmpdir"
 }
 
@@ -716,7 +788,6 @@ TELEMETRY_INGRESS_ENDPOINT='${cms_url}/ingest'
 LOGS_INGRESS_ENDPOINT='${cms_url}/logs/ingest'
 AGENT_VERSION='${AGENT_VERSION}'
 CWA_MANAGER_VERSION='${CWA_MANAGER_VERSION}'
-CWA_UPDATER_VERSION='${CWA_UPDATER_VERSION}'
 REPORT_RUNNER_VERSION='${REPORT_RUNNER_VERSION}'
 VECTOR_VERSION='${VECTOR_VERSION}'
 INSTALL_TYPE='${install_type}'
@@ -818,11 +889,9 @@ install_systemd_units() {
         install_unit "cwa-manager.service" "${INSTALL_DIR}/cwa-manager"
     fi
 
-    # cwa-updater. Left alone during an upgrade: it is driving this install.
+    # cwa-updater runs on the host in both modes. Left alone during an upgrade: it is driving this install.
     if [[ "$CWA_UPDATER_SKIP" == "true" ]]; then
         status "Keeping the existing cwa-updater.service unit."
-    elif [[ "$INSTALL_MODE" == "docker" ]]; then
-        install_compose_unit "cwa-updater.service" "docker-compose-cwa-updater.yaml"
     else
         install_unit "cwa-updater.service" "${INSTALL_DIR}/cwa-updater"
     fi
@@ -903,6 +972,22 @@ wait_for_containers() {
 save_install_mode() {
     mkdir -p "$CONFIG_DIR"
     echo "$INSTALL_MODE" > "${CONFIG_DIR}/.install-mode"
+}
+
+# Keep a copy of this installer for cwa-updater to re-run. Root-only: it is then
+# executed as root without being re-verified. Renamed rather than copied over,
+# because during an upgrade this is the file the outer bash is still reading, and
+# truncating a script bash reads as it goes leaves it executing garbage.
+save_installer() {
+    local dest="${CONFIG_DIR}/crusoe_watch_agent.sh"
+    local src staged
+    src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+    mkdir -p "$CONFIG_DIR"
+    staged=$(mktemp "${CONFIG_DIR}/.crusoe_watch_agent.sh.XXXXXX")
+    cp "$src" "$staged"
+    chmod 0700 "$staged"
+    mv -f "$staged" "$dest"
 }
 
 save_install_args() {
@@ -1014,11 +1099,10 @@ do_install() {
         install_release_binary cwa-manager
         # report-runner collects GPU bug reports; native mode is NVIDIA-only.
         [[ "$GPU_TYPE" == "nvidia" ]] && install_release_binary report-runner
-        [[ "$CWA_UPDATER_SKIP" == "false" ]] && install_release_binary cwa-updater
-    elif [[ "$CWA_UPDATER_SKIP" == "false" ]]; then
-        copy_asset "vm/docker/docker-compose-cwa-updater.yaml" \
-            "${CONFIG_DIR}/docker-compose-cwa-updater.yaml"
     fi
+
+    # cwa-updater is a host binary in both modes.
+    [[ "$CWA_UPDATER_SKIP" == "false" ]] && install_release_binary cwa-updater
 
     # Install Vector.
     if [[ "$INSTALL_MODE" == "docker" ]]; then
@@ -1041,6 +1125,7 @@ do_install() {
 
     save_install_mode
     save_version
+    save_installer
 
     # Start services. cwa-manager owns Vector config generation, so it starts
     # first and must produce the config before Vector starts against it.
@@ -1048,9 +1133,7 @@ do_install() {
     systemctl daemon-reload
 
     if [[ "$INSTALL_MODE" == "docker" ]]; then
-        pull_images "cwa-manager and cwa-updater" \
-            "${CONFIG_DIR}/docker-compose-cwa-manager.yaml" \
-            "${CONFIG_DIR}/docker-compose-cwa-updater.yaml"
+        pull_images "cwa-manager" "${CONFIG_DIR}/docker-compose-cwa-manager.yaml"
     fi
 
     # cwa-updater first: cwa-manager polls its health on every heartbeat, and
@@ -1065,9 +1148,7 @@ do_install() {
 
     # Gate on the containers first, so the config wait below times the manager, not Docker.
     if [[ "$INSTALL_MODE" == "docker" ]]; then
-        local started=(cwa-manager)
-        [[ "$CWA_UPDATER_SKIP" == "false" ]] && started+=(cwa-updater)
-        wait_for_containers "${started[@]}"
+        wait_for_containers cwa-manager
     fi
 
     status "Waiting for cwa-manager to write ${VECTOR_CONFIG}..."
@@ -1170,7 +1251,11 @@ do_uninstall() {
     status "Uninstall complete. Secrets at ${SECRETS_DIR} preserved."
 }
 
+# Move the installed agent to the release named on the command line, or to the
+# newest published one. cwa-updater always names the version it was asked for.
 do_upgrade() {
+    local allow_downgrade="${1:-false}"
+
     require_root
 
     local installed_version=""
@@ -1184,29 +1269,33 @@ do_upgrade() {
 
     status "Installed version: ${installed_version}"
 
-    # Fetch the latest published VM release version. The release pipeline
-    # attaches a VERSION asset (containing the tag string) to every GitHub
-    # Release, and /releases/latest/download/ redirects to whichever release
-    # currently holds the "latest" pointer.
-    local remote_version
-    local version_url="${GITHUB_LATEST_RELEASE_URL}/VERSION"
-    remote_version=$(wget -qO- "$version_url" 2>/dev/null | tr -d '[:space:]') || true
-
-    if [[ -z "$remote_version" ]]; then
-        error_exit "Could not fetch remote version from ${version_url}."
+    local target_version="$TARGET_VERSION" release_url
+    if [[ -n "$target_version" ]]; then
+        release_url="${GITHUB_RELEASE_BASE_URL}/vm/${target_version}"
+    else
+        # Every release carries a VERSION asset naming its tag.
+        release_url="$GITHUB_LATEST_RELEASE_URL"
+        target_version=$(wget -qO- "${release_url}/VERSION" 2>/dev/null | tr -d '[:space:]') || true
+        [[ -n "$target_version" ]] \
+            || error_exit "Could not fetch the latest version from ${release_url}/VERSION."
     fi
 
-    status "Remote version: ${remote_version}"
+    status "Target version: ${target_version}"
 
-    if ! version_lt "$installed_version" "$remote_version"; then
-        status "Already up to date (${installed_version} >= ${remote_version}). Nothing to do."
+    if [[ "$installed_version" == "$target_version" ]]; then
+        status "Already on ${target_version}. Nothing to do."
         return
     fi
 
-    status "Upgrading ${installed_version} → ${remote_version}..."
+    # Moving backwards is what a rollback does, and nothing else should.
+    if [[ "$allow_downgrade" != "true" ]] && version_lt "$target_version" "$installed_version"; then
+        error_exit "${target_version} is older than the installed ${installed_version}. Use 'rollback' to move back."
+    fi
+
+    status "Moving ${installed_version} → ${target_version}..."
 
     # The new installer runs as root and is what verifies the bundle, so it is itself verified first.
-    fetch_verified "$GITHUB_LATEST_RELEASE_URL" crusoe_watch_agent.sh
+    fetch_verified "$release_url" crusoe_watch_agent.sh "$target_version"
     chmod +x "${DOWNLOAD_DIR}/crusoe_watch_agent.sh"
 
     # Replay saved args.
@@ -1217,10 +1306,16 @@ do_upgrade() {
         done < "${SECRETS_DIR}/.install-args"
     fi
 
-    # The upgrade is performed by the new version's installer, not this one.
+    # The move is performed by the target version's installer, not this one.
     CWA_UPGRADE=1 "${DOWNLOAD_DIR}/crusoe_watch_agent.sh" install "${saved_args[@]}"
 
-    status "Upgrade complete."
+    status "Now on ${target_version}."
+}
+
+# Move back to an earlier version: the same path as an upgrade, as its own command
+# so the intent shows in logs rather than being inferred from a flag.
+do_rollback() {
+    do_upgrade "true"
 }
 
 do_refresh_token() {
@@ -1249,11 +1344,12 @@ Usage:
   sudo ./crusoe_watch_agent.sh COMMAND [OPTIONS]
 
 Commands:
-  install         Install cwa-manager, Vector, and GPU exporters
-  uninstall       Stop services and remove all files (preserves secrets)
-  upgrade         Check for new version and upgrade in place
-  refresh-token   Update monitoring token and restart services
-  help            Show this help message
+  install            Install cwa-manager, Vector, and GPU exporters
+  uninstall          Stop services and remove all files (preserves secrets)
+  upgrade [VERSION]  Upgrade in place to VERSION, or to the latest release
+  rollback VERSION   Move back to VERSION
+  refresh-token      Update monitoring token and restart services
+  help               Show this help message
 
 Install Options:
   --no-docker                Use native Vector binary (default: Docker)
@@ -1273,6 +1369,8 @@ Examples:
   sudo ./crusoe_watch_agent.sh install --no-docker
   sudo ./crusoe_watch_agent.sh install --token "$(crusoe monitoring tokens create -f token)"
   sudo ./crusoe_watch_agent.sh upgrade
+  sudo ./crusoe_watch_agent.sh upgrade v1.4
+  sudo ./crusoe_watch_agent.sh rollback v1.3
   sudo ./crusoe_watch_agent.sh refresh-token
   sudo ./crusoe_watch_agent.sh uninstall
 HELP
@@ -1285,6 +1383,20 @@ ORIGINAL_ARGS=("$@")
 
 COMMAND="${1:-help}"
 shift || true
+
+# Both take the release as their operand; an upgrade without one moves to the
+# newest published release. cwa-updater always names a version.
+TARGET_VERSION=""
+case "$COMMAND" in
+    upgrade|rollback)
+        if [[ $# -gt 0 && "$1" != -* ]]; then
+            TARGET_VERSION="$1"
+            shift
+        elif [[ "$COMMAND" == "rollback" ]]; then
+            error_exit "rollback requires a version, e.g. '$0 rollback v1.3'."
+        fi
+        ;;
+esac
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1335,6 +1447,9 @@ case "$COMMAND" in
         ;;
     upgrade)
         do_upgrade
+        ;;
+    rollback)
+        do_rollback
         ;;
     refresh-token)
         do_refresh_token

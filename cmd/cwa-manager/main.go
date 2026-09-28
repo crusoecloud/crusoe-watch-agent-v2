@@ -280,15 +280,11 @@ func buildDispatcher(
 	disp.Register(command.IngestionBlockCommand, command.NewIngestionBlock(deps, true))
 	disp.Register(command.IngestionUnblockCommand, command.NewIngestionBlock(deps, false))
 	disp.Register(command.RateLimitSetCommand, command.NewRateLimitSet(deps))
-
-	// Registered only where cwa-updater is deployed.
-	if deps.InstallType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
-		disp.Register(command.UpgradeExecuteCommand, command.NewUpgradeExecute(
-			updater,
-			func() string { return ident.AgentID },
-			command.WithUpgradeNotifier(loop.MarkUpgradeHandedOff),
-		))
-	}
+	disp.Register(command.UpgradeExecuteCommand, command.NewUpgradeExecute(
+		updater,
+		func() string { return ident.AgentID },
+		command.WithUpgradeNotifier(loop.MarkUpgradeHandedOff),
+	))
 
 	// report.bug is only registered when a platform generator could be built;
 	// otherwise the agent runs degraded and the command is acked as FAILED.

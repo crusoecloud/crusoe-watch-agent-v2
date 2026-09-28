@@ -1,7 +1,8 @@
 package main
 
 import (
-	"context"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/upgrade"
 )
 
 // modeFile writes content to a mode file and returns its path.
@@ -88,10 +91,10 @@ func TestVMStatePathIsPersistent(t *testing.T) {
 	assert.False(t, strings.HasPrefix(vmStatePath, "/run/"), vmStatePath)
 }
 
-// Until the bundle executor lands a VM upgrade fails, but the rollback that
-// follows reports clean: nothing was installed, so the host is still on
-// rollback_version.
-func TestVMExecutorPlaceholder(t *testing.T) {
-	assert.ErrorIs(t, vmExecutor{}.Upgrade(context.Background(), nil), errNoVMExecutor)
-	assert.NoError(t, vmExecutor{}.Rollback(context.Background(), nil))
+// Both VM modes upgrade by running the installer on the host.
+func TestBuildVMExecutorByMode(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	assert.IsType(t, &upgrade.ScriptExecutor{}, buildVMExecutor(logger, modeNative))
+	assert.IsType(t, &upgrade.ScriptExecutor{}, buildVMExecutor(logger, modeDocker))
 }
