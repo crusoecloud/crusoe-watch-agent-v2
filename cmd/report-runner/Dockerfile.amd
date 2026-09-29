@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.26-alpine AS builder
 
 RUN apk add --no-cache 'git>=2.47'
 
@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w
 # on VMs the host /opt/rocm is bind-mounted over it (ROCM_VERSION), keeping VMs driver-matched.
 # Bump ROCM_APT_VERSION to track the fleet. The extra tools back rocm_techsupport.sh sections;
 # ones still absent (IB/OFED/mst/nicctl) degrade gracefully. amd64-only: ROCm is x86_64.
-FROM ubuntu:24.04
+FROM public.ecr.aws/docker/library/ubuntu:24.04
 ARG ROCM_TECHSUPPORT_SHA=39ae6002f3cfaac9a121efa999328bb4d6572bf6
 ARG ROCM_APT_VERSION=7.0.1
 RUN apt-get update && apt-get install -y --no-install-recommends \

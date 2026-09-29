@@ -1,7 +1,7 @@
 # Mirrors the root cwa-manager Dockerfile: builder pinned to the native build
 # host (Go cross-compiles, so `go mod download`/git run natively instead of
 # under QEMU, which crashes on large private-module fetches when emulating arm64).
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.26-alpine AS builder
 
 RUN apk add --no-cache 'git>=2.47'
 
@@ -27,7 +27,7 @@ RUN apk add --no-cache curl && \
         "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${TARGETARCH}" && \
     chmod +x /cosign
 
-FROM alpine:3.21
+FROM public.ecr.aws/docker/library/alpine:3.21
 RUN apk add --no-cache 'ca-certificates>=20250106' 'helm>=3.14'
 COPY --from=builder /cwa-updater /usr/local/bin/cwa-updater
 COPY --from=builder /cosign /usr/local/bin/cosign

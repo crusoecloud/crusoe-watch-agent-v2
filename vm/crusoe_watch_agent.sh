@@ -1336,6 +1336,37 @@ do_refresh_token() {
     echo "  sudo systemctl restart cwa-manager"
 }
 
+# Replace the cwa-updater binary and unit with the ones from the installed
+# release. Out of band on purpose: an agent upgrade leaves cwa-updater alone
+# because it is the process driving that upgrade, so this is how it moves.
+do_update_updater() {
+    require_root
+
+    # Which bundle to fetch depends on how this host was installed.
+    local mode_file="${CONFIG_DIR}/.install-mode"
+    [[ -f "$mode_file" ]] || error_exit "No install found at ${CONFIG_DIR}. Run 'install' first."
+    INSTALL_MODE=$(cat "$mode_file")
+
+    # Restarting cwa-updater mid-upgrade would drop the in-flight state and the
+    # result the control plane is waiting on.
+    local state="${CONFIG_DIR}/upgrade-request.json"
+    if [[ -f "$state" ]] && grep -Eq '"phase" *: *"(pending|in_progress|rolling_back)"' "$state"; then
+        error_exit "cwa-updater has an upgrade in flight. Retry once it reports a result."
+    fi
+
+    status "Updating cwa-updater to ${AGENT_VERSION} (${INSTALL_MODE} mode)..."
+
+    fetch_bundle
+    install_release_binary cwa-updater
+    install_unit "cwa-updater.service" "${INSTALL_DIR}/cwa-updater"
+
+    systemctl daemon-reload
+    systemctl enable cwa-updater.service
+    systemctl restart cwa-updater.service
+
+    status "cwa-updater updated. Check: systemctl status cwa-updater"
+}
+
 do_help() {
     cat <<'HELP'
 Crusoe Watch Agent 2.0 — VM Installer
@@ -1349,6 +1380,7 @@ Commands:
   upgrade [VERSION]  Upgrade in place to VERSION, or to the latest release
   rollback VERSION   Move back to VERSION
   refresh-token      Update monitoring token and restart services
+  update-updater     Move cwa-updater to the installed release
   help               Show this help message
 
 Install Options:
@@ -1372,6 +1404,7 @@ Examples:
   sudo ./crusoe_watch_agent.sh upgrade v1.4
   sudo ./crusoe_watch_agent.sh rollback v1.3
   sudo ./crusoe_watch_agent.sh refresh-token
+  sudo ./crusoe_watch_agent.sh update-updater
   sudo ./crusoe_watch_agent.sh uninstall
 HELP
 }
@@ -1453,6 +1486,9 @@ case "$COMMAND" in
         ;;
     refresh-token)
         do_refresh_token
+        ;;
+    update-updater)
+        do_update_updater
         ;;
     help|--help|-h)
         do_help

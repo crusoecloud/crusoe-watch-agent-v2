@@ -167,14 +167,28 @@ publish_vm() {
         "${assets_dir}/"*.tar.gz
 }
 
+# Must match render.sh's chart_version_for: it stamps Chart.yaml, and helm
+# package names the .tgz from that.
+chart_version_for() {
+    local v="${1#v}"
+
+    if [[ "$v" == *.*.* ]]; then
+        echo "$v"
+    else
+        echo "${v}.0"
+    fi
+}
+
 publish_k8s() {
-    local chart_version="${NEW_VERSION#v}"
+    local chart_version
+    chart_version=$(chart_version_for "$NEW_VERSION")
 
     publish_chart crusoe-watch-agent helm-chart "$chart_version" "K8s Agent ${NEW_VERSION}"
 }
 
 publish_updater() {
-    local chart_version="${NEW_VERSION#v}"
+    local chart_version
+    chart_version=$(chart_version_for "$NEW_VERSION")
 
     publish_chart cwa-updater cwa-updater-chart "$chart_version" "cwa-updater ${NEW_VERSION}"
 }

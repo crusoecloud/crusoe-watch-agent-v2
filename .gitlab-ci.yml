@@ -25,7 +25,7 @@ stages:
 
 lint:mr:
   stage: .pre
-  image: alpine:3.19
+  image: public.ecr.aws/docker/library/alpine:3.19
   script:
     - |
       echo "MR title: $CI_MERGE_REQUEST_TITLE"

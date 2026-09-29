@@ -62,7 +62,7 @@ helm install crusoe-watch-agent \
 ```
 
 Omitting `--version` installs the latest release. Pin a specific one with
-`--version <X.Y>`.
+`--version <X.Y.Z>`.
 
 This installs a DaemonSet with one pod per node, running cwa-manager and Vector
 side by side. 

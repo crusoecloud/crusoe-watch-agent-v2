@@ -365,11 +365,18 @@ func (e *HelmExecutor) chartRef() string {
 	return strings.TrimSuffix(e.chartRepo, "/") + "/" + e.chartName
 }
 
-// chartVersion is target_version as a chart version. The control plane sends
-// agent versions as vX.Y.Z; the release pipeline publishes chart versions and
-// OCI tags with the v stripped, so `--version` would never match otherwise.
+// chartVersion is target_version as a chart version. The release pipeline
+// publishes charts as X.Y.Z with the v stripped, so `--version` would never
+// match otherwise. A two-part vX.Y is padded the same way release.sh pads it:
+// Helm only resolves OCI tags that are a full X.Y.Z.
 func chartVersion(version string) string {
-	return strings.TrimPrefix(version, "v")
+	ver := strings.TrimPrefix(version, "v")
+
+	if strings.Count(ver, ".") == 1 && !strings.ContainsAny(ver, "-+") {
+		ver += ".0"
+	}
+
+	return ver
 }
 
 // remaining is how much of the rollback window is left, truncated to whole

@@ -16,7 +16,7 @@
 
 release:vm:
   stage: release
-  image: golang:1.26-alpine
+  image: public.ecr.aws/docker/library/golang:1.26-alpine
   resource_group: release-vm        # serialize: never two VM releases at once
   rules:
     # Manual button on main pipelines. Operators can also trigger via the

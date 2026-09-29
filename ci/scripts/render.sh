@@ -79,6 +79,21 @@ load_deps() {
     done
 }
 
+# A vX.Y release tag as a chart version. Helm only resolves OCI tags that are a
+# full X.Y.Z, so a two-part version makes `helm install` without --version fail
+# to find any tag at all. Kept in step with release.sh.
+chart_version_for() {
+    local v="${1#v}"
+
+    [[ -n "$v" ]] || die "release version must not be empty"
+
+    if [[ "$v" == *.*.* ]]; then
+        echo "$v"
+    else
+        echo "${v}.0"
+    fi
+}
+
 # Replace @@KEY@@ tokens in $1 (in place). Uses ASCII-1 as the sed delimiter so
 # version strings containing `/` or `.` are safe.
 substitute_file() {
@@ -162,12 +177,11 @@ render_vm() {
 
 render_k8s() {
     # Chart.yaml versions must be valid SemVer 2. Strip a leading "v" so that
-    # k8s/v0.9 stamps as 0.9. The release pipeline passes whatever
+    # k8s/v0.9 stamps as 0.9.0. The release pipeline passes whatever
     # compute-next-version produced; trust it but normalize here.
-    local chart_version="${RELEASE_VERSION#v}"
+    local chart_version
+    chart_version=$(chart_version_for "$RELEASE_VERSION")
     local cwa_manager_version="$CWA_MANAGER"
-
-    [[ -n "$chart_version" ]] || die "release version must not be empty"
 
     rm -rf "${OUT_DIR}/helm-chart"
     cp -r "${REPO_ROOT}/k8s/helm-chart" "${OUT_DIR}/helm-chart"
@@ -194,9 +208,8 @@ render_k8s() {
 # cwa-updater ships as its own chart so it never upgrades itself, and as its own
 # release mode so it is installed and versioned independently of the agent.
 render_updater() {
-    local chart_version="${RELEASE_VERSION#v}"
-
-    [[ -n "$chart_version" ]] || die "release version must not be empty"
+    local chart_version
+    chart_version=$(chart_version_for "$RELEASE_VERSION")
 
     rm -rf "${OUT_DIR}/cwa-updater-chart"
     cp -r "${REPO_ROOT}/k8s/cwa-updater-chart" "${OUT_DIR}/cwa-updater-chart"

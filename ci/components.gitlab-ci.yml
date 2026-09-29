@@ -13,12 +13,13 @@
 
 .build-image:
   stage: build
-  image: docker:27
+  image: public.ecr.aws/docker/library/docker:27
   retry: 2
   services:
-    - docker:27-dind
+    - public.ecr.aws/docker/library/docker:27-dind
   variables:
     # Overridable per job; amd64-only components (e.g. AMD ROCm) set PLATFORMS.
+    # Merge requests build a subset of this; see BUILD_PLATFORMS below.
     PLATFORMS: "linux/amd64,linux/arm64"
   before_script:
     - apk add --no-cache curl jq
@@ -31,10 +32,18 @@
       # Date-SHA tag is the only tag this job publishes. The release job is
       # responsible for the human-facing release tags (vm/v1.4 etc.).
       DATE_TAG="$(date -u +%Y.%m.%d)-${CI_COMMIT_SHORT_SHA}"
+      # A merge request only gates: one arch catches a build break, and every
+      # extra platform is another round of base-image manifest pulls. Publishes
+      # from main build the full set, which is what arm64 nodes install.
+      BUILD_PLATFORMS="$PLATFORMS"
+      if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+        BUILD_PLATFORMS="linux/amd64"
+      fi
+      echo "Building for ${BUILD_PLATFORMS}"
       printf 'machine %s login gitlab-ci-token password %s\n' "${CI_SERVER_HOST}" "${CI_JOB_TOKEN}" > /tmp/netrc
       # --sbom attaches an SPDX inventory (BuildKit runs syft) and --provenance a build statement.
       docker buildx build \
-        --platform "${PLATFORMS}" \
+        --platform "${BUILD_PLATFORMS}" \
         --push \
         --sbom=true \
         --provenance=mode=min \
