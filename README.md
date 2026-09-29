@@ -1,5 +1,8 @@
 # Crusoe Watch Agent
 
+> **Experimental.** This is under active development and is not yet intended for
+> customer or production use.
+
 crusoe-watch-agent is a vector.dev based agent for collecting telemetry data from Crusoe Cloud resources.
 
 Follow the installation instructions below to get started.
