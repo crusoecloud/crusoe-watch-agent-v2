@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -75,6 +78,21 @@ func newK8sRuntime(logger *slog.Logger) *k8sRuntime {
 	}
 
 	return &k8sRuntime{client: client, restCfg: restCfg, nodeName: nodeName}
+}
+
+// DeleteSecret implements command.SecretDeleter for credentials.cleanup.
+// An absent Secret is not an error: removed is false and the command reports success.
+func (r *k8sRuntime) DeleteSecret(ctx context.Context, namespace, name string) (bool, error) {
+	err := r.client.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+
+	switch {
+	case err == nil:
+		return true, nil
+	case k8serrors.IsNotFound(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("deleting secret %s/%s: %w", namespace, name, err)
+	}
 }
 
 // startWatcher launches the Vector config watcher in a background goroutine.

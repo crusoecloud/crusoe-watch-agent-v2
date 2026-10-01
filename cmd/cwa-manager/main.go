@@ -47,6 +47,8 @@ const (
 	ingestionBlockedFile = ".ingestion-blocked"
 	rateLimitFile        = ".rate-limit.json"
 	commandStoreDir      = ".commands" // per-execution crash-recovery records
+	secretsDir           = "secrets"
+	monitoringTokenFile  = ".monitoring-token" // legacy static credential (credentials.cleanup)
 )
 
 // bearerToken sends `authorization: Bearer <CRUSOE_MONITORING_TOKEN>` on every RPC.
@@ -96,7 +98,11 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	logger.Info("cwa-manager starting", "version", version.Version)
 
-	resolver := identity.NewResolver()
+	// Every file cwa-manager writes lives here. On K8s it is a mounted volume,
+	// since the container's root filesystem is read-only.
+	stateDir := getEnvOrDefault("CWA_STATE_DIR", defaultStateDir)
+
+	resolver := identity.NewResolver(stateDir)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	ident, err := resolver.Resolve(ctx)
@@ -107,12 +113,14 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 	logger.Info("identity resolved", "vm_id", ident.VMID, "install_type", ident.InstallType.String(),
 		"agent_id", ident.AgentID, "region", ident.Region)
 
-	deps := buildDeps(ident, vmCfg)
+	deps := buildDeps(ident, vmCfg, stateDir)
 
 	// On K8s, build the in-cluster client once and share it between the config watcher and the bug-report generator.
 	var k8sRT *k8sRuntime
 	if ident.InstallType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
-		k8sRT = newK8sRuntime(logger)
+		if k8sRT = newK8sRuntime(logger); k8sRT != nil {
+			deps.SecretDeleter = k8sRT
+		}
 	}
 
 	if configWatcher := startDataPlane(ctx, deps, k8sRT, logger); configWatcher != nil {
@@ -219,8 +227,7 @@ func reportRunnerExpected(installType pb.CwaInstallType, gpu vector.GPUType) boo
 
 // buildDeps assembles command.Deps, restoring the last-applied endpoints and
 // blocked state so a restart doesn't revert to defaults.
-func buildDeps(ident *identity.Identity, vmCfg vector.VMConfig) command.Deps {
-	stateDir := getEnvOrDefault("CWA_STATE_DIR", defaultStateDir)
+func buildDeps(ident *identity.Identity, vmCfg vector.VMConfig, stateDir string) command.Deps {
 	logsPath := filepath.Join(stateDir, logsEndpointFile)
 	metricsPath := filepath.Join(stateDir, metricsEndpointFile)
 	blockedPath := filepath.Join(stateDir, ingestionBlockedFile)
@@ -232,14 +239,15 @@ func buildDeps(ident *identity.Identity, vmCfg vector.VMConfig) command.Deps {
 	vmCfg.RateLimits = command.LoadRateLimits(rateLimitPath)
 
 	return command.Deps{
-		InstallType:        ident.InstallType,
-		VMCfg:              vmCfg,
-		VMConfigPath:       getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
-		Store:              command.NewExecStore(filepath.Join(stateDir, commandStoreDir)),
-		LogsStatePath:      logsPath,
-		MetricsStatePath:   metricsPath,
-		BlockedStatePath:   blockedPath,
-		RateLimitStatePath: rateLimitPath,
+		InstallType:         ident.InstallType,
+		VMCfg:               vmCfg,
+		VMConfigPath:        getEnvOrDefault("VECTOR_CONFIG_PATH", defaultVectorConfigPath),
+		Store:               command.NewExecStore(filepath.Join(stateDir, commandStoreDir)),
+		LogsStatePath:       logsPath,
+		MetricsStatePath:    metricsPath,
+		BlockedStatePath:    blockedPath,
+		RateLimitStatePath:  rateLimitPath,
+		MonitoringTokenPath: filepath.Join(stateDir, secretsDir, monitoringTokenFile),
 	}
 }
 

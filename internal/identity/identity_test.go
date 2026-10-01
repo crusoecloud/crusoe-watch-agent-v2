@@ -2,9 +2,13 @@ package identity
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
@@ -58,14 +62,25 @@ func TestReadVMID_RespectsContextCancellation(t *testing.T) {
 }
 
 func TestNewResolver(t *testing.T) {
-	r := NewResolver()
+	r := NewResolver(t.TempDir())
 	assert.NotNil(t, r)
 }
 
 func TestRegistered_FalseWhenNoFile(t *testing.T) {
-	// On dev machines, /etc/crusoe/.agent-id doesn't exist.
-	r := NewResolver()
+	r := NewResolver(t.TempDir())
 	assert.False(t, r.Registered())
+}
+
+// A persisted agent_id must be readable again, so a restart doesn't re-register.
+func TestPersistAgentIDRoundTrips(t *testing.T) {
+	r := NewResolver(filepath.Join(t.TempDir(), "state"))
+
+	require.NoError(t, r.PersistAgentID("d6e5c1e3-d404-4caa-87f2-007a01e0813a"))
+	assert.True(t, r.Registered())
+
+	data, err := os.ReadFile(r.agentIDPath)
+	require.NoError(t, err)
+	assert.Equal(t, "d6e5c1e3-d404-4caa-87f2-007a01e0813a", strings.TrimSpace(string(data)))
 }
 
 func TestReadProjectID(t *testing.T) {

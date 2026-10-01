@@ -22,8 +22,8 @@ const (
 	dmiPathVM  = "/sys/class/dmi/id/product_uuid"
 	dmiPathK8s = "/host/sys/class/dmi/id/product_uuid"
 
-	// File where the agent_id is persisted after registration.
-	agentIDPath = "/etc/crusoe/.agent-id"
+	// File where the agent_id is persisted after registration, under the state dir.
+	agentIDFile = ".agent-id"
 
 	// Install mode file written by the VM installer script.
 	installModeFile = "/etc/crusoe/crusoe_watch_agent/.install-mode"
@@ -58,11 +58,15 @@ type Identity struct {
 }
 
 // Resolver resolves identity fields from the local environment.
-type Resolver struct{}
+type Resolver struct {
+	agentIDPath string
+}
 
-// NewResolver creates a Resolver.
-func NewResolver() *Resolver {
-	return &Resolver{}
+// NewResolver creates a Resolver that persists the agent_id under stateDir.
+// K8s points stateDir at a writable volume; the container's root filesystem is
+// read-only.
+func NewResolver(stateDir string) *Resolver {
+	return &Resolver{agentIDPath: filepath.Join(stateDir, agentIDFile)}
 }
 
 // Resolve reads identity fields from the local environment.
@@ -83,7 +87,7 @@ func (r *Resolver) Resolve(ctx context.Context) (*Identity, error) {
 		OSVersion:   readOSVersion(),
 	}
 
-	agentID, err := os.ReadFile(agentIDPath)
+	agentID, err := os.ReadFile(r.agentIDPath)
 	if err == nil {
 		identity.AgentID = strings.TrimSpace(string(agentID))
 	}
@@ -94,7 +98,7 @@ func (r *Resolver) Resolve(ctx context.Context) (*Identity, error) {
 
 // PersistAgentID writes the agent_id to disk so it survives restarts.
 func (r *Resolver) PersistAgentID(agentID string) error {
-	dir := filepath.Dir(agentIDPath)
+	dir := filepath.Dir(r.agentIDPath)
 
 	//nolint:mnd // 0o750 restricts access to owner and group
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -102,7 +106,7 @@ func (r *Resolver) PersistAgentID(agentID string) error {
 	}
 
 	//nolint:mnd // 0o600 is restrictive file permissions for secrets
-	if err := os.WriteFile(agentIDPath, []byte(agentID+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(r.agentIDPath, []byte(agentID+"\n"), 0o600); err != nil {
 		return fmt.Errorf("writing agent-id: %w", err)
 	}
 
@@ -111,7 +115,7 @@ func (r *Resolver) PersistAgentID(agentID string) error {
 
 // Registered returns true if the agent has a persisted agent_id.
 func (r *Resolver) Registered() bool {
-	_, err := os.Stat(agentIDPath)
+	_, err := os.Stat(r.agentIDPath)
 
 	return err == nil
 }

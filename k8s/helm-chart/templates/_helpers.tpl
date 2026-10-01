@@ -48,10 +48,11 @@ ServiceAccount name.
 {{- end }}
 
 {{/*
-Monitoring token secret name.
+Monitoring token secret name. Fixed, not chart-name derived: credentials.cleanup
+deletes this Secret by a name compiled into the agent.
 */}}
 {{- define "cwa.monitoringSecretName" -}}
-{{ include "cwa.fullname" . }}-monitoring-token
+crusoe-monitoring-token
 {{- end }}
 
 {{/*

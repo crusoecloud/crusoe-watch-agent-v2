@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,13 +29,20 @@ type Reloader interface {
 	SetRateLimits(limits map[string]int)
 }
 
+// SecretDeleter deletes a Kubernetes Secret, reporting whether one was present.
+// credentials.cleanup uses it on K8s.
+type SecretDeleter interface {
+	DeleteSecret(ctx context.Context, namespace, name string) (removed bool, err error)
+}
+
 // Deps wires command handlers to platform-specific machinery.
 // One value is shared by every handler registered on the dispatcher.
 type Deps struct {
-	InstallType  pb.CwaInstallType
-	VMCfg        vector.VMConfig // baseline VM config; control-plane state folded in per-apply
-	VMConfigPath string          // where the VM Vector config is written
-	Watcher      Reloader        // non-nil on K8s
+	InstallType   pb.CwaInstallType
+	VMCfg         vector.VMConfig // baseline VM config; control-plane state folded in per-apply
+	VMConfigPath  string          // where the VM Vector config is written
+	Watcher       Reloader        // non-nil on K8s
+	SecretDeleter SecretDeleter   // non-nil on K8s
 
 	// Store records in-flight command executions for crash recovery.
 	Store *ExecStore
@@ -44,6 +52,9 @@ type Deps struct {
 	MetricsStatePath   string // config.apply metrics base URL (file content)
 	BlockedStatePath   string // ingestion.block marker (file presence)
 	RateLimitStatePath string // rate_limit.set sink→cap map (JSON file content)
+
+	// MonitoringTokenPath is the VM legacy static-credential file (credentials.cleanup).
+	MonitoringTokenPath string
 }
 
 // apply routes a state change to the platform-specific machinery: on K8s the
