@@ -460,3 +460,20 @@ func TestJitterStaysInRange(t *testing.T) {
 
 	assert.Zero(t, jitter(0), "an unset jitter adds nothing")
 }
+
+// The delivered cap must reach the schedule the registry retries actually use.
+func TestHelmExecutorCapsRetryBackoffFromTheDeliveredConfig(t *testing.T) {
+	t.Parallel()
+
+	holder := NewHolder(NewFileConfigStore(filepath.Join(t.TempDir(), "updater-config.json")),
+		HelmExecutorFields())
+	executor := NewHelmExecutor(HelmConfig{Logger: discardLogger(), Settings: holder})
+
+	assert.Equal(t, fetchMaxDelay, executor.fetchBackoff().maxDelay)
+
+	require.NoError(t, holder.Apply(context.Background(), RuntimeConfig{DownloadBackoffMaxSec: 5}))
+	assert.Equal(t, 5*time.Second, executor.fetchBackoff().maxDelay)
+
+	// The other attempts are untouched, so a cap cannot shorten the schedule.
+	assert.Equal(t, fetchAttempts, executor.fetchBackoff().attempts)
+}

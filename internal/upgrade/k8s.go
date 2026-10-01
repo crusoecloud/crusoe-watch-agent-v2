@@ -93,26 +93,32 @@ func (s *ConfigMapStore) Clear(ctx context.Context) error {
 }
 
 // update writes value under stateKey, or removes the key when value is empty.
-// Wrapping inside the closure is safe: RetryOnConflict detects a conflict with
-// errors.As, which sees through %w.
 func (s *ConfigMapStore) update(ctx context.Context, value string) error {
+	return updateConfigMapKey(ctx, s.client, s.namespace, s.name, stateKey, value)
+}
+
+// updateConfigMapKey writes value under key in the named ConfigMap, or removes
+// the key when value is empty, leaving every other key as it was.
+func updateConfigMapKey(
+	ctx context.Context, client kubernetes.Interface, namespace, name, key, value string,
+) error {
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		configMap, getErr := s.client.CoreV1().ConfigMaps(s.namespace).Get(ctx, s.name, metav1.GetOptions{})
+		configMap, getErr := client.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
 		if getErr != nil {
 			return fmt.Errorf("reading for update: %w", getErr)
 		}
 
 		if value == "" {
-			delete(configMap.Data, stateKey)
+			delete(configMap.Data, key)
 		} else {
 			if configMap.Data == nil {
 				configMap.Data = make(map[string]string, 1)
 			}
 
-			configMap.Data[stateKey] = value
+			configMap.Data[key] = value
 		}
 
-		if _, updateErr := s.client.CoreV1().ConfigMaps(s.namespace).
+		if _, updateErr := client.CoreV1().ConfigMaps(namespace).
 			Update(ctx, configMap, metav1.UpdateOptions{}); updateErr != nil {
 			return fmt.Errorf("updating: %w", updateErr)
 		}
@@ -120,7 +126,7 @@ func (s *ConfigMapStore) update(ctx context.Context, value string) error {
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("writing handoff configmap %s/%s: %w", s.namespace, s.name, err)
+		return fmt.Errorf("writing %s to handoff configmap %s/%s: %w", key, namespace, name, err)
 	}
 
 	return nil

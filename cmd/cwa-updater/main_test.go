@@ -95,6 +95,9 @@ func TestVMStatePathIsPersistent(t *testing.T) {
 func TestBuildVMExecutorByMode(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	assert.IsType(t, &upgrade.ScriptExecutor{}, buildVMExecutor(logger, modeNative))
-	assert.IsType(t, &upgrade.ScriptExecutor{}, buildVMExecutor(logger, modeDocker))
+	config := upgrade.NewHolder(upgrade.NewFileConfigStore(filepath.Join(t.TempDir(), "config.json")),
+		upgrade.ScriptExecutorFields())
+
+	assert.IsType(t, &upgrade.ScriptExecutor{}, buildVMExecutor(logger, modeNative, config))
+	assert.IsType(t, &upgrade.ScriptExecutor{}, buildVMExecutor(logger, modeDocker, config))
 }

@@ -25,6 +25,7 @@ const (
 const (
 	statusRoute  = "/status"
 	upgradeRoute = "/upgrade"
+	configRoute  = "/config"
 )
 
 // clientTimeout bounds one call; every route answers from state already in memory.
@@ -81,6 +82,33 @@ func (c *Client) Handoff(ctx context.Context, req *Request) (Acceptance, error) 
 	}
 
 	return acceptance, nil
+}
+
+// Configure delivers a RuntimeConfig and returns what cwa-updater made live.
+// The config travels in the request, not on disk: on Kubernetes the two share
+// neither a filesystem nor a process namespace, and a signal cannot confirm a reload.
+func (c *Client) Configure(ctx context.Context, cfg RuntimeConfig) (ConfigAck, error) {
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		return ConfigAck{}, fmt.Errorf("encoding the updater config: %w", err)
+	}
+
+	resp, err := c.do(ctx, http.MethodPost, configRoute, body)
+	if err != nil {
+		return ConfigAck{}, err
+	}
+	defer closeBody(resp)
+
+	if resp.StatusCode != http.StatusOK {
+		return ConfigAck{}, refusal(resp)
+	}
+
+	var ack ConfigAck
+	if err := decode(resp, &ack); err != nil {
+		return ConfigAck{}, err
+	}
+
+	return ack, nil
 }
 
 // Status reads the upgrade cwa-updater holds. ErrNoState means idle, the steady state.

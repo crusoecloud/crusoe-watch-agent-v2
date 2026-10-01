@@ -280,7 +280,7 @@ func startDataPlane(
 // buildDispatcher wires the command dispatcher with all command handlers.
 func buildDispatcher(
 	loop *heartbeat.Loop, deps command.Deps, k8sRT *k8sRuntime, uploader command.Uploader,
-	updater command.Updater, ident *identity.Identity, logger *slog.Logger,
+	updater *upgrade.Client, ident *identity.Identity, logger *slog.Logger,
 ) *command.Dispatcher {
 	disp := command.NewDispatcher(loop, deps.Store, logger)
 	disp.Register(command.ConfigApplyCommand, command.NewConfigApply(deps))
@@ -293,6 +293,7 @@ func buildDispatcher(
 		func() string { return ident.AgentID },
 		command.WithUpgradeNotifier(loop.MarkUpgradeHandedOff),
 	))
+	disp.Register(command.ConfigureUpdaterCommand, command.NewConfigureUpdater(updater))
 
 	// report.bug is only registered when a platform generator could be built;
 	// otherwise the agent runs degraded and the command is acked as FAILED.

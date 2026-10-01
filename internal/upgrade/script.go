@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +19,13 @@ import (
 const (
 	defaultInstallerPath    = "/etc/crusoe/crusoe_watch_agent/crusoe_watch_agent.sh"
 	defaultAgentVersionFile = "/etc/crusoe/crusoe_watch_agent/VERSION"
+)
+
+// Where configure-updater's values reach the installer. Both are contracts with
+// vm/crusoe_watch_agent.sh.
+const (
+	installerReleaseBaseEnv     = "CWA_RELEASE_BASE_URL"
+	installerDownloadBackoffEnv = "CWA_DOWNLOAD_BACKOFF_MAX_SEC"
 )
 
 // The installer subcommands an upgrade and a rollback map onto. Both take the
@@ -37,9 +45,15 @@ const killGracePeriod = 10 * time.Second
 
 var errWrongVersionInstalled = errors.New("the installer left the wrong version installed")
 
+// ScriptExecutorFields are the config fields the VM executor reads.
+func ScriptExecutorFields() []string {
+	return []string{FieldDownloadURLBase, FieldRollbackTimeoutMin, FieldDownloadBackoffMaxSec}
+}
+
 // ScriptRunner runs one installer invocation and returns its combined output.
+// env carries "KEY=value" overrides, added to the parent environment.
 type ScriptRunner interface {
-	Run(ctx context.Context, script string, args []string) ([]byte, error)
+	Run(ctx context.Context, script string, args, env []string) ([]byte, error)
 }
 
 // ExecScriptRunner runs the installer as a child process.
@@ -62,12 +76,16 @@ func NewScriptRunner(logger *slog.Logger) ExecScriptRunner {
 //
 // The installer shells out to apt-get, wget and systemctl, so cancellation runs
 // it in its own process group and signals the group.
-func (r ExecScriptRunner) Run(ctx context.Context, script string, args []string) ([]byte, error) {
+func (r ExecScriptRunner) Run(ctx context.Context, script string, args, env []string) ([]byte, error) {
 	if r.Logger != nil {
-		r.Logger.Info("running the installer", "script", script, "args", args)
+		r.Logger.Info("running the installer", "script", script, "args", args, "env", env)
 	}
 
 	cmd := exec.CommandContext(ctx, script, args...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil {
@@ -116,8 +134,12 @@ type ScriptConfig struct {
 	// VersionFile is where the installer records the version it installed. Empty
 	// uses defaultAgentVersionFile.
 	VersionFile string
-	// RollbackWindow bounds the whole attempt. Zero uses defaultRollbackWindow.
+	// RollbackWindow bounds the whole attempt. Zero uses defaultRollbackWindow;
+	// a configure-updater value takes precedence.
 	RollbackWindow time.Duration
+	// Settings is the live configure-updater config, read per run. Nil keeps
+	// RollbackWindow.
+	Settings *Holder
 }
 
 // ScriptExecutor upgrades a VM agent by running the installer already on the
@@ -135,6 +157,7 @@ type ScriptExecutor struct {
 	script         string
 	versionFile    string
 	rollbackWindow time.Duration
+	settings       *Holder
 }
 
 // NewScriptExecutor returns an Executor backed by the host's installer.
@@ -158,13 +181,14 @@ func NewScriptExecutor(cfg ScriptConfig) *ScriptExecutor {
 		script:         cfg.Script,
 		versionFile:    cfg.VersionFile,
 		rollbackWindow: cfg.RollbackWindow,
+		settings:       cfg.Settings,
 	}
 }
 
 // Upgrade moves the host to TargetVersion, then waits for the agent to come back
 // and reach the control plane. Both steps share one deadline, the rollback window.
 func (e *ScriptExecutor) Upgrade(ctx context.Context, state *State) error {
-	ctx, cancel := context.WithTimeout(ctx, e.rollbackWindow)
+	ctx, cancel := context.WithTimeout(ctx, e.window())
 	defer cancel()
 
 	if err := e.run(ctx, upgradeSubcommand, state.TargetVersion); err != nil {
@@ -187,7 +211,7 @@ func (e *ScriptExecutor) Upgrade(ctx context.Context, state *State) error {
 // It is a no-op when the host already records that version, which is the case
 // when an upgrade was interrupted before the installer changed anything.
 func (e *ScriptExecutor) Rollback(ctx context.Context, state *State) error {
-	ctx, cancel := context.WithTimeout(ctx, e.rollbackWindow)
+	ctx, cancel := context.WithTimeout(ctx, e.window())
 	defer cancel()
 
 	installed, err := e.installedVersion()
@@ -216,7 +240,7 @@ func (e *ScriptExecutor) Rollback(ctx context.Context, state *State) error {
 
 // run drives the installer to one version and confirms the host recorded it.
 func (e *ScriptExecutor) run(ctx context.Context, subcommand, version string) error {
-	if _, err := e.runner.Run(ctx, e.script, []string{subcommand, version}); err != nil {
+	if _, err := e.runner.Run(ctx, e.script, []string{subcommand, version}, e.env()); err != nil {
 		return fmt.Errorf("running %s %s: %w", subcommand, version, err)
 	}
 
@@ -233,6 +257,30 @@ func (e *ScriptExecutor) run(ctx context.Context, subcommand, version string) er
 	e.logger.Info("installer completed", "subcommand", subcommand, "version", version)
 
 	return nil
+}
+
+// window is the deadline one attempt gets, preferring a delivered value.
+func (e *ScriptExecutor) window() time.Duration {
+	return attemptWindow(e.settings, e.rollbackWindow)
+}
+
+// env carries the configure-updater overrides the installer reads. Empty leaves
+// it on its own defaults.
+func (e *ScriptExecutor) env() []string {
+	cfg := e.settings.Get()
+
+	var vars []string
+
+	if cfg.DownloadURLBase != "" {
+		vars = append(vars, installerReleaseBaseEnv+"="+cfg.DownloadURLBase)
+	}
+
+	if cfg.DownloadBackoffMaxSec > 0 {
+		vars = append(vars,
+			installerDownloadBackoffEnv+"="+strconv.Itoa(cfg.DownloadBackoffMaxSec))
+	}
+
+	return vars
 }
 
 // installedVersion is the version the installer last recorded on this host.

@@ -25,13 +25,21 @@ done
 CMS_BASE_URL="https://cms-monitoring.crusoecloud.com"
 
 # Where a named version's assets live, and whatever holds the "latest" pointer.
-GITHUB_RELEASE_BASE_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2/releases/download"
+# CWA_RELEASE_BASE_URL points the first at an internal mirror (configure-updater's
+# download_url_base). "latest" stays on GitHub: a mirror has no such alias.
+RELEASE_BASE_URL="${CWA_RELEASE_BASE_URL:-https://github.com/crusoecloud/crusoe-watch-agent-v2/releases/download}"
 GITHUB_LATEST_RELEASE_URL="https://github.com/crusoecloud/crusoe-watch-agent-v2/releases/latest/download"
 if [[ "$AGENT_VERSION" == "dev" ]]; then
     GITHUB_RELEASE_URL="$GITHUB_LATEST_RELEASE_URL"
 else
-    GITHUB_RELEASE_URL="${GITHUB_RELEASE_BASE_URL}/vm/${AGENT_VERSION}"
+    GITHUB_RELEASE_URL="${RELEASE_BASE_URL}/vm/${AGENT_VERSION}"
 fi
+# Release fetches retry on the same schedule as the Kubernetes registry calls:
+# a transient failure would otherwise fail a whole upgrade round.
+DOWNLOAD_ATTEMPTS=5
+DOWNLOAD_DELAY_SEC=2
+DOWNLOAD_MAX_DELAY_SEC="${CWA_DOWNLOAD_BACKOFF_MAX_SEC:-30}"
+DOWNLOAD_TIMEOUT=30
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/crusoe/crusoe_watch_agent"
 SECRETS_DIR="/etc/crusoe/secrets"
@@ -183,6 +191,23 @@ fetch_bundle() {
     SCRIPT_DIR="$DOWNLOAD_DIR"
 }
 
+# Download $1 to $2, retrying with exponential backoff. The wait doubles from
+# DOWNLOAD_DELAY_SEC up to DOWNLOAD_MAX_DELAY_SEC, plus up to 1s of jitter so a
+# fleet-wide upgrade does not retry in lockstep.
+download_with_retry() {
+    local url="$1" dest="$2" delay="$DOWNLOAD_DELAY_SEC" attempt
+    ((delay > DOWNLOAD_MAX_DELAY_SEC)) && delay="$DOWNLOAD_MAX_DELAY_SEC"
+    for ((attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++)); do
+        wget -q --tries=1 --timeout="$DOWNLOAD_TIMEOUT" -O "$dest" "$url" && return 0
+        ((attempt == DOWNLOAD_ATTEMPTS)) && break
+        status "Retrying ${url} in ${delay}s (attempt ${attempt}/${DOWNLOAD_ATTEMPTS})..."
+        sleep "$(printf '%d.%03d' "$delay" "$((RANDOM % 1000))")"
+        ((delay *= 2))
+        ((delay > DOWNLOAD_MAX_DELAY_SEC)) && delay="$DOWNLOAD_MAX_DELAY_SEC"
+    done
+    return 1
+}
+
 # Download $2 and the signed manifest from release URL $1 into a fresh temp
 # directory, verify $2 against the manifest, and leave the path in DOWNLOAD_DIR.
 # $3 is the version the verified asset is cached under.
@@ -206,7 +231,7 @@ fetch_verified() {
     status "Downloading ${name}..."
     local f
     for f in "$name" SHA256SUMS SHA256SUMS.sig; do
-        wget -q -O "${DOWNLOAD_DIR}/${f}" "${base_url}/${f}" \
+        download_with_retry "${base_url}/${f}" "${DOWNLOAD_DIR}/${f}" \
             || error_exit "Failed to download ${base_url}/${f}"
     done
 
@@ -1271,11 +1296,15 @@ do_upgrade() {
 
     local target_version="$TARGET_VERSION" release_url
     if [[ -n "$target_version" ]]; then
-        release_url="${GITHUB_RELEASE_BASE_URL}/vm/${target_version}"
+        release_url="${RELEASE_BASE_URL}/vm/${target_version}"
     else
         # Every release carries a VERSION asset naming its tag.
         release_url="$GITHUB_LATEST_RELEASE_URL"
-        target_version=$(wget -qO- "${release_url}/VERSION" 2>/dev/null | tr -d '[:space:]') || true
+        local version_file
+        version_file=$(mktemp)
+        download_with_retry "${release_url}/VERSION" "$version_file" \
+            && target_version=$(tr -d '[:space:]' < "$version_file")
+        rm -f "$version_file"
         [[ -n "$target_version" ]] \
             || error_exit "Could not fetch the latest version from ${release_url}/VERSION."
     fi

@@ -31,6 +31,7 @@ const (
 	healthPath  = "/health"
 	statusPath  = "/status"
 	upgradePath = "/upgrade"
+	configPath  = "/config"
 
 	readHeaderTimeout = 10 * time.Second
 	shutdownTimeout   = 5 * time.Second
@@ -39,6 +40,10 @@ const (
 	// the /run tmpfs: a power loss mid-upgrade must not drop the record. Docker
 	// reaches the same file because the containers mount /etc/crusoe itself.
 	vmStatePath = "/etc/crusoe/crusoe_watch_agent/upgrade-request.json"
+
+	// vmConfigPath is where a configure-updater delivery is persisted on VM
+	// targets, alongside the upgrade record.
+	vmConfigPath = "/etc/crusoe/crusoe_watch_agent/updater-config.json"
 
 	// installModeFile is written by the VM installer. cwa-manager reads the same
 	// file, so the two processes cannot disagree about the host they share.
@@ -99,6 +104,7 @@ type errorResponse struct {
 type server struct {
 	logger  *slog.Logger
 	upgrade *upgrade.Service
+	config  *upgrade.Holder
 }
 
 func main() {
@@ -125,9 +131,15 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	upgrades, err := buildUpgradeService(logger)
+	upgrades, config, err := buildUpgradeService(logger)
 	if err != nil {
 		return err
+	}
+
+	// A host that cannot be configured must still be upgradable, so a config
+	// that will not load leaves the defaults in place.
+	if err := config.Load(ctx); err != nil {
+		logger.Error("could not load the updater config; keeping defaults", "error", err)
 	}
 
 	// Recover before serving, so the first /health and /status reads already
@@ -139,14 +151,15 @@ func run() error {
 	// Drives the collection window, including one left open by a restart.
 	go upgrades.Run(ctx)
 
-	return serve(ctx, logger, &server{logger: logger, upgrade: upgrades})
+	return serve(ctx, logger, &server{logger: logger, upgrade: upgrades, config: config})
 }
 
-// buildUpgradeService wires the upgrade state for the host this is running on.
-func buildUpgradeService(logger *slog.Logger) (*upgrade.Service, error) {
+// buildUpgradeService wires the upgrade state for the host this is running on,
+// and the configure-updater config the executor reads.
+func buildUpgradeService(logger *slog.Logger) (*upgrade.Service, *upgrade.Holder, error) {
 	mode, err := detectInstallMode(installModeFile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	logger.Info("install mode detected", "mode", mode)
@@ -155,7 +168,9 @@ func buildUpgradeService(logger *slog.Logger) (*upgrade.Service, error) {
 		return buildKubernetesService(logger)
 	}
 
-	return buildVMService(logger, mode), nil
+	service, config := buildVMService(logger, mode)
+
+	return service, config, nil
 }
 
 // detectInstallMode reports where cwa-updater is running, from the same two
@@ -184,24 +199,25 @@ func detectInstallMode(modeFile string) (installMode, error) {
 // buildVMService wires the file-backed upgrade state used on systemd and Docker
 // hosts. One cwa-manager runs per host, so the collection window closes on its
 // handoff and there is no fan-in to wait for.
-func buildVMService(logger *slog.Logger, mode installMode) *upgrade.Service {
+func buildVMService(logger *slog.Logger, mode installMode) (*upgrade.Service, *upgrade.Holder) {
 	ackTimeout := minutesFromEnv(logger, "UPGRADE_ACK_TIMEOUT_MIN")
+	config := upgrade.NewHolder(upgrade.NewFileConfigStore(vmConfigPath), upgrade.ScriptExecutorFields())
 
-	logger.Info("upgrade state wired",
-		"mode", mode, "state_path", vmStatePath, "ack_timeout", ackTimeout)
+	logger.Info("upgrade state wired", "mode", mode, "state_path", vmStatePath,
+		"config_path", vmConfigPath, "ack_timeout", ackTimeout)
 
 	return upgrade.New(upgrade.Config{
 		Store:      upgrade.NewFileStore(vmStatePath),
 		Counter:    upgrade.SingleAgentCounter{},
-		Executor:   buildVMExecutor(logger, mode),
+		Executor:   buildVMExecutor(logger, mode, config),
 		Logger:     logger,
 		AckTimeout: ackTimeout,
-	})
+	}), config
 }
 
 // buildVMExecutor wires the executor both VM modes share: the installer on the
 // host owns the upgrade, and Docker only changes what it does once it runs.
-func buildVMExecutor(logger *slog.Logger, mode installMode) upgrade.Executor {
+func buildVMExecutor(logger *slog.Logger, mode installMode, config *upgrade.Holder) upgrade.Executor {
 	healthPort := portFromEnv(logger, "AGENT_HEALTH_PORT", defaultAgentHealthPort)
 	rollbackWindow := minutesFromEnv(logger, "UPGRADE_ROLLBACK_WINDOW_MIN")
 
@@ -213,29 +229,34 @@ func buildVMExecutor(logger *slog.Logger, mode installMode) upgrade.Executor {
 		Verifier:       upgrade.NewHostVerifier(logger, agentHealthHost, healthPort),
 		Logger:         logger,
 		RollbackWindow: rollbackWindow,
+		Settings:       config,
 	})
 }
 
 // buildKubernetesService wires the ConfigMap-backed upgrade state.
-func buildKubernetesService(logger *slog.Logger) (*upgrade.Service, error) {
+func buildKubernetesService(logger *slog.Logger) (*upgrade.Service, *upgrade.Holder, error) {
 	namespace := os.Getenv("POD_NAMESPACE")
 	if namespace == "" {
-		return nil, errMissingNamespace
+		return nil, nil, errMissingNamespace
 	}
 
 	restCfg, err := rest.InClusterConfig()
 	if err != nil {
-		return nil, fmt.Errorf("building in-cluster config: %w", err)
+		return nil, nil, fmt.Errorf("building in-cluster config: %w", err)
 	}
 
 	client, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		return nil, fmt.Errorf("building kubernetes client: %w", err)
+		return nil, nil, fmt.Errorf("building kubernetes client: %w", err)
 	}
 
 	configMap := getEnvOrDefault("CWA_UPDATER_HANDOFF_CONFIGMAP", defaultHandoffConfigMap)
 	daemonSet := getEnvOrDefault("AGENT_DAEMONSET", defaultAgentDaemonSet)
 	ackTimeout := minutesFromEnv(logger, "UPGRADE_ACK_TIMEOUT_MIN")
+
+	// Sharing the handoff ConfigMap keeps a delivery across a pod restart.
+	config := upgrade.NewHolder(upgrade.NewConfigMapConfigStore(client, namespace, configMap),
+		upgrade.HelmExecutorFields())
 
 	logger.Info("upgrade state wired", "namespace", namespace,
 		"handoff_configmap", configMap, "agent_daemonset", daemonSet, "ack_timeout", ackTimeout)
@@ -243,14 +264,16 @@ func buildKubernetesService(logger *slog.Logger) (*upgrade.Service, error) {
 	return upgrade.New(upgrade.Config{
 		Store:      upgrade.NewConfigMapStore(client, namespace, configMap),
 		Counter:    upgrade.NewDaemonSetCounter(client, namespace, daemonSet),
-		Executor:   buildExecutor(logger, client, namespace),
+		Executor:   buildExecutor(logger, client, namespace, config),
 		Logger:     logger,
 		AckTimeout: ackTimeout,
-	}), nil
+	}), config, nil
 }
 
 // buildExecutor wires the helm-backed executor and its post-upgrade health check.
-func buildExecutor(logger *slog.Logger, client kubernetes.Interface, namespace string) upgrade.Executor {
+func buildExecutor(
+	logger *slog.Logger, client kubernetes.Interface, namespace string, config *upgrade.Holder,
+) upgrade.Executor {
 	healthService := getEnvOrDefault("AGENT_HEALTH_SERVICE", defaultAgentHealthSvc)
 	healthPort := portFromEnv(logger, "AGENT_HEALTH_PORT", defaultAgentHealthPort)
 	rollbackWindow := minutesFromEnv(logger, "UPGRADE_ROLLBACK_WINDOW_MIN")
@@ -265,6 +288,7 @@ func buildExecutor(logger *slog.Logger, client kubernetes.Interface, namespace s
 		ChartRepo:      getEnvOrDefault("AGENT_CHART_REPO", defaultAgentChartRepo),
 		ChartName:      getEnvOrDefault("AGENT_CHART_NAME", defaultAgentChartName),
 		RollbackWindow: rollbackWindow,
+		Settings:       config,
 	}
 
 	logger.Info("upgrade executor wired",
@@ -316,6 +340,7 @@ func serve(ctx context.Context, logger *slog.Logger, srv *server) error {
 	mux.HandleFunc(healthPath, srv.handleHealth)
 	mux.HandleFunc(statusPath, srv.handleStatus)
 	mux.HandleFunc(upgradePath, srv.handleUpgrade)
+	mux.HandleFunc(configPath, srv.handleConfig)
 
 	httpSrv := &http.Server{
 		Addr:              ":" + port,
@@ -414,13 +439,44 @@ func (s *server) handleUpgrade(writer http.ResponseWriter, request *http.Request
 	s.respond(writer, http.StatusOK, acceptance)
 }
 
+// handleConfig takes a configure-updater delivery and serves the live config.
+// The 200 is the reload confirmation: it is written only once the config is persisted and live.
+func (s *server) handleConfig(writer http.ResponseWriter, request *http.Request) {
+	switch request.Method {
+	case http.MethodGet:
+		s.respond(writer, http.StatusOK, s.config.Ack())
+	case http.MethodPost:
+		var cfg upgrade.RuntimeConfig
+
+		body := http.MaxBytesReader(writer, request.Body, maxRequestBytes)
+		if err := json.NewDecoder(body).Decode(&cfg); err != nil {
+			s.respondError(writer, fmt.Errorf("%w: %w", upgrade.ErrInvalidRequest, err))
+
+			return
+		}
+
+		if err := s.config.Apply(request.Context(), cfg); err != nil {
+			s.respondError(writer, err)
+
+			return
+		}
+
+		ack := s.config.Ack()
+		s.logger.Info("updater config applied",
+			"applied", ack.Applied, "unsupported", ack.Unsupported)
+		s.respond(writer, http.StatusOK, ack)
+	default:
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // respondError maps a service error onto its status code. A refusal the control
 // plane should retry differs from one it should not, so the codes must be exact.
 func (s *server) respondError(writer http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 
 	switch {
-	case errors.Is(err, upgrade.ErrInvalidRequest):
+	case errors.Is(err, upgrade.ErrInvalidRequest), errors.Is(err, upgrade.ErrInvalidConfig):
 		status = http.StatusBadRequest
 	case errors.Is(err, upgrade.ErrConflict):
 		status = http.StatusConflict

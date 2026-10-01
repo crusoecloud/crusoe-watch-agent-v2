@@ -109,6 +109,12 @@ func errorMessage(out []byte) string {
 	return text
 }
 
+// HelmExecutorFields are the config fields the Kubernetes executor reads. Not
+// download_url_base: the chart comes from ChartRepo.
+func HelmExecutorFields() []string {
+	return []string{FieldRollbackTimeoutMin, FieldDownloadBackoffMaxSec}
+}
+
 // HelmConfig wires a HelmExecutor.
 type HelmConfig struct {
 	Runner Runner
@@ -130,8 +136,12 @@ type HelmConfig struct {
 	// clusters without outbound access; ChartName is the chart within it.
 	ChartRepo string
 	ChartName string
-	// RollbackWindow bounds the whole attempt. Zero uses defaultRollbackWindow.
+	// RollbackWindow bounds the whole attempt. Zero uses defaultRollbackWindow;
+	// a configure-updater value takes precedence.
 	RollbackWindow time.Duration
+	// Settings is the live configure-updater config, read per run. Nil keeps
+	// RollbackWindow.
+	Settings *Holder
 }
 
 // HelmExecutor upgrades the agent release with helm and restores the previous revision on failure.
@@ -147,6 +157,7 @@ type HelmExecutor struct {
 	chartName      string
 	cosignKey      string
 	rollbackWindow time.Duration
+	settings       *Holder
 	// backoff paces the registry calls; tests shorten it.
 	backoff backoff
 }
@@ -172,6 +183,7 @@ func NewHelmExecutor(cfg HelmConfig) *HelmExecutor {
 		chartName:      cfg.ChartName,
 		cosignKey:      cfg.CosignKey,
 		rollbackWindow: cfg.RollbackWindow,
+		settings:       cfg.Settings,
 		backoff: backoff{
 			attempts: fetchAttempts,
 			delay:    fetchDelay,
@@ -188,7 +200,7 @@ func NewHelmExecutor(cfg HelmConfig) *HelmExecutor {
 // changed: the signature check and the download are pure registry work and are
 // retried, while the apply happens once against an already-verified local chart.
 func (e *HelmExecutor) Upgrade(ctx context.Context, state *State) error {
-	ctx, cancel := context.WithTimeout(ctx, e.rollbackWindow)
+	ctx, cancel := context.WithTimeout(ctx, e.window())
 	defer cancel()
 
 	version := chartVersion(state.TargetVersion)
@@ -246,7 +258,7 @@ func (e *HelmExecutor) verifySignature(ctx context.Context, version string) erro
 
 	reference := strings.TrimPrefix(e.chartRef(), ociScheme) + ":" + version
 
-	if err := e.backoff.retry(ctx, e.logger, "the signature check on chart "+version,
+	if err := e.fetchBackoff().retry(ctx, e.logger, "the signature check on chart "+version,
 		func(ctx context.Context) error {
 			if _, err := e.cosign.Run(ctx, "verify", "--key", e.cosignKey, reference); err != nil {
 				return fmt.Errorf("cosign verify: %w", err)
@@ -270,7 +282,7 @@ func (e *HelmExecutor) pull(ctx context.Context, version string) (string, error)
 		return "", fmt.Errorf("creating a directory for the chart: %w", err)
 	}
 
-	if err := e.backoff.retry(ctx, e.logger, "the download of chart "+version,
+	if err := e.fetchBackoff().retry(ctx, e.logger, "the download of chart "+version,
 		func(ctx context.Context) error {
 			if _, err := e.runner.Run(ctx,
 				"pull", e.chartRef(), "--version", version, "--destination", dir); err != nil {
@@ -290,11 +302,28 @@ func (e *HelmExecutor) pull(ctx context.Context, version string) (string, error)
 	return filepath.Join(dir, fmt.Sprintf("%s-%s.tgz", e.chartName, version)), nil
 }
 
+// fetchBackoff is the registry retry schedule for one run. A delivered value
+// caps the wait between attempts; the run as a whole is bounded by window.
+func (e *HelmExecutor) fetchBackoff() backoff {
+	schedule := e.backoff
+
+	if capped := e.settings.Get().DownloadBackoffMaxSec; capped > 0 {
+		schedule.maxDelay = time.Duration(capped) * time.Second
+	}
+
+	return schedule
+}
+
+// window is the deadline one attempt gets, preferring a delivered value.
+func (e *HelmExecutor) window() time.Duration {
+	return attemptWindow(e.settings, e.rollbackWindow)
+}
+
 // Rollback restores the revision the release was on before the upgrade.
 //
 // It is a no-op when TargetVersion is not the deployed version.
 func (e *HelmExecutor) Rollback(ctx context.Context, state *State) error {
-	ctx, cancel := context.WithTimeout(ctx, e.rollbackWindow)
+	ctx, cancel := context.WithTimeout(ctx, e.window())
 	defer cancel()
 
 	deployed, err := e.deployedVersion(ctx)

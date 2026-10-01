@@ -27,10 +27,13 @@ type fakeScriptRunner struct {
 	err         error
 	// deadline is the one the last run saw, for asserting the rollback window.
 	deadline time.Time
+	// env is what the last run was handed, for asserting the installer overrides.
+	env []string
 }
 
-func (f *fakeScriptRunner) Run(ctx context.Context, script string, args []string) ([]byte, error) {
+func (f *fakeScriptRunner) Run(ctx context.Context, script string, args, env []string) ([]byte, error) {
 	f.calls = append(f.calls, append([]string{script}, args...))
+	f.env = env
 	f.deadline, _ = ctx.Deadline()
 
 	if f.err != nil {
@@ -238,6 +241,117 @@ func TestScriptUpgradeIsBoundedByTheRollbackWindow(t *testing.T) {
 
 	require.NoError(t, executor.Upgrade(context.Background(), scriptState("v1.4", "v1.3")))
 	assert.WithinDuration(t, time.Now().Add(time.Minute), h.runner.deadline, 5*time.Second)
+}
+
+// ---------------------------------------------------------------------------
+// configure-updater
+// ---------------------------------------------------------------------------
+
+// settingsHolder is a Holder already holding cfg, as one is after a delivery.
+func settingsHolder(t *testing.T, cfg RuntimeConfig) *Holder {
+	t.Helper()
+
+	holder := NewHolder(NewFileConfigStore(filepath.Join(t.TempDir(), "updater-config.json")), ScriptExecutorFields())
+	require.NoError(t, holder.Apply(context.Background(), cfg))
+
+	return holder
+}
+
+// Nothing rebuilds an executor between commands, so a delivered window has to
+// reach the next upgrade on its own.
+func TestScriptUpgradeUsesADeliveredRollbackWindow(t *testing.T) {
+	h := newScriptHost(t, "v1.3", "v1.4")
+
+	executor := NewScriptExecutor(ScriptConfig{
+		Runner:         h.runner,
+		Logger:         discardLogger(),
+		Script:         h.script,
+		VersionFile:    h.versionFile,
+		RollbackWindow: time.Minute,
+		Settings:       settingsHolder(t, RuntimeConfig{RollbackTimeoutMin: 30}),
+	})
+
+	require.NoError(t, executor.Upgrade(context.Background(), scriptState("v1.4", "v1.3")))
+	assert.WithinDuration(t, time.Now().Add(30*time.Minute), h.runner.deadline, 5*time.Second)
+}
+
+func TestScriptRollbackUsesADeliveredRollbackWindow(t *testing.T) {
+	h := newScriptHost(t, "v1.4", "v1.3")
+
+	executor := NewScriptExecutor(ScriptConfig{
+		Runner:         h.runner,
+		Logger:         discardLogger(),
+		Script:         h.script,
+		VersionFile:    h.versionFile,
+		RollbackWindow: time.Minute,
+		Settings:       settingsHolder(t, RuntimeConfig{RollbackTimeoutMin: 30}),
+	})
+
+	require.NoError(t, executor.Rollback(context.Background(), scriptState("v1.4", "v1.3")))
+	assert.WithinDuration(t, time.Now().Add(30*time.Minute), h.runner.deadline, 5*time.Second)
+}
+
+// An unset window leaves the executor on what it was built with.
+func TestScriptUpgradeKeepsItsOwnWindowWhenTheConfigOmitsOne(t *testing.T) {
+	h := newScriptHost(t, "v1.3", "v1.4")
+
+	executor := NewScriptExecutor(ScriptConfig{
+		Runner:         h.runner,
+		Logger:         discardLogger(),
+		Script:         h.script,
+		VersionFile:    h.versionFile,
+		RollbackWindow: time.Minute,
+		Settings:       settingsHolder(t, RuntimeConfig{DownloadURLBase: "https://mirror.internal"}),
+	})
+
+	require.NoError(t, executor.Upgrade(context.Background(), scriptState("v1.4", "v1.3")))
+	assert.WithinDuration(t, time.Now().Add(time.Minute), h.runner.deadline, 5*time.Second)
+}
+
+// The installer owns downloading, so an env override is the only way through.
+func TestScriptUpgradePassesTheMirrorToTheInstaller(t *testing.T) {
+	h := newScriptHost(t, "v1.3", "v1.4")
+
+	executor := NewScriptExecutor(ScriptConfig{
+		Runner:      h.runner,
+		Logger:      discardLogger(),
+		Script:      h.script,
+		VersionFile: h.versionFile,
+		Settings:    settingsHolder(t, RuntimeConfig{DownloadURLBase: "https://mirror.internal/releases"}),
+	})
+
+	require.NoError(t, executor.Upgrade(context.Background(), scriptState("v1.4", "v1.3")))
+	assert.Equal(t, []string{"CWA_RELEASE_BASE_URL=https://mirror.internal/releases"}, h.runner.env)
+}
+
+// Both overrides travel together, so a delivery that sets the two does not lose one.
+func TestScriptUpgradePassesTheBackoffCapToTheInstaller(t *testing.T) {
+	h := newScriptHost(t, "v1.3", "v1.4")
+
+	executor := NewScriptExecutor(ScriptConfig{
+		Runner:      h.runner,
+		Logger:      discardLogger(),
+		Script:      h.script,
+		VersionFile: h.versionFile,
+		Settings: settingsHolder(t, RuntimeConfig{
+			DownloadURLBase:       "https://mirror.internal/releases",
+			DownloadBackoffMaxSec: 45,
+		}),
+	})
+
+	require.NoError(t, executor.Upgrade(context.Background(), scriptState("v1.4", "v1.3")))
+	assert.Equal(t, []string{
+		"CWA_RELEASE_BASE_URL=https://mirror.internal/releases",
+		"CWA_DOWNLOAD_BACKOFF_MAX_SEC=45",
+	}, h.runner.env)
+}
+
+// With no mirror the installer keeps its own default, not an empty override.
+func TestScriptUpgradePassesNoEnvironmentWithoutAMirror(t *testing.T) {
+	h := newScriptHost(t, "v1.3", "v1.4")
+
+	require.NoError(t, h.executor().Upgrade(context.Background(), scriptState("v1.4", "v1.3")))
+	assert.Empty(t, h.runner.env)
 }
 
 func TestLastLinesKeepsTheEnd(t *testing.T) {

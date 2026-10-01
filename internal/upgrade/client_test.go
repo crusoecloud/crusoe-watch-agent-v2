@@ -233,3 +233,73 @@ func TestClientHonoursContextCancellation(t *testing.T) {
 	require.ErrorIs(t, err, ErrUpdaterUnavailable)
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+// ---------------------------------------------------------------------------
+// Configure
+// ---------------------------------------------------------------------------
+
+// configServer serves handler and returns a Client pointed at it, plus the
+// config body it last decoded.
+func configServer(t *testing.T, handler http.HandlerFunc) (*Client, *RuntimeConfig) {
+	t.Helper()
+
+	got := &RuntimeConfig{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/config", r.URL.Path)
+		_ = json.NewDecoder(r.Body).Decode(got)
+		handler(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	parsed, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+
+	return NewClient(parsed.Hostname(), parsed.Port()), got
+}
+
+func TestClientConfigureDeliversTheConfigAndReadsBackWhatWentLive(t *testing.T) {
+	t.Parallel()
+
+	sent := RuntimeConfig{DownloadURLBase: "https://mirror.internal", RollbackTimeoutMin: 20}
+
+	client, got := configServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(NewConfigAck(sent, ScriptExecutorFields()))
+	})
+
+	ack, err := client.Configure(context.Background(), sent)
+	require.NoError(t, err)
+
+	assert.Equal(t, sent, *got)
+	assert.Equal(t, sent, ack.Config)
+	assert.Equal(t, []string{"download_url_base", "rollback_timeout_min"}, ack.Applied)
+}
+
+// A refused config must not read as retryable: the same body would be refused again.
+func TestClientConfigureSurfacesARefusal(t *testing.T) {
+	t.Parallel()
+
+	client, _ := configServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "invalid updater configuration: rollback_timeout_min must be between 5 and 120, got 999",
+		})
+	})
+
+	_, err := client.Configure(context.Background(), RuntimeConfig{RollbackTimeoutMin: 999})
+
+	require.ErrorIs(t, err, ErrInvalidRequest)
+	assert.Contains(t, err.Error(), "rollback_timeout_min")
+}
+
+func TestClientConfigureSurfacesAnUnreachableUpdater(t *testing.T) {
+	t.Parallel()
+
+	client, _ := configServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	_, err := client.Configure(context.Background(), RuntimeConfig{RollbackTimeoutMin: 20})
+	require.ErrorIs(t, err, ErrUpdaterUnavailable)
+}

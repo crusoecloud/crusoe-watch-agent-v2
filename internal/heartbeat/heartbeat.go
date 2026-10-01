@@ -43,6 +43,7 @@ func capabilities() []string {
 		"report_bug",
 		"rate_limit",
 		"auto_upgrade",
+		"configure_updater",
 	}
 }
 
