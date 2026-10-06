@@ -6,6 +6,7 @@
 #   MODE                vm | k8s | updater          (required)
 #   RELEASE_SHA         commit to release           (default: HEAD)
 #   DRY_RUN             true | false                (default: false)
+#   RELEASE_BUMP        auto | patch | minor        (default: auto)
 #   GHCR_REGISTRY       e.g. ghcr.io/crusoecloud/crusoe-watch-agent-v2
 #   GHCR_TOKEN          ghcr push token
 #   GHCR_USERNAME       ghcr user
@@ -14,7 +15,7 @@
 #   GIT_PUSH_URL        credential-free, e.g. https://gitlab.com/<group>/<proj>.git
 #
 # What it does, in order:
-#   1. Resolve RELEASE_SHA, compute next per-mode version (e.g. v1.4).
+#   1. Resolve RELEASE_SHA, compute next per-mode version (e.g. v2.1.0).
 #   2. Check out a worktree at RELEASE_SHA (clean, isolated).
 #   3. Render templates from RELEASE_SHA's dependencies.yaml.
 #   4. Publish artifacts: cosign-sign; for k8s/updater, push the mode's chart to
@@ -40,6 +41,24 @@ MODE_PATHS_updater="k8s/cwa-updater-chart/ cmd/cwa-updater/ internal/ dependenci
 mode_paths() {
     local v="MODE_PATHS_${1}"
     echo "${!v}"
+}
+
+# RELEASE_BUMP=auto: minor if a feat commit touched this mode since the last tag, else patch.
+resolve_bump() {
+    local prev feat_re='^feat(\([^)]+\))?!?:'
+
+    if [[ "$RELEASE_BUMP" != auto ]]; then
+        echo "$RELEASE_BUMP"
+        return
+    fi
+
+    prev=$(git tag -l "${MODE}/v*" | sort -V | tail -n1 || true)
+    if [[ -n "$prev" ]] && git log --first-parent --format='%s' "${prev}..${RELEASE_SHA}" -- $(mode_paths "$MODE") \
+        | grep -qE "$feat_re"; then
+        echo minor
+    else
+        echo patch
+    fi
 }
 
 # Run "$@" with the release signing key at $COSIGN_KEY, removing it afterwards whether or not the command succeeds.
@@ -170,13 +189,7 @@ publish_vm() {
 # Must match render.sh's chart_version_for: it stamps Chart.yaml, and helm
 # package names the .tgz from that.
 chart_version_for() {
-    local v="${1#v}"
-
-    if [[ "$v" == *.*.* ]]; then
-        echo "$v"
-    else
-        echo "${v}.0"
-    fi
+    echo "${1#v}"
 }
 
 publish_k8s() {
@@ -244,8 +257,10 @@ publish_chart() {
 MODE="${MODE:-}"
 RELEASE_SHA="${RELEASE_SHA:-}"
 DRY_RUN="${DRY_RUN:-false}"
+RELEASE_BUMP="${RELEASE_BUMP:-auto}"
 
 case "$MODE" in vm|k8s|updater) ;; *) die "MODE must be vm, k8s or updater" ;; esac
+case "$RELEASE_BUMP" in auto|patch|minor) ;; *) die "RELEASE_BUMP must be auto, patch or minor" ;; esac
 
 if [[ -z "$RELEASE_SHA" ]]; then
     RELEASE_SHA="$(git rev-parse HEAD)"
@@ -253,11 +268,13 @@ fi
 git cat-file -e "${RELEASE_SHA}^{commit}" 2>/dev/null \
     || die "RELEASE_SHA ${RELEASE_SHA} is not a commit in this repo"
 
-NEW_VERSION="$("${SCRIPTS}/compute-next-version.sh" "$MODE")"
+BUMP="$(resolve_bump)"
+NEW_VERSION="$("${SCRIPTS}/compute-next-version.sh" "$MODE" "$BUMP")"
 NEW_TAG="${MODE}/${NEW_VERSION}"
 
 log "Mode:          ${MODE}"
 log "Release SHA:   ${RELEASE_SHA}"
+log "Bump:          ${BUMP} (RELEASE_BUMP=${RELEASE_BUMP})"
 log "Computed tag:  ${NEW_TAG}"
 
 if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then

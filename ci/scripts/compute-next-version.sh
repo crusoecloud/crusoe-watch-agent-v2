@@ -3,38 +3,42 @@
 # most recent matching git tag. Writes ONLY the new version string to stdout.
 #
 # Usage:
-#   compute-next-version.sh vm
-#   compute-next-version.sh k8s
-#   compute-next-version.sh updater
+#   compute-next-version.sh <vm|k8s|updater> [patch|minor]   (default: patch)
 
 set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-MODE="${1:?usage: compute-next-version.sh <vm|k8s|updater>}"
+MODE="${1:?usage: compute-next-version.sh <vm|k8s|updater> [patch|minor]}"
+BUMP="${2:-patch}"
 case "$MODE" in vm|k8s|updater) ;; *) die "unknown mode: ${MODE}" ;; esac
+case "$BUMP" in patch|minor) ;; *) die "unknown bump: ${BUMP}" ;; esac
 
 # Pull tags so a brand-new clone (or shallow CI checkout) sees them.
 git fetch --tags --quiet origin 2>/dev/null || true
 
-# Pick the highest-numbered <mode>/vX.Y tag using version sort.
+# Pick the highest-numbered <mode>/v* tag using version sort.
 latest=$(git tag -l "${MODE}/v*" | sort -V | tail -n1 || true)
 
-# First release for a mode. vm/k8s continue the crusoe-watch-agent v1 line, so start at v2.0.
-# cwa-updater is a new component with no version relationship to agent, so start at v1.0.
+# First release: vm/k8s continue the v1 agent line at v2; cwa-updater is its own line at v1.
 if [[ -z "$latest" ]]; then
     case "$MODE" in
-        updater) echo "v1.0" ;;
-        *)       echo "v2.0" ;;
+        updater) echo "v1.0.0" ;;
+        *)       echo "v2.0.0" ;;
     esac
     exit 0
 fi
 
-# Parse vX.Y. Anything else is treated as an error.
-if [[ ! "$latest" =~ ^${MODE}/v([0-9]+)\.([0-9]+)$ ]]; then
-    die "tag ${latest} does not match expected pattern ${MODE}/vX.Y"
+if [[ ! "$latest" =~ ^${MODE}/v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    die "tag ${latest} does not match expected pattern ${MODE}/vX.Y.Z"
 fi
 
 major="${BASH_REMATCH[1]}"
 minor="${BASH_REMATCH[2]}"
-echo "v${major}.$((minor + 1))"
+patch="${BASH_REMATCH[3]}"
+
+if [[ "$BUMP" == minor ]]; then
+    echo "v${major}.$((minor + 1)).0"
+else
+    echo "v${major}.${minor}.$((patch + 1))"
+fi

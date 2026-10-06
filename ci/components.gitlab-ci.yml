@@ -30,7 +30,7 @@
   script:
     - |
       # Date-SHA tag is the only tag this job publishes. The release job is
-      # responsible for the human-facing release tags (vm/v1.4 etc.).
+      # responsible for the human-facing release tags (vm/v2.1.0 etc.).
       DATE_TAG="$(date -u +%Y.%m.%d)-${CI_COMMIT_SHORT_SHA}"
       # A merge request only gates: one arch catches a build break, and every
       # extra platform is another round of base-image manifest pulls. Publishes

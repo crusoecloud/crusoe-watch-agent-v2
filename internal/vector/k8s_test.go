@@ -420,7 +420,7 @@ func TestK8sLogsEnvelopeContract(t *testing.T) {
 
 	enrich := transforms["enrich_logs"].(map[string]any)["source"].(string)
 	assert.Contains(t, enrich, ".payload = raw")
-	assert.Contains(t, enrich, `.crusoe_watch_version = "${AGENT_VERSION}"`)
+	assert.Contains(t, enrich, `.crusoe_watch_version = "v${AGENT_VERSION}"`)
 	assert.NotContains(t, enrich, `"crusoe_agent_version"`)
 	assert.NotContains(t, enrich, `"chart_version"`)
 	assert.NotContains(t, enrich, `.crusoe =`)

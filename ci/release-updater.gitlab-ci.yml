@@ -7,6 +7,7 @@
 # Variables the operator can set when re-running ("Run pipeline" UI):
 #   RELEASE_SHA  commit to release (default: pipeline's commit)
 #   DRY_RUN      "true" to print what would happen without tagging/publishing
+#   RELEASE_BUMP auto (default), patch or minor
 #
 # Secrets — same set as release:vm / release:k8s.
 
@@ -22,6 +23,7 @@ release:updater:
     MODE: updater
     RELEASE_SHA: ""
     DRY_RUN: "false"
+    RELEASE_BUMP: "auto"
     GHCR_REGISTRY: "ghcr.io/crusoecloud/crusoe-watch-agent-v2"
     GITHUB_REPO: "crusoecloud/crusoe-watch-agent-v2"
   before_script:

@@ -179,9 +179,9 @@ if !matched {
 `
 
 // vrlEnrichLogsK8s is the K8s version of the envelope assembly.
-// crusoe_watch_version is populated from AGENT_VERSION (helm AppVersion).
+// crusoe_watch_version is the release version: "v" + AGENT_VERSION (helm AppVersion).
 const vrlEnrichLogsK8s = vrlEnrichLogsPrefix +
-	`.crusoe_watch_version = "${AGENT_VERSION}"` +
+	`.crusoe_watch_version = "v${AGENT_VERSION}"` +
 	vrlEnrichLogsSuffix
 
 // ---------------------------------------------------------------------------

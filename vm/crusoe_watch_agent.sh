@@ -1430,8 +1430,8 @@ Examples:
   sudo ./crusoe_watch_agent.sh install --no-docker
   sudo ./crusoe_watch_agent.sh install --token "$(crusoe monitoring tokens create -f token)"
   sudo ./crusoe_watch_agent.sh upgrade
-  sudo ./crusoe_watch_agent.sh upgrade v1.4
-  sudo ./crusoe_watch_agent.sh rollback v1.3
+  sudo ./crusoe_watch_agent.sh upgrade v2.1.0
+  sudo ./crusoe_watch_agent.sh rollback v2.0.0
   sudo ./crusoe_watch_agent.sh refresh-token
   sudo ./crusoe_watch_agent.sh update-updater
   sudo ./crusoe_watch_agent.sh uninstall
@@ -1455,7 +1455,7 @@ case "$COMMAND" in
             TARGET_VERSION="$1"
             shift
         elif [[ "$COMMAND" == "rollback" ]]; then
-            error_exit "rollback requires a version, e.g. '$0 rollback v1.3'."
+            error_exit "rollback requires a version, e.g. '$0 rollback v2.0.0'."
         fi
         ;;
 esac

@@ -46,7 +46,7 @@ The chosen mode persists, so later operations use the same script:
 
 ```bash
 sudo ./crusoe_watch_agent.sh upgrade         # upgrade in place, to the latest release
-sudo ./crusoe_watch_agent.sh rollback v1.3   # move back to an earlier release
+sudo ./crusoe_watch_agent.sh rollback v2.0.0 # move back to an earlier release
 sudo ./crusoe_watch_agent.sh refresh-token   # rotate the monitoring token
 sudo ./crusoe_watch_agent.sh uninstall       # remove (secrets preserved)
 sudo ./crusoe_watch_agent.sh help            # all commands and options
