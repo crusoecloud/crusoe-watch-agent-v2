@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,6 +21,9 @@ const (
 	defaultInstallerPath    = "/etc/crusoe/crusoe_watch_agent/crusoe_watch_agent.sh"
 	defaultAgentVersionFile = "/etc/crusoe/crusoe_watch_agent/VERSION"
 )
+
+// pendingMarker exists while a move may have left VERSION stale. Written by vm/crusoe_watch_agent.sh.
+const pendingMarker = ".upgrade-pending"
 
 // Where configure-updater's values reach the installer. Both are contracts with
 // vm/crusoe_watch_agent.sh.
@@ -208,8 +212,7 @@ func (e *ScriptExecutor) Upgrade(ctx context.Context, state *State) error {
 
 // Rollback moves the host back to RollbackVersion.
 //
-// It is a no-op when the host already records that version, which is the case
-// when an upgrade was interrupted before the installer changed anything.
+// It is a no-op when the host records that version and no move is pending.
 func (e *ScriptExecutor) Rollback(ctx context.Context, state *State) error {
 	ctx, cancel := context.WithTimeout(ctx, e.window())
 	defer cancel()
@@ -221,7 +224,12 @@ func (e *ScriptExecutor) Rollback(ctx context.Context, state *State) error {
 		return err
 	}
 
-	if installed == state.RollbackVersion {
+	pending, err := e.movePending()
+	if err != nil {
+		return err
+	}
+
+	if installed == state.RollbackVersion && !pending {
 		e.logger.Info("the host already records the rollback version; nothing to roll back",
 			"rollback_version", state.RollbackVersion)
 
@@ -281,6 +289,22 @@ func (e *ScriptExecutor) env() []string {
 	}
 
 	return vars
+}
+
+// movePending reports whether the pending marker exists.
+func (e *ScriptExecutor) movePending() (bool, error) {
+	marker := filepath.Join(filepath.Dir(e.versionFile), pendingMarker)
+
+	_, err := os.Stat(marker)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("checking for %s: %w", marker, err)
+	}
+
+	return true, nil
 }
 
 // installedVersion is the version the installer last recorded on this host.

@@ -46,6 +46,8 @@ SECRETS_DIR="/etc/crusoe/secrets"
 ENV_FILE="${CONFIG_DIR}/.env"
 # The crusoe-metrics-exporter release installed natively.
 CME_VERSION_FILE="${CONFIG_DIR}/CME_VERSION"
+# Exists while a move may have left VERSION stale. Read by cwa-updater.
+UPGRADE_PENDING_FILE="${CONFIG_DIR}/.upgrade-pending"
 # Verified release assets per version, so a rollback needs no network.
 RELEASES_DIR="${CONFIG_DIR}/releases"
 # The installed version and the one a rollback would restore.
@@ -1311,7 +1313,8 @@ do_upgrade() {
 
     status "Target version: ${target_version}"
 
-    if [[ "$installed_version" == "$target_version" ]]; then
+    # A pending marker means VERSION may be stale, so install again.
+    if [[ "$installed_version" == "$target_version" && ! -f "$UPGRADE_PENDING_FILE" ]]; then
         status "Already on ${target_version}. Nothing to do."
         return
     fi
@@ -1336,7 +1339,9 @@ do_upgrade() {
     fi
 
     # The move is performed by the target version's installer, not this one.
+    touch "$UPGRADE_PENDING_FILE"
     CWA_UPGRADE=1 "${DOWNLOAD_DIR}/crusoe_watch_agent.sh" install "${saved_args[@]}"
+    rm -f "$UPGRADE_PENDING_FILE"
 
     status "Now on ${target_version}."
 }

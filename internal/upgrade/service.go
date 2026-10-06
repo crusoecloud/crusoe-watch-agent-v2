@@ -398,6 +398,13 @@ func (s *Service) execute(ctx context.Context) {
 		"target_version", state.TargetVersion, "collected", len(state.AgentExecutions))
 
 	if err := s.executor.Upgrade(ctx, state); err != nil {
+		if stopping(ctx) {
+			s.logger.Warn("shutdown interrupted the upgrade; the next start rolls it back",
+				"error", err, "target_version", state.TargetVersion)
+
+			return
+		}
+
 		s.logger.Error("upgrade failed; rolling back",
 			"error", err, "target_version", state.TargetVersion,
 			"rollback_version", state.RollbackVersion)
@@ -412,6 +419,12 @@ func (s *Service) execute(ctx context.Context) {
 		ToVersion:   state.TargetVersion,
 		CompletedAt: time.Now().UTC(),
 	})
+}
+
+// stopping reports whether cwa-updater is shutting down. A step it cuts short
+// keeps its phase for resumeInterrupted.
+func stopping(ctx context.Context) bool {
+	return errors.Is(ctx.Err(), context.Canceled)
 }
 
 // resumeInterrupted rolls back an upgrade the previous process did not finish.
@@ -447,6 +460,13 @@ func (s *Service) rollback(ctx context.Context, reason string) {
 	}
 
 	if err := s.executor.Rollback(ctx, state); err != nil {
+		if stopping(ctx) {
+			s.logger.Warn("shutdown interrupted the rollback; the next start resumes it",
+				"error", err, "rollback_version", state.RollbackVersion)
+
+			return
+		}
+
 		s.logger.Error("rollback failed",
 			"error", err, "rollback_version", state.RollbackVersion)
 		s.finish(ctx, &Result{

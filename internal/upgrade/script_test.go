@@ -189,6 +189,17 @@ func TestScriptRollbackIsANoOpOnTheRollbackVersion(t *testing.T) {
 	assert.Empty(t, h.runner.calls)
 }
 
+// A pending marker means VERSION may be stale, so the rollback runs anyway.
+func TestScriptRollbackRunsWhenAMoveIsPending(t *testing.T) {
+	h := newScriptHost(t, "v1.3", "v1.3")
+	marker := filepath.Join(filepath.Dir(h.versionFile), pendingMarker)
+	require.NoError(t, os.WriteFile(marker, nil, 0o600))
+
+	require.NoError(t, h.executor().Rollback(context.Background(), scriptState("v1.4", "v1.3")))
+
+	assert.Equal(t, [][]string{{h.script, "rollback", "v1.3"}}, h.runner.calls)
+}
+
 // Reinstalling blind could replace a host that was never touched, so an
 // unreadable version record is a failure rather than an assumption.
 func TestScriptRollbackFailsWithoutAVersionRecord(t *testing.T) {

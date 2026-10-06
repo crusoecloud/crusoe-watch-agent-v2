@@ -105,6 +105,7 @@ type fakeExecutor struct {
 	rollbackErr   error
 	sawTarget     string
 	sawRollbackTo string
+	onRollback    func()
 }
 
 func (f *fakeExecutor) Upgrade(_ context.Context, state *State) error {
@@ -117,6 +118,10 @@ func (f *fakeExecutor) Upgrade(_ context.Context, state *State) error {
 func (f *fakeExecutor) Rollback(_ context.Context, state *State) error {
 	f.rollbacks++
 	f.sawRollbackTo = state.RollbackVersion
+
+	if f.onRollback != nil {
+		f.onRollback()
+	}
 
 	return f.rollbackErr
 }
@@ -652,6 +657,43 @@ func TestRollbackFailureIsFailed(t *testing.T) {
 	assert.Contains(t, store.state.Result.Reason, errStore.Error())
 	assert.Contains(t, store.state.Result.Reason, errRollback.Error())
 	assert.Equal(t, StatusFailed, svc.HealthStatus())
+}
+
+// A step cut short by shutdown keeps its phase for the next start.
+func TestShutdownLeavesTheStepToResume(t *testing.T) {
+	tests := []struct {
+		name      string
+		executor  *fakeExecutor
+		wantPhase Phase
+		rollbacks int
+	}{
+		{"during the upgrade", &fakeExecutor{upgradeErr: context.Canceled}, PhaseInProgress, 0},
+		{"during the rollback", &fakeExecutor{upgradeErr: errStore, rollbackErr: context.Canceled}, PhaseRollingBack, 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &memStore{}
+			svc := newCollectService(store, &fakeCounter{ready: 1}, tc.executor)
+
+			_, err := svc.Accept(context.Background(), handoff("agent-1", "cmd-1"))
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			if tc.rollbacks == 0 {
+				cancel()
+			} else {
+				tc.executor.onRollback = cancel
+			}
+			defer cancel()
+
+			svc.collectTick(ctx)
+
+			assert.Equal(t, tc.rollbacks, tc.executor.rollbacks)
+			assert.Equal(t, tc.wantPhase, store.state.Phase)
+			assert.Nil(t, store.state.Result)
+		})
+	}
 }
 
 // Spec — Agent Architecture startup table: an in_progress or rolling_back record
