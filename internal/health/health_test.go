@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,6 +32,7 @@ func (f fakeReportRunner) Health(context.Context) (string, error) { return f.ver
 func newTestCollector(vectorHealthURL, vectorMetricsURL, updaterURL string, isK8s bool) *Collector {
 	return &Collector{
 		client:            &http.Client{},
+		updaterClient:     &http.Client{},
 		logger:            slog.Default(),
 		vectorHealthURL:   vectorHealthURL,
 		vectorMetricsURL:  vectorMetricsURL,
@@ -41,13 +45,11 @@ func newTestCollector(vectorHealthURL, vectorMetricsURL, updaterURL string, isK8
 func TestNewCollector_EnvOverrides(t *testing.T) {
 	t.Setenv("VECTOR_API_PORT", "1111")
 	t.Setenv("VECTOR_METRICS_PORT", "2222")
-	t.Setenv("CWA_UPDATER_PORT", "3333")
 
 	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER, nil)
 
 	assert.Equal(t, "http://localhost:1111/health", c.vectorHealthURL)
 	assert.Equal(t, "http://localhost:2222/metrics", c.vectorMetricsURL)
-	assert.Equal(t, "http://localhost:3333/health", c.updaterHealthURL)
 	assert.False(t, c.isK8s)
 }
 
@@ -74,7 +76,33 @@ func TestNewCollector_Defaults(t *testing.T) {
 
 	assert.Equal(t, "http://localhost:8686/health", c.vectorHealthURL)
 	assert.Equal(t, "http://localhost:9598/metrics", c.vectorMetricsURL)
-	assert.Equal(t, "http://localhost:8786/health", c.updaterHealthURL)
+	assert.Equal(t, "http://cwa-updater/health", c.updaterHealthURL)
+}
+
+func TestNewCollector_VMUpdaterUsesSocket(t *testing.T) {
+	// t.TempDir() can exceed the macOS socket path limit.
+	dir, err := os.MkdirTemp("", "cu")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	socket := filepath.Join(dir, "api.sock")
+	t.Setenv("CWA_UPDATER_SOCKET", socket)
+
+	listener, err := net.Listen("unix", socket)
+	require.NoError(t, err)
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"idle","version":"v2.1.0"}`))
+	}))
+	srv.Listener = listener
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	c := NewCollector(slog.Default(), pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD, nil)
+	h := c.collectCwaUpdater(context.Background())
+
+	assert.Equal(t, pb.CwaComponentStatus_CWA_COMPONENT_STATUS_HEALTHY, h.GetStatus())
+	assert.Equal(t, "v2.1.0", h.GetVersion())
 }
 
 func TestCollectCwaManager(t *testing.T) {

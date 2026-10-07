@@ -45,6 +45,7 @@ type updaterHealthResponse struct {
 // Collector gathers health from all components.
 type Collector struct {
 	client            *http.Client
+	updaterClient     *http.Client
 	logger            *slog.Logger
 	vectorHealthURL   string
 	vectorMetricsURL  string
@@ -78,18 +79,27 @@ func getEnvOrDefault(key, def string) string {
 func NewCollector(logger *slog.Logger, installType pb.CwaInstallType, reportRunner reportRunnerChecker) *Collector {
 	vectorPort := getEnvOrDefault("VECTOR_API_PORT", defaultVectorAPIPort)
 	vectorMetricsPort := getEnvOrDefault("VECTOR_METRICS_PORT", defaultVectorMetricsPort)
-	updaterPort := getEnvOrDefault("CWA_UPDATER_PORT", defaultCwaUpdaterPort)
-	// On K8s cwa-updater is a per-cluster Deployment, not a local peer, so the
-	// chart points this at its Service DNS name.
-	updaterHost := getEnvOrDefault("CWA_UPDATER_HOST", defaultCwaUpdaterHost)
+	isK8s := installType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES
+
+	// K8s: the chart's Service DNS name. VM: the local socket.
+	updaterClient := &http.Client{Timeout: httpTimeout}
+	updaterHealthURL := "http://" + getEnvOrDefault("CWA_UPDATER_HOST", defaultCwaUpdaterHost) + ":" +
+		getEnvOrDefault("CWA_UPDATER_PORT", defaultCwaUpdaterPort) + "/health"
+
+	if !isK8s {
+		socket := getEnvOrDefault(upgrade.SocketEnv, upgrade.DefaultSocketPath)
+		updaterClient.Transport = upgrade.UnixTransport(socket)
+		updaterHealthURL = upgrade.UnixURL("/health")
+	}
 
 	return &Collector{
 		client:            &http.Client{Timeout: httpTimeout},
+		updaterClient:     updaterClient,
 		logger:            logger,
 		vectorHealthURL:   "http://localhost:" + vectorPort + "/health",
 		vectorMetricsURL:  "http://localhost:" + vectorMetricsPort + "/metrics",
-		updaterHealthURL:  "http://" + updaterHost + ":" + updaterPort + "/health",
-		isK8s:             installType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES,
+		updaterHealthURL:  updaterHealthURL,
+		isK8s:             isK8s,
 		updaterPollOffset: cryptoRandIntn(k8sUpdaterPollInterval),
 		reportRunner:      reportRunner,
 	}
@@ -171,13 +181,13 @@ func (c *Collector) collectVector(ctx context.Context) *pb.CwaVectorHealth {
 }
 
 // httpGet performs a GET request and returns the response.
-func (c *Collector) httpGet(ctx context.Context, url string) (*http.Response, error) {
+func (c *Collector) httpGet(ctx context.Context, client *http.Client, url string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 
-	resp, err := c.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("executing request: %w", err)
 	}
@@ -187,7 +197,7 @@ func (c *Collector) httpGet(ctx context.Context, url string) (*http.Response, er
 
 // checkVectorHealth calls Vector's /health endpoint to determine status.
 func (c *Collector) checkVectorHealth(ctx context.Context) pb.CwaComponentStatus {
-	resp, err := c.httpGet(ctx, c.vectorHealthURL)
+	resp, err := c.httpGet(ctx, c.client, c.vectorHealthURL)
 	if err != nil {
 		c.logger.Debug("vector health check failed", "error", err)
 
@@ -209,7 +219,7 @@ func (c *Collector) checkVectorHealth(ctx context.Context) pb.CwaComponentStatus
 // version label from vector_build_info. The bool return indicates whether the
 // scrape succeeded.
 func (c *Collector) scrapeVectorMetrics(ctx context.Context) (int64, string, bool) {
-	resp, err := c.httpGet(ctx, c.vectorMetricsURL)
+	resp, err := c.httpGet(ctx, c.client, c.vectorMetricsURL)
 	if err != nil {
 		c.logger.Debug("vector metrics request failed", "error", err)
 
@@ -285,7 +295,7 @@ func extractPromLabel(line, label string) string {
 }
 
 func (c *Collector) collectCwaUpdater(ctx context.Context) *pb.CwaUpdaterHealth {
-	resp, err := c.httpGet(ctx, c.updaterHealthURL)
+	resp, err := c.httpGet(ctx, c.updaterClient, c.updaterHealthURL)
 	if err != nil {
 		c.logger.Debug("cwa-updater health check failed", "error", err)
 

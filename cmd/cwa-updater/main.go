@@ -7,11 +7,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -63,6 +66,10 @@ const (
 	// Where cwa-manager answers on a VM host: in native mode it and cwa-updater
 	// are both plain processes sharing the host network.
 	agentHealthHost = "localhost"
+
+	// Root-only: cwa-manager runs as root.
+	socketDirPerm = 0o700
+	socketPerm    = 0o600
 
 	// maxRequestBytes caps the handoff body; a handoff is a few hundred bytes.
 	maxRequestBytes = 16 << 10
@@ -131,7 +138,14 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	upgrades, config, err := buildUpgradeService(logger)
+	mode, err := detectInstallMode(installModeFile)
+	if err != nil {
+		return err
+	}
+
+	logger.Info("install mode detected", "mode", mode)
+
+	upgrades, config, err := buildUpgradeService(logger, mode)
 	if err != nil {
 		return err
 	}
@@ -151,19 +165,62 @@ func run() error {
 	// Drives the collection window, including one left open by a restart.
 	go upgrades.Run(ctx)
 
-	return serve(ctx, logger, &server{logger: logger, upgrade: upgrades, config: config})
+	listener, err := listen(mode)
+	if err != nil {
+		return err
+	}
+
+	return serve(ctx, logger, listener, &server{logger: logger, upgrade: upgrades, config: config})
+}
+
+// listen opens TCP on Kubernetes (behind the Service) and a unix socket on a VM.
+func listen(mode installMode) (net.Listener, error) {
+	if mode == modeKubernetes {
+		listener, err := net.Listen("tcp", ":"+getEnvOrDefault(portEnv, defaultPort))
+		if err != nil {
+			return nil, fmt.Errorf("listening: %w", err)
+		}
+
+		return listener, nil
+	}
+
+	return listenUnix(getEnvOrDefault(upgrade.SocketEnv, upgrade.DefaultSocketPath))
+}
+
+// listenUnix binds a root-only socket. The 0700 dir covers the window before the chmod.
+func listenUnix(path string) (net.Listener, error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, socketDirPerm); err != nil {
+		return nil, fmt.Errorf("creating %s: %w", dir, err)
+	}
+
+	// MkdirAll leaves an existing directory's mode alone.
+	if err := os.Chmod(dir, socketDirPerm); err != nil {
+		return nil, fmt.Errorf("securing %s: %w", dir, err)
+	}
+
+	// A socket left by a previous run would block Listen.
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("removing stale socket %s: %w", path, err)
+	}
+
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, fmt.Errorf("listening on %s: %w", path, err)
+	}
+
+	if err := os.Chmod(path, socketPerm); err != nil {
+		_ = listener.Close()
+
+		return nil, fmt.Errorf("securing %s: %w", path, err)
+	}
+
+	return listener, nil
 }
 
 // buildUpgradeService wires the upgrade state for the host this is running on,
 // and the configure-updater config the executor reads.
-func buildUpgradeService(logger *slog.Logger) (*upgrade.Service, *upgrade.Holder, error) {
-	mode, err := detectInstallMode(installModeFile)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	logger.Info("install mode detected", "mode", mode)
-
+func buildUpgradeService(logger *slog.Logger, mode installMode) (*upgrade.Service, *upgrade.Holder, error) {
 	if mode == modeKubernetes {
 		return buildKubernetesService(logger)
 	}
@@ -333,9 +390,7 @@ func portFromEnv(logger *slog.Logger, key string, def int) int {
 	return port
 }
 
-func serve(ctx context.Context, logger *slog.Logger, srv *server) error {
-	port := getEnvOrDefault(portEnv, defaultPort)
-
+func serve(ctx context.Context, logger *slog.Logger, listener net.Listener, srv *server) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc(healthPath, srv.handleHealth)
 	mux.HandleFunc(statusPath, srv.handleStatus)
@@ -343,7 +398,6 @@ func serve(ctx context.Context, logger *slog.Logger, srv *server) error {
 	mux.HandleFunc(configPath, srv.handleConfig)
 
 	httpSrv := &http.Server{
-		Addr:              ":" + port,
 		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
@@ -359,9 +413,9 @@ func serve(ctx context.Context, logger *slog.Logger, srv *server) error {
 		}
 	}()
 
-	logger.Info("cwa-updater listening", "addr", httpSrv.Addr, "version", version.Version)
+	logger.Info("cwa-updater listening", "addr", listener.Addr().String(), "version", version.Version)
 
-	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := httpSrv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serving cwa-updater: %w", err)
 	}
 

@@ -171,10 +171,13 @@ func wireCommands(
 	uploader := bugreport.NewHTTPUploader(uploadURL, token, ident.VMID, os.Getenv(nodeNameEnv))
 
 	// cwa-updater owns the upgrade; cwa-manager hands its own off and reports back.
-	updater := upgrade.NewClient(
-		getEnvOrDefault(upgrade.HostEnv, upgrade.DefaultHost),
-		getEnvOrDefault(upgrade.PortEnv, upgrade.DefaultPort),
-	)
+	updater := upgrade.NewUnixClient(getEnvOrDefault(upgrade.SocketEnv, upgrade.DefaultSocketPath))
+	if ident.InstallType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
+		updater = upgrade.NewClient(
+			getEnvOrDefault(upgrade.HostEnv, upgrade.DefaultHost),
+			getEnvOrDefault(upgrade.PortEnv, upgrade.DefaultPort),
+		)
+	}
 
 	loop.SetUpgradeStatus(updater)
 	loop.SetDispatcher(buildDispatcher(loop, deps, k8sRT, uploader, updater, ident, logger))

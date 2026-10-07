@@ -1,4 +1,6 @@
-{{- if .Values.customMetrics.enabled }}
+{{- /* Install only: an upgrade never applies this hook, so the lookup would just
+make the upgrader need access to crusoe-monitoring. */}}
+{{- if and .Values.customMetrics.enabled .Release.IsInstall }}
 {{- if not (lookup "v1" "ConfigMap" "crusoe-monitoring" "crusoe-custom-metrics-config") }}
 apiVersion: v1
 kind: ConfigMap

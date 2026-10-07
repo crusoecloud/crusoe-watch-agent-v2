@@ -101,3 +101,30 @@ func TestBuildVMExecutorByMode(t *testing.T) {
 	assert.IsType(t, &upgrade.ScriptExecutor{}, buildVMExecutor(logger, modeNative, config))
 	assert.IsType(t, &upgrade.ScriptExecutor{}, buildVMExecutor(logger, modeDocker, config))
 }
+
+// Root-only modes, and a stale socket does not block a restart.
+func TestListenUnixIsOwnerOnly(t *testing.T) {
+	// t.TempDir() can exceed the macOS socket path limit.
+	base, err := os.MkdirTemp("", "cu")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+
+	dir := filepath.Join(base, "updater")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+
+	path := filepath.Join(dir, "api.sock")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+
+	listener, err := listenUnix(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	dirInfo, err := os.Stat(dir)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(socketDirPerm), dirInfo.Mode().Perm())
+
+	sockInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(socketPerm), sockInfo.Mode().Perm())
+	assert.NotZero(t, sockInfo.Mode()&os.ModeSocket)
+}

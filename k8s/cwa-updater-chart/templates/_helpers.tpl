@@ -38,3 +38,11 @@ ServiceAccount name.
 {{- define "cwaUpdater.serviceAccountName" -}}
 {{ include "cwaUpdater.fullname" . }}
 {{- end }}
+
+{{/*
+"true" when the cluster runs Cilium, which can match host-network traffic by
+entity. Empty under `helm template`, which has no cluster to ask.
+*/}}
+{{- define "cwaUpdater.cilium" -}}
+{{- if .Capabilities.APIVersions.Has "cilium.io/v2/CiliumNetworkPolicy" }}true{{- end }}
+{{- end }}

@@ -14,11 +14,15 @@ spec:
   policyTypes:
     - Ingress
     - Egress
+  # Upgrade handoff. On Cilium the CiliumNetworkPolicy admits the agent nodes.
+  {{- if include "cwaUpdater.cilium" . }}
+  ingress: []
+  {{- else }}
   ingress:
-    # Upgrade handoff.
     - ports:
         - port: {{ .Values.cwaUpdater.port }}
           protocol: TCP
+  {{- end }}
   egress:
     - ports:
         # DNS.
@@ -34,4 +38,27 @@ spec:
         - port: {{ . }}
           protocol: TCP
         {{- end }}
+{{- if include "cwaUpdater.cilium" . }}
+---
+# Admits the agent pods, which use hostNetwork, by entity rather than by IP.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "cwaUpdater.fullname" . }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "cwaUpdater.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      {{- include "cwaUpdater.selectorLabels" . | nindent 6 }}
+  ingress:
+    - fromEntities:
+        - host
+        - remote-node
+      toPorts:
+        - ports:
+            - port: {{ .Values.cwaUpdater.port | quote }}
+              protocol: TCP
+{{- end }}
 {{- end }}

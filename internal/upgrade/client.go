@@ -7,18 +7,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 )
 
 // Where cwa-manager reaches cwa-updater: a per-cluster Service on Kubernetes,
-// a local peer on VM targets.
+// a root-only unix socket on VM targets.
 const (
 	HostEnv     = "CWA_UPDATER_HOST"
 	PortEnv     = "CWA_UPDATER_PORT"
 	DefaultHost = "localhost"
 	DefaultPort = "8786"
+
+	SocketEnv         = "CWA_UPDATER_SOCKET"
+	DefaultSocketPath = "/etc/crusoe/cwa-updater/api.sock"
+
+	// Placeholder host; the transport dials the socket.
+	unixBaseURL = "http://cwa-updater"
 )
 
 // Routes cwa-updater serves the handoff API on.
@@ -52,6 +59,30 @@ func NewClient(host, port string) *Client {
 		baseURL: "http://" + host + ":" + port,
 		http:    &http.Client{Timeout: clientTimeout},
 	}
+}
+
+// NewUnixClient returns a Client addressing cwa-updater at socketPath.
+func NewUnixClient(socketPath string) *Client {
+	return &Client{
+		baseURL: unixBaseURL,
+		http:    &http.Client{Timeout: clientTimeout, Transport: UnixTransport(socketPath)},
+	}
+}
+
+// UnixTransport dials socketPath whatever the URL's host.
+func UnixTransport(socketPath string) *http.Transport {
+	return &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var dialer net.Dialer
+
+			return dialer.DialContext(ctx, "unix", socketPath)
+		},
+	}
+}
+
+// UnixURL is the URL for route over UnixTransport.
+func UnixURL(route string) string {
+	return unixBaseURL + route
 }
 
 // Handoff posts this agent's handoff. A nil error means cwa-updater has it

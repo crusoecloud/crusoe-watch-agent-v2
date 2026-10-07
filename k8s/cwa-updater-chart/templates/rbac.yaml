@@ -24,6 +24,10 @@ rules:
   - apiGroups: [""]
     resources: ["services", "serviceaccounts"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # Agent chart network policies. They hold no RBAC, so writable like the workload.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
   # `helm upgrade --wait` and the expected_count snapshot (numberReady).
   - apiGroups: ["apps"]
     resources: ["daemonsets/status"]
@@ -80,41 +84,6 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "cwaUpdater.fullname" . }}-agent-chart
-subjects:
-  - kind: ServiceAccount
-    name: {{ include "cwaUpdater.serviceAccountName" . }}
-    namespace: {{ .Values.namespace }}
----
-# The agent's default custom metrics configuration lives in the crusoe-monitoring
-# namespace. An upgrade reads it and leaves it in place; a rollback may have to
-# recreate it, which is why create is included.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: {{ include "cwaUpdater.fullname" . }}-custom-metrics
-  namespace: crusoe-monitoring
-  labels:
-    {{- include "cwaUpdater.labels" . | nindent 4 }}
-rules:
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    resourceNames: ["crusoe-custom-metrics-config"]
-    verbs: ["get", "update", "patch"]
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["create"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: {{ include "cwaUpdater.fullname" . }}-custom-metrics
-  namespace: crusoe-monitoring
-  labels:
-    {{- include "cwaUpdater.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: {{ include "cwaUpdater.fullname" . }}-custom-metrics
 subjects:
   - kind: ServiceAccount
     name: {{ include "cwaUpdater.serviceAccountName" . }}
