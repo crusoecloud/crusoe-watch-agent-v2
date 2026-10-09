@@ -44,10 +44,11 @@ type upgradeReporter struct {
 	mu sync.Mutex
 	// pending is the result waiting to be reported, held until acknowledged.
 	pending *pb.CwaUpgradeResult
-	// reported means an earlier send on the current stream carried pending.
-	reported   bool
-	inProgress bool
-	ticks      int
+	// sends and responses count the current stream's heartbeats and coordinator
+	// responses. carriedAt is the send that first carried pending, 0 if none.
+	sends, responses, carriedAt int
+	inProgress                  bool
+	ticks                       int
 }
 
 // Result is the last_upgrade_result for the next heartbeat, nil when there is
@@ -91,7 +92,7 @@ func (r *upgradeReporter) MarkHandedOff(targetVersion string) {
 	r.logger.Info("upgrade handed off to cwa-updater", "target_version", targetVersion)
 }
 
-// StreamOpened clears the marker before a stream's first send: a fresh stream
+// StreamOpened resets the counts before a stream's first send: a fresh stream
 // carries none of the previous one's messages.
 func (r *upgradeReporter) StreamOpened() {
 	if r == nil {
@@ -99,24 +100,41 @@ func (r *upgradeReporter) StreamOpened() {
 	}
 
 	r.mu.Lock()
-	r.reported = false
+	r.sends, r.responses, r.carriedAt = 0, 0, 0
 	r.mu.Unlock()
 }
 
-// Sent releases the result an earlier send on this stream carried. A send only
-// buffers, so the first one merely marks it reported and a later one confirms it:
-// a stream dying mid-flight costs a duplicate report rather than the result.
+// Received counts a coordinator response on the current stream.
+func (r *upgradeReporter) Received() {
+	if r == nil {
+		return
+	}
+
+	r.mu.Lock()
+	r.responses++
+	r.mu.Unlock()
+}
+
+// Sent acknowledges pending with cwa-updater once the coordinator confirms it.
+// The coordinator answers each heartbeat once, in order, after processing it, so
+// the response for the send that carried pending is that confirmation. A stream
+// dying first costs a duplicate report rather than the result.
 func (r *upgradeReporter) Sent(ctx context.Context) {
 	if r == nil {
 		return
 	}
 
 	r.mu.Lock()
-	reported, alreadySent := r.pending, r.reported
-	r.reported = r.pending != nil
+	r.sends++
+	if r.pending != nil && r.carriedAt == 0 {
+		r.carriedAt = r.sends
+	}
+
+	reported := r.pending
+	confirmed := r.carriedAt != 0 && r.responses >= r.carriedAt
 	r.mu.Unlock()
 
-	if reported == nil || !alreadySent || shutdownFlush(ctx) {
+	if reported == nil || !confirmed || shutdownFlush(ctx) {
 		return
 	}
 
@@ -131,7 +149,7 @@ func (r *upgradeReporter) Sent(ctx context.Context) {
 	}
 
 	r.mu.Lock()
-	r.pending, r.inProgress, r.reported = nil, false, false
+	r.pending, r.inProgress, r.carriedAt = nil, false, 0
 	r.mu.Unlock()
 
 	r.logger.Info("upgrade result reported and acknowledged",

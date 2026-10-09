@@ -79,6 +79,9 @@ type Loop struct {
 	// lastHeartbeat is the unix-nano time of the most recent heartbeat that
 	// reached the coordinator, read by the health server on another goroutine.
 	lastHeartbeat atomic.Int64
+
+	// sendNow asks Run for a heartbeat ahead of the next tick.
+	sendNow chan struct{}
 }
 
 // LastHeartbeat implements health.Reporter: when the most recent heartbeat was sent, zero if none.
@@ -114,8 +117,14 @@ func (l *Loop) SetUpgradeStatus(client UpdaterStatus) {
 }
 
 // MarkUpgradeHandedOff is the hook upgrade.execute calls on an accepted handoff.
+// It sends the pre-upgrade heartbeat at once.
 func (l *Loop) MarkUpgradeHandedOff(targetVersion string) {
 	l.upgrades.MarkHandedOff(targetVersion)
+
+	select {
+	case l.sendNow <- struct{}{}:
+	default:
+	}
 }
 
 // DeliverResult implements command.ResultSink. It stores a finished command
@@ -130,6 +139,16 @@ func (l *Loop) DeliverResult(result *pb.CwaCommandResult) {
 	l.mu.Unlock()
 }
 
+// HasResult implements command.ResultSink.
+func (l *Loop) HasResult(execID string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	_, ok := l.pendingResults[execID]
+
+	return ok
+}
+
 // NewLoop creates a heartbeat Loop.
 func NewLoop(id *identity.Identity, hc *health.Collector, conn grpc.ClientConnInterface, logger *slog.Logger) *Loop {
 	return &Loop{
@@ -137,6 +156,7 @@ func NewLoop(id *identity.Identity, hc *health.Collector, conn grpc.ClientConnIn
 		health:   hc,
 		client:   pb.NewCwaAgentClient(conn),
 		logger:   logger,
+		sendNow:  make(chan struct{}, 1),
 	}
 }
 
@@ -205,6 +225,10 @@ func (l *Loop) Run(ctx context.Context) error {
 			if err := l.sendHeartbeat(ctx, stream); err != nil {
 				return fmt.Errorf("sending heartbeat: %w", err)
 			}
+		case <-l.sendNow:
+			if err := l.sendHeartbeat(ctx, stream); err != nil {
+				return fmt.Errorf("sending heartbeat: %w", err)
+			}
 		}
 	}
 }
@@ -239,7 +263,6 @@ func (l *Loop) sendHeartbeat(ctx context.Context, stream pb.CwaAgent_CwaAgentHea
 
 	l.lastHeartbeat.Store(time.Now().UnixNano())
 
-	// This send is the evidence an earlier one reached the coordinator.
 	l.upgrades.Sent(ctx)
 	l.logger.Debug("heartbeat sent", "agent_id", req.GetAgentId())
 
@@ -292,6 +315,8 @@ func (l *Loop) receiveLoop(ctx context.Context, stream pb.CwaAgent_CwaAgentHeart
 		if err != nil {
 			return fmt.Errorf("stream recv: %w", err)
 		}
+
+		l.upgrades.Received()
 
 		// Build set of execution_ids the coordinator is still echoing.
 		echoedIDs := make(map[string]struct{}, len(resp.GetCommands()))

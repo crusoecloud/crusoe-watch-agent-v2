@@ -2,6 +2,7 @@ package heartbeat
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/command"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/health"
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/identity"
+	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/upgrade"
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
 )
 
@@ -277,6 +279,13 @@ func (f *fakeStream) lastSent() *pb.CwaAgentHeartbeatRequest {
 	return f.sent[len(f.sent)-1]
 }
 
+func (f *fakeStream) sentCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return len(f.sent)
+}
+
 func (f *fakeStream) closeSendCalled() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -331,6 +340,62 @@ func TestSendHeartbeat_OSVersion(t *testing.T) {
 			assert.Equal(t, tc.want, stream.lastSent().OsVersion)
 		})
 	}
+}
+
+// runStream is a fakeStream Run can drive: Recv blocks until done closes, like
+// a coordinator with nothing to send.
+type runStream struct {
+	*fakeStream
+
+	done chan struct{}
+}
+
+func (s *runStream) Recv() (*pb.CwaAgentHeartbeatResponse, error) {
+	<-s.done
+
+	return nil, io.EOF
+}
+
+// streamClient opens stream for Run. The embedded interface is nil.
+type streamClient struct {
+	pb.CwaAgentClient
+	stream *runStream
+}
+
+func (c *streamClient) CwaAgentHeartbeat(context.Context, ...grpc.CallOption,
+) (pb.CwaAgent_CwaAgentHeartbeatClient, error) {
+	return c.stream, nil
+}
+
+func TestHandoffSendsTheHeartbeatBeforeTheNextTick(t *testing.T) {
+	stream := &runStream{fakeStream: &fakeStream{}, done: make(chan struct{})}
+	t.Cleanup(func() { close(stream.done) })
+
+	l := newShutdownLoop()
+	l.client = &streamClient{stream: stream}
+	l.sendNow = make(chan struct{}, 1)
+	// cwa-updater persists the request before it accepts the handoff.
+	l.SetUpgradeStatus(&fakeUpdater{view: &upgrade.StatusView{
+		Status:        upgrade.StatusInProgress,
+		Phase:         upgrade.PhaseInProgress,
+		TargetVersion: "v2.1.0",
+	}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+
+	go func() { runErr <- l.Run(ctx) }()
+
+	require.Eventually(t, func() bool { return stream.sentCount() == 1 }, 5*time.Second, 5*time.Millisecond)
+
+	l.MarkUpgradeHandedOff("v2.1.0")
+
+	require.Eventually(t, func() bool { return stream.sentCount() == 2 }, 5*time.Second, 5*time.Millisecond,
+		"the handoff must not wait for the next tick")
+	assert.Equal(t, pb.CwaAgentStatus_CWA_AGENT_STATUS_UPGRADE_IN_PROGRESS, stream.lastSent().GetAgentStatus())
+
+	cancel()
+	<-runErr
 }
 
 func TestShutdown_FlushesPendingResultsInFinalHeartbeat(t *testing.T) {

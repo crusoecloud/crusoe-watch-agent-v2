@@ -37,6 +37,9 @@ func (c *ConfigApply) Timeout() time.Duration { return Instant }
 // Run applies new ingestion endpoints. It persists them first (so a restart
 // converges toward them) then applies them to the running data plane.
 func (c *ConfigApply) Run(_ context.Context, params map[string]string) (string, error) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
 	if params[ParamIngestionEndpoint] == "" &&
 		params[ParamLogsEndpoint] == "" && params[ParamMetricsEndpoint] == "" {
 

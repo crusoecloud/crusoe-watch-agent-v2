@@ -45,6 +45,9 @@ func (r *RateLimitSet) Timeout() time.Duration { return Instant }
 // sink→cap map, then applies the merged map to the running data plane. A rate of
 // zero removes the target's entry; an absent sink targets the fleet-wide default.
 func (r *RateLimitSet) Run(_ context.Context, params map[string]string) (string, error) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
 	rate, err := strconv.Atoi(params[ParamRateLimitNum])
 	if err != nil || rate < 0 {
 		return "", errInvalidRateLimit

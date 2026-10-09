@@ -33,6 +33,10 @@ func (f *fakeSink) DeliverResult(r *pb.CwaCommandResult) {
 	f.results[r.GetExecutionId()] = r
 }
 
+func (f *fakeSink) HasResult(id string) bool {
+	return f.get(id) != nil
+}
+
 func (f *fakeSink) get(id string) *pb.CwaCommandResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -192,6 +196,22 @@ func TestDispatch_DedupInFlight(t *testing.T) {
 
 	require.Eventually(t, func() bool { return sink.get("exec-1") != nil }, time.Second, 5*time.Millisecond)
 	assert.Equal(t, int32(1), h.runs.Load(), "handler should run exactly once")
+}
+
+func TestDispatch_DedupAwaitingAck(t *testing.T) {
+	sink := newFakeSink()
+	d := newTestDispatcher(t, sink)
+
+	h := &fakeHandler{timeout: Instant}
+	d.Register("config.apply", h)
+
+	d.Dispatch(context.Background(), cmd("exec-1", "config.apply"))
+	require.Eventually(t, func() bool { return sink.get("exec-1") != nil }, time.Second, 5*time.Millisecond)
+
+	// Re-echo after completion, before the coordinator acks the result.
+	d.Dispatch(context.Background(), cmd("exec-1", "config.apply"))
+
+	assert.Never(t, func() bool { return h.runs.Load() > 1 }, 50*time.Millisecond, 5*time.Millisecond)
 }
 
 func TestDispatch_AsyncNonBlocking(t *testing.T) {

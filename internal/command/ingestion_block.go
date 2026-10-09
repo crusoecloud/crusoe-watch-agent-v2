@@ -32,6 +32,9 @@ func (b *IngestionBlock) Timeout() time.Duration { return Instant }
 
 // Run persists the blocked state first then applies it to the running data plane.
 func (b *IngestionBlock) Run(_ context.Context, _ map[string]string) (string, error) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
 	if b.deps.BlockedStatePath != "" {
 		if err := persistBlocked(b.deps.BlockedStatePath, b.blocked); err != nil {
 			return "", err

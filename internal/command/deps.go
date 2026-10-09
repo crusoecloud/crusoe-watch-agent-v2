@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/vector"
 	pb "gitlab.com/crusoeenergy/schemas/api/island/v2/observability"
@@ -14,6 +15,11 @@ import (
 
 // stateFilePerm is used for all persisted control-plane state files.
 const stateFilePerm = 0o600
+
+// stateMu serializes the state handlers (config.apply, ingestion.block,
+// rate_limit.set). Each reads the others' state and rewrites the whole Vector
+// config, so two at once can drop one change.
+var stateMu sync.Mutex //nolint:gochecknoglobals // the state files are process-wide
 
 var (
 	errUnsupportedInstallType = errors.New("unsupported install type")

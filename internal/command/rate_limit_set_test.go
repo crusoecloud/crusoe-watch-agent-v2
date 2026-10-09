@@ -3,6 +3,8 @@ package command
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,6 +71,32 @@ func TestRateLimitSet_VM_AccumulatesPerSink(t *testing.T) {
 	assert.Equal(t, 50, reqRateLimit(t, sinks, "cms_gateway"))
 	assert.Equal(t, map[string]int{"crusoe_ingest": 100, "cms_gateway": 50},
 		LoadRateLimits(deps.RateLimitStatePath))
+}
+
+func TestRateLimitSet_VM_ConcurrentCommandsKeepEveryChange(t *testing.T) {
+	deps := testDeps(t)
+	h := NewRateLimitSet(deps)
+
+	want := map[string]int{}
+
+	var wg sync.WaitGroup
+
+	for i := 1; i <= 20; i++ {
+		sink, rate := "sink-"+strconv.Itoa(i), strconv.Itoa(i)
+		want[sink] = i
+
+		wg.Go(func() {
+			assert.NoError(t, runErr(t, h, map[string]string{
+				ParamRateLimitNum:  rate,
+				ParamRateLimitSink: sink,
+			}))
+		})
+	}
+
+	wg.Wait()
+
+	// Each command reads, changes and rewrites the whole map, so none may run at once.
+	assert.Equal(t, want, LoadRateLimits(deps.RateLimitStatePath))
 }
 
 func TestRateLimitSet_VM_DefaultPlusOverride(t *testing.T) {

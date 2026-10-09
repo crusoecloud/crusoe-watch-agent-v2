@@ -51,6 +51,8 @@ type Handler interface {
 // placing the result in its pending-results map for the next heartbeat.
 type ResultSink interface {
 	DeliverResult(*pb.CwaCommandResult)
+	// HasResult reports whether a result for execID is still waiting for its ack.
+	HasResult(execID string) bool
 }
 
 // ExecRecorder persists in-flight command executions for crash recovery.
@@ -113,7 +115,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, cmd *pb.CwaCommand) {
 		return
 	}
 
-	if _, running := d.inflight[execID]; running {
+	if _, running := d.inflight[execID]; running || d.sink.HasResult(execID) {
 		d.mu.Unlock()
 
 		return
@@ -234,7 +236,6 @@ func (d *Dispatcher) deliverOnce(inf *inflightCmd, status pb.CwaCommandResultSta
 		return
 	}
 	inf.delivered = true
-	delete(d.inflight, inf.id)
 	d.mu.Unlock()
 
 	// Clear the crash-recovery record before the result reaches the heartbeat.
@@ -245,7 +246,12 @@ func (d *Dispatcher) deliverOnce(inf *inflightCmd, status pb.CwaCommandResultSta
 		}
 	}
 
+	// The result enters the sink before the command leaves inflight, both under
+	// d.mu, so Dispatch always sees one of them and a re-echo never runs twice.
+	d.mu.Lock()
 	d.deliver(inf.id, inf.command, status, reason, result)
+	delete(d.inflight, inf.id)
+	d.mu.Unlock()
 }
 
 func (d *Dispatcher) deliver(execID, command string, status pb.CwaCommandResultStatus, reason, result string) {

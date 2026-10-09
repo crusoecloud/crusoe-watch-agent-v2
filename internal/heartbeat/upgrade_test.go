@@ -151,7 +151,7 @@ func TestReporterSurvivesAnUnreachableUpdater(t *testing.T) {
 	assert.False(t, reporter.InProgress())
 }
 
-func TestReporterAcknowledgesOnlyAfterASecondHeartbeatIsSent(t *testing.T) {
+func TestReporterAcknowledgesOnlyAfterTheCoordinatorResponds(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeUpdater{view: rolledBackView()}
@@ -163,11 +163,15 @@ func TestReporterAcknowledgesOnlyAfterASecondHeartbeatIsSent(t *testing.T) {
 	assert.Equal(t, 0, client.acks)
 
 	reporter.Sent(context.Background())
-	// A send only buffers, so the first one is not evidence the coordinator has it.
 	assert.Equal(t, 0, client.acks)
-	require.NotNil(t, reporter.Result(context.Background()))
 
-	// The next send on the same stream shows the first one went out.
+	// Another send only shows the first was buffered, not that it was processed.
+	require.NotNil(t, reporter.Result(context.Background()))
+	reporter.Sent(context.Background())
+	assert.Equal(t, 0, client.acks)
+
+	// The response to the send that carried the result confirms it.
+	reporter.Received()
 	reporter.Sent(context.Background())
 	assert.Equal(t, 1, client.acks)
 
@@ -177,7 +181,7 @@ func TestReporterAcknowledgesOnlyAfterASecondHeartbeatIsSent(t *testing.T) {
 	assert.Nil(t, reporter.Result(context.Background()))
 }
 
-func TestReporterKeepsTheResultWhenTheStreamDiesAfterOneSend(t *testing.T) {
+func TestReporterKeepsTheResultWhenTheStreamDiesBeforeAResponse(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeUpdater{view: rolledBackView()}
@@ -187,13 +191,15 @@ func TestReporterKeepsTheResultWhenTheStreamDiesAfterOneSend(t *testing.T) {
 	require.NotNil(t, reporter.Result(context.Background()))
 	reporter.Sent(context.Background())
 
-	// The stream broke with the heartbeat still buffered, so the result has to be
-	// reported again before cwa-updater may drop it.
+	// The stream broke before a response, so the result has to be reported again
+	// before cwa-updater may drop it.
 	reporter.StreamOpened()
 	require.NotNil(t, reporter.Result(context.Background()))
 	reporter.Sent(context.Background())
+	reporter.Sent(context.Background())
 	assert.Equal(t, 0, client.acks)
 
+	reporter.Received()
 	reporter.Sent(context.Background())
 	assert.Equal(t, 1, client.acks)
 }
@@ -211,6 +217,7 @@ func TestReporterKeepsReportingUntilTheAcknowledgementLands(t *testing.T) {
 
 	require.NotNil(t, reporter.Result(context.Background()))
 	reporter.Sent(context.Background())
+	reporter.Received()
 	reporter.Sent(context.Background())
 
 	// The acknowledgement failed, so the result rides the next heartbeat too.
@@ -224,9 +231,11 @@ func TestReporterDoesNotAcknowledgeWithNothingReported(t *testing.T) {
 
 	client := &fakeUpdater{err: upgrade.ErrNoState}
 	reporter := reporterFor(client)
+	reporter.StreamOpened()
 
 	require.Nil(t, reporter.Result(context.Background()))
 	reporter.Sent(context.Background())
+	reporter.Received()
 	reporter.Sent(context.Background())
 
 	// Clearing state nobody reported would drop the next round's result.
@@ -283,6 +292,7 @@ func TestNilReporterIsANoOp(t *testing.T) {
 	assert.False(t, reporter.InProgress())
 	reporter.MarkHandedOff("v2.1")
 	reporter.StreamOpened()
+	reporter.Received()
 	reporter.Sent(context.Background())
 }
 
@@ -301,11 +311,12 @@ func TestReporterSkipsCwaUpdaterOnTheShutdownFlush(t *testing.T) {
 	assert.Nil(t, reporter.Result(ctx))
 	assert.Equal(t, 0, client.polls)
 
-	// A result carried by an earlier heartbeat: the flush must not spend its
-	// window acknowledging that either, so cwa-updater keeps it for the next
-	// process to report.
+	// A result the coordinator confirmed: the flush must not spend its window
+	// acknowledging that either, so cwa-updater keeps it for the next process
+	// to report.
 	require.NotNil(t, reporter.Result(context.Background()))
 	reporter.Sent(context.Background())
+	reporter.Received()
 	reporter.Sent(ctx)
 	assert.Equal(t, 0, client.acks)
 }
