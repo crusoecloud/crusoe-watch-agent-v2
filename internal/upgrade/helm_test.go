@@ -18,7 +18,7 @@ import (
 var errHelm = errors.New("helm exited 1")
 
 // fakeRunner records every invocation and answers from canned per-subcommand
-// responses, keyed by the first two args (e.g. "upgrade", "get metadata").
+// responses, keyed by the first two args (e.g. "upgrade", "history crusoe-watch-agent").
 type fakeRunner struct {
 	calls [][]string
 	out   map[string][]byte
@@ -39,8 +39,7 @@ func (f *fakeRunner) Run(_ context.Context, args ...string) ([]byte, error) {
 		return nil, nil
 	}
 
-	// Most specific key first, so "upgrade" can be canned for every upgrade call
-	// while "get metadata" stays distinct from a bare "get".
+	// Most specific key first; a bare subcommand matches every call to it.
 	for _, key := range []string{strings.Join(args[:min(2, len(args))], " "), args[0]} {
 		if left := f.failures[key]; left > 0 {
 			f.failures[key] = left - 1
@@ -268,39 +267,113 @@ func TestHelmUpgradeFailsWhenAgentsNeverReport(t *testing.T) {
 // Rollback
 // ---------------------------------------------------------------------------
 
-func TestHelmRollbackRestoresPreviousRevision(t *testing.T) {
+// sampleHistory is a release that went 2.0.3 -> 2.0.4 (failed) -> 2.0.3 -> 2.1.0.
+var sampleHistory = []byte(`[
+	{"revision":1,"status":"superseded","chart":"crusoe-watch-agent-2.0.3"},
+	{"revision":2,"status":"failed","chart":"crusoe-watch-agent-2.0.4"},
+	{"revision":3,"status":"superseded","chart":"crusoe-watch-agent-2.0.3"},
+	{"revision":4,"status":"deployed","chart":"crusoe-watch-agent-2.1.0"}
+]`)
+
+// failedHistory is a failed upgrade to 2.1.0; helm leaves revision 2 deployed.
+var failedHistory = []byte(`[
+	{"revision":1,"status":"superseded","chart":"crusoe-watch-agent-2.0.3"},
+	{"revision":2,"status":"deployed","chart":"crusoe-watch-agent-2.0.3"},
+	{"revision":3,"status":"failed","chart":"crusoe-watch-agent-2.1.0"}
+]`)
+
+// Restores the revision of rollback_version, not just the previous one.
+func TestHelmRollbackRestoresRevisionOfRollbackVersion(t *testing.T) {
 	runner := newFakeRunner()
-	runner.out["get metadata"] = []byte(`{"chart":"crusoe-watch-agent-2.1.0","version":"2.1.0"}`)
+	runner.out["history"] = sampleHistory
 
 	require.NoError(t, newHelmExecutor(t, runner, nil).Rollback(context.Background(), upgradeState()))
 
 	call, ok := runner.ran("rollback")
-	require.True(t, ok, "helm rollback must run when the target is deployed")
+	require.True(t, ok, "helm rollback must run when rollback_version is not deployed")
 
 	joined := strings.Join(call, " ")
-	assert.Contains(t, joined, "rollback crusoe-watch-agent")
+	assert.Contains(t, joined, "rollback crusoe-watch-agent 3 ")
 	assert.Contains(t, joined, "--namespace crusoe-system")
-	// No revision argument: helm restores the immediately previous revision.
-	assert.NotContains(t, joined, "--revision")
 }
 
-// A round that failed before helm mutated the release — a chart pull failure, or
-// a crash between the in_progress write and the helm call — must not roll a
-// healthy release back a revision it was never moved off.
-func TestHelmRollbackSkipsWhenTargetNeverDeployed(t *testing.T) {
+// After a failed upgrade the revision to restore is still deployed.
+func TestHelmRollbackRestoresRevisionLeftDeployedByFailedUpgrade(t *testing.T) {
 	runner := newFakeRunner()
-	runner.out["get metadata"] = []byte(`{"chart":"crusoe-watch-agent-2.0.3","version":"2.0.3"}`)
+	runner.out["history"] = failedHistory
 
 	require.NoError(t, newHelmExecutor(t, runner, nil).Rollback(context.Background(), upgradeState()))
 
+	call, ok := runner.ran("rollback")
+	require.True(t, ok)
+	assert.Contains(t, strings.Join(call, " "), "rollback crusoe-watch-agent 2 ")
+}
+
+// A failed revision is never restored.
+func TestHelmRollbackSkipsFailedRevisions(t *testing.T) {
+	runner := newFakeRunner()
+	runner.out["history"] = sampleHistory
+
+	state := upgradeState()
+	state.RollbackVersion = "v2.0.4"
+
+	require.NoError(t, newHelmExecutor(t, runner, nil).Rollback(context.Background(), state))
+
 	_, ok := runner.ran("rollback")
-	assert.False(t, ok, "a release still on rollback_version needs no rollback")
+	assert.False(t, ok, "only a failed revision ran 2.0.4")
+	assert.Equal(t, []string{"history", "verify", "pull", "upgrade"}, runner.ranSubcommands())
+}
+
+// A version absent from history is applied like an upgrade.
+func TestHelmRollbackAppliesChartAbsentFromHistory(t *testing.T) {
+	runner := newFakeRunner()
+	runner.out["history"] = sampleHistory
+
+	state := upgradeState()
+	state.RollbackVersion = "v1.9.0"
+
+	require.NoError(t, newHelmExecutor(t, runner, nil).Rollback(context.Background(), state))
+
+	assert.Equal(t, []string{"history", "verify", "pull", "upgrade"}, runner.ranSubcommands())
+
+	call, _ := runner.ran("pull")
+	assert.Contains(t, strings.Join(call, " "), "--version 1.9.0")
+}
+
+// A round that failed before helm changed anything leaves nothing to roll back.
+func TestHelmRollbackSkipsWhenRollbackVersionDeployed(t *testing.T) {
+	runner := newFakeRunner()
+	runner.out["history"] = []byte(`[
+		{"revision":1,"status":"superseded","chart":"crusoe-watch-agent-2.0.0"},
+		{"revision":2,"status":"deployed","chart":"crusoe-watch-agent-2.0.3"}
+	]`)
+
+	require.NoError(t, newHelmExecutor(t, runner, nil).Rollback(context.Background(), upgradeState()))
+
+	assert.Equal(t, []string{"history"}, runner.ranSubcommands(),
+		"a release still on rollback_version needs no rollback")
+}
+
+// A rollback that failed on rollback_version is not a deployed rollback_version.
+func TestHelmRollbackRetriesAFailedRollback(t *testing.T) {
+	runner := newFakeRunner()
+	runner.out["history"] = []byte(`[
+		{"revision":2,"status":"superseded","chart":"crusoe-watch-agent-2.0.3"},
+		{"revision":3,"status":"failed","chart":"crusoe-watch-agent-2.1.0"},
+		{"revision":4,"status":"failed","chart":"crusoe-watch-agent-2.0.3"}
+	]`)
+
+	require.NoError(t, newHelmExecutor(t, runner, nil).Rollback(context.Background(), upgradeState()))
+
+	call, ok := runner.ran("rollback")
+	require.True(t, ok)
+	assert.Contains(t, strings.Join(call, " "), "rollback crusoe-watch-agent 2 ")
 }
 
 func TestHelmRollbackSkipsWhenReleaseAbsent(t *testing.T) {
 	runner := newFakeRunner()
-	runner.out["get metadata"] = []byte("Error: release: not found")
-	runner.err["get metadata"] = errHelm
+	runner.out["history"] = []byte("Error: release: not found")
+	runner.err["history"] = errHelm
 
 	require.NoError(t, newHelmExecutor(t, runner, nil).Rollback(context.Background(), upgradeState()))
 
@@ -312,8 +385,8 @@ func TestHelmRollbackSkipsWhenReleaseAbsent(t *testing.T) {
 // guessing here could downgrade a healthy release, so it must surface as failed.
 func TestHelmRollbackFailsWhenReleaseStateUnreadable(t *testing.T) {
 	runner := newFakeRunner()
-	runner.out["get metadata"] = []byte("Error: Kubernetes cluster unreachable")
-	runner.err["get metadata"] = errHelm
+	runner.out["history"] = []byte("Error: Kubernetes cluster unreachable")
+	runner.err["history"] = errHelm
 
 	err := newHelmExecutor(t, runner, nil).Rollback(context.Background(), upgradeState())
 	require.ErrorIs(t, err, errHelm)
@@ -324,7 +397,7 @@ func TestHelmRollbackFailsWhenReleaseStateUnreadable(t *testing.T) {
 
 func TestHelmRollbackFailsOnHelmError(t *testing.T) {
 	runner := newFakeRunner()
-	runner.out["get metadata"] = []byte(`{"version":"2.1.0"}`)
+	runner.out["history"] = sampleHistory
 	runner.err["rollback"] = errHelm
 
 	require.ErrorIs(t,

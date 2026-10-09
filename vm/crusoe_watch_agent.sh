@@ -1281,8 +1281,6 @@ do_uninstall() {
 # Move the installed agent to the release named on the command line, or to the
 # newest published one. cwa-updater always names the version it was asked for.
 do_upgrade() {
-    local allow_downgrade="${1:-false}"
-
     require_root
 
     local installed_version=""
@@ -1319,11 +1317,6 @@ do_upgrade() {
         return
     fi
 
-    # Moving backwards is what a rollback does, and nothing else should.
-    if [[ "$allow_downgrade" != "true" ]] && version_lt "$target_version" "$installed_version"; then
-        error_exit "${target_version} is older than the installed ${installed_version}. Use 'rollback' to move back."
-    fi
-
     status "Moving ${installed_version} → ${target_version}..."
 
     # The new installer runs as root and is what verifies the bundle, so it is itself verified first.
@@ -1349,7 +1342,7 @@ do_upgrade() {
 # Move back to an earlier version: the same path as an upgrade, as its own command
 # so the intent shows in logs rather than being inferred from a flag.
 do_rollback() {
-    do_upgrade "true"
+    do_upgrade
 }
 
 do_refresh_token() {
@@ -1411,7 +1404,7 @@ Usage:
 Commands:
   install            Install cwa-manager, Vector, and GPU exporters
   uninstall          Stop services and remove all files (preserves secrets)
-  upgrade [VERSION]  Upgrade in place to VERSION, or to the latest release
+  upgrade [VERSION]  Move in place to VERSION, older or newer, or to the latest release
   rollback VERSION   Move back to VERSION
   refresh-token      Update monitoring token and restart services
   update-updater     Move cwa-updater to the installed release

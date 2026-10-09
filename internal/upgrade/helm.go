@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -34,6 +35,12 @@ const defaultRollbackWindow = 15 * time.Minute
 
 // helmNotFound is what helm prints for a release that does not exist.
 const helmNotFound = "release: not found"
+
+// History statuses of a revision that deployed cleanly.
+const (
+	helmDeployed   = "deployed"
+	helmSuperseded = "superseded"
+)
 
 // errMissingCosignKey means the image shipped without its verification key. The
 // round fails closed: an unverifiable chart is never applied.
@@ -144,7 +151,7 @@ type HelmConfig struct {
 	Settings *Holder
 }
 
-// HelmExecutor upgrades the agent release with helm and restores the previous revision on failure.
+// HelmExecutor upgrades the agent release with helm and restores rollback_version on failure.
 type HelmExecutor struct {
 	runner   Runner
 	cosign   Runner
@@ -203,7 +210,24 @@ func (e *HelmExecutor) Upgrade(ctx context.Context, state *State) error {
 	ctx, cancel := context.WithTimeout(ctx, e.window())
 	defer cancel()
 
-	version := chartVersion(state.TargetVersion)
+	if err := e.apply(ctx, state.TargetVersion); err != nil {
+		return err
+	}
+
+	if e.verifier == nil {
+		return nil
+	}
+
+	if err := e.verifier.Verify(ctx); err != nil {
+		return fmt.Errorf("verifying agents after upgrade to %s: %w", state.TargetVersion, err)
+	}
+
+	return nil
+}
+
+// apply verifies, downloads and applies the chart for target.
+func (e *HelmExecutor) apply(ctx context.Context, target string) error {
+	version := chartVersion(target)
 
 	// Both of these name the chart in their own errors, so the reason the control
 	// plane ends up reporting stays readable without another layer of wrapping.
@@ -233,15 +257,7 @@ func (e *HelmExecutor) Upgrade(ctx context.Context, state *State) error {
 		"--wait",
 		"--timeout", remaining(ctx).String(),
 	); err != nil {
-		return fmt.Errorf("upgrading %s to %s: %w", e.release, state.TargetVersion, err)
-	}
-
-	if e.verifier == nil {
-		return nil
-	}
-
-	if err := e.verifier.Verify(ctx); err != nil {
-		return fmt.Errorf("verifying agents after upgrade to %s: %w", state.TargetVersion, err)
+		return fmt.Errorf("upgrading %s to %s: %w", e.release, target, err)
 	}
 
 	return nil
@@ -319,14 +335,13 @@ func (e *HelmExecutor) window() time.Duration {
 	return attemptWindow(e.settings, e.rollbackWindow)
 }
 
-// Rollback restores the revision the release was on before the upgrade.
-//
-// It is a no-op when TargetVersion is not the deployed version.
+// Rollback moves the release to RollbackVersion: a stored revision if history
+// has one, else a fresh apply. No-op if RollbackVersion is already deployed.
 func (e *HelmExecutor) Rollback(ctx context.Context, state *State) error {
 	ctx, cancel := context.WithTimeout(ctx, e.window())
 	defer cancel()
 
-	deployed, err := e.deployedVersion(ctx)
+	entries, err := e.history(ctx)
 
 	switch {
 	case errors.Is(err, errNothingDeployed):
@@ -337,56 +352,94 @@ func (e *HelmExecutor) Rollback(ctx context.Context, state *State) error {
 		// Rolling back blind could downgrade a healthy release, so an unreadable
 		// release state has to surface as a failure instead.
 		return err
-	case deployed != chartVersion(state.TargetVersion):
-		e.logger.Info("target version is not deployed; nothing to roll back",
-			"deployed", deployed, "target_version", state.TargetVersion)
+	}
+
+	// helm names the chart <name>-<version>.
+	chart := e.chartName + "-" + chartVersion(state.RollbackVersion)
+
+	current, revision := inspect(entries, chart)
+	if current.Chart == chart && current.Status == helmDeployed {
+		e.logger.Info("rollback version is already deployed; nothing to roll back",
+			"rollback_version", state.RollbackVersion)
 
 		return nil
 	}
 
-	// No revision argument: helm restores the immediately previous revision,
-	// which is the one rollback_version was installed from.
-	if _, err := e.runner.Run(ctx,
-		"rollback", e.release,
-		"--namespace", e.namespace,
-		"--wait",
-		"--timeout", remaining(ctx).String(),
-	); err != nil {
+	if revision == 0 {
+		e.logger.Info("no revision in the release history ran the rollback version; applying its chart",
+			"release", e.release, "rollback_version", state.RollbackVersion)
+
+		err = e.apply(ctx, state.RollbackVersion)
+	} else {
+		_, err = e.runner.Run(ctx,
+			"rollback", e.release, strconv.Itoa(revision),
+			"--namespace", e.namespace,
+			"--wait",
+			"--timeout", remaining(ctx).String(),
+		)
+	}
+
+	if err != nil {
 		return fmt.Errorf("rolling %s back to %s: %w", e.release, state.RollbackVersion, err)
 	}
 
 	e.logger.Info("agent release rolled back",
-		"release", e.release, "rollback_version", state.RollbackVersion)
+		"release", e.release, "rollback_version", state.RollbackVersion, "from", current.Chart)
 
 	return nil
 }
 
-// metadata is the subset of `helm get metadata -o json` this needs: version is
-// the chart version, which is what target_version resolves to.
-type metadata struct {
-	Version string `json:"version"`
+// historyEntry is the subset of `helm history -o json` this needs.
+type historyEntry struct {
+	Revision int    `json:"revision"`
+	Status   string `json:"status"`
+	Chart    string `json:"chart"`
 }
 
-// deployedVersion is the chart version of the release's current revision,
-// whatever its status: a failed `helm upgrade --wait` still leaves the new
-// revision current, and that is exactly the case a rollback must act on.
-func (e *HelmExecutor) deployedVersion(ctx context.Context) (string, error) {
+// history is every revision helm still keeps for the release.
+func (e *HelmExecutor) history(ctx context.Context) ([]historyEntry, error) {
 	out, err := e.runner.Run(ctx,
-		"get", "metadata", e.release, "--namespace", e.namespace, "-o", "json")
+		"history", e.release, "--namespace", e.namespace, "-o", "json")
 	if err != nil {
 		if strings.Contains(string(out), helmNotFound) {
-			return "", errNothingDeployed
+			return nil, errNothingDeployed
 		}
 
-		return "", fmt.Errorf("reading release metadata for %s: %w", e.release, err)
+		return nil, fmt.Errorf("reading release history for %s: %w", e.release, err)
 	}
 
-	var meta metadata
-	if err := json.Unmarshal(out, &meta); err != nil {
-		return "", fmt.Errorf("parsing release metadata for %s: %w", e.release, err)
+	var entries []historyEntry
+	if err := json.Unmarshal(out, &entries); err != nil {
+		return nil, fmt.Errorf("parsing release history for %s: %w", e.release, err)
 	}
 
-	return meta.Version, nil
+	if len(entries) == 0 {
+		return nil, errNothingDeployed
+	}
+
+	return entries, nil
+}
+
+// inspect returns the current revision (any status) and the newest cleanly
+// deployed revision of chart, or zero if none.
+func inspect(entries []historyEntry, chart string) (historyEntry, int) {
+	var current historyEntry
+
+	revision := 0
+
+	for _, entry := range entries {
+		if entry.Revision > current.Revision {
+			current = entry
+		}
+
+		clean := entry.Status == helmDeployed || entry.Status == helmSuperseded
+
+		if entry.Chart == chart && clean && entry.Revision > revision {
+			revision = entry.Revision
+		}
+	}
+
+	return current, revision
 }
 
 // chartRef is the OCI reference helm pulls the agent chart from.
