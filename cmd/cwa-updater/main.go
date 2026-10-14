@@ -48,6 +48,9 @@ const (
 	// targets, alongside the upgrade record.
 	vmConfigPath = "/etc/crusoe/crusoe_watch_agent/updater-config.json"
 
+	// vmActionLogDir holds a log per upgrade or rollback on VMs; Kubernetes uses the pod log.
+	vmActionLogDir = "/var/log/crusoe/cwa-updater"
+
 	// installModeFile is written by the VM installer. cwa-manager reads the same
 	// file, so the two processes cannot disagree about the host they share.
 	installModeFile = "/etc/crusoe/crusoe_watch_agent/.install-mode"
@@ -285,6 +288,7 @@ func buildVMExecutor(logger *slog.Logger, mode installMode, config *upgrade.Hold
 		Runner:         upgrade.NewScriptRunner(logger),
 		Verifier:       upgrade.NewHostVerifier(logger, agentHealthHost, healthPort),
 		Logger:         logger,
+		LogDir:         vmActionLogDir,
 		RollbackWindow: rollbackWindow,
 		Settings:       config,
 	})

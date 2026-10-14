@@ -3,6 +3,7 @@ package upgrade
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -368,4 +369,82 @@ func TestScriptUpgradePassesNoEnvironmentWithoutAMirror(t *testing.T) {
 func TestLastLinesKeepsTheEnd(t *testing.T) {
 	assert.Equal(t, "c\nd", lastLines([]byte("a\nb\nc\nd\n"), 2))
 	assert.Equal(t, "a\nb", lastLines([]byte("  a\nb  "), 5))
+}
+
+// ---------------------------------------------------------------------------
+// Action log
+// ---------------------------------------------------------------------------
+
+// Each installer run leaves its output and outcome on the host for an operator.
+func TestScriptKeepsAnActionLogPerRun(t *testing.T) {
+	h := newScriptHost(t, "v1.3", "v1.4")
+	h.runner.out = []byte("==> Downloading v1.4\n==> Signature verified\n")
+
+	executor := h.executor()
+	executor.logDir = filepath.Join(t.TempDir(), "logs")
+
+	require.NoError(t, executor.Upgrade(context.Background(), scriptState("v1.4", "v1.3")))
+
+	h.runner.err = errInstaller
+	require.Error(t, executor.Rollback(context.Background(), scriptState("v1.4", "v1.3")))
+
+	entries, err := os.ReadDir(executor.logDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	logs := map[string]string{}
+
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(executor.logDir, entry.Name()))
+		require.NoError(t, err)
+
+		logs[entry.Name()[strings.Index(entry.Name(), "-")+1:]] = string(data)
+	}
+
+	assert.Contains(t, logs["upgrade-v1.4.log"], "result:   succeeded")
+	assert.Contains(t, logs["upgrade-v1.4.log"], "==> Signature verified")
+	assert.Contains(t, logs["rollback-v1.3.log"], "result:   failed: running rollback v1.3")
+}
+
+// The installer can succeed and the round still fail on the health check; the
+// log has to say which.
+func TestScriptActionLogRecordsTheHealthCheck(t *testing.T) {
+	h := newScriptHost(t, "v1.3", "v1.4")
+	h.verifier.err = errAgentUnhealthy
+
+	executor := h.executor()
+	executor.logDir = t.TempDir()
+
+	require.ErrorIs(t, executor.Upgrade(context.Background(), scriptState("v1.4", "v1.3")), errAgentUnhealthy)
+
+	entries, err := os.ReadDir(executor.logDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	data, err := os.ReadFile(filepath.Join(executor.logDir, entries[0].Name()))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "result:   failed: verifying the agent after the upgrade to v1.4")
+}
+
+func TestScriptKeepsOnlyTheNewestActionLogs(t *testing.T) {
+	logDir := t.TempDir()
+
+	for i := range actionLogsKept + 3 {
+		name := fmt.Sprintf("20260101T0000%02dZ-upgrade-v1.%d.log", i, i)
+		require.NoError(t, os.WriteFile(filepath.Join(logDir, name), nil, 0o600))
+	}
+
+	executor := NewScriptExecutor(ScriptConfig{Logger: discardLogger(), LogDir: logDir})
+	executor.pruneActionLogs()
+
+	entries, err := os.ReadDir(logDir)
+	require.NoError(t, err)
+	require.Len(t, entries, actionLogsKept)
+	assert.Equal(t, "20260101T000003Z-upgrade-v1.3.log", entries[0].Name(), "the oldest go first")
+}
+
+// The version comes from the control plane, so it must not name a path.
+func TestSafeFileNameStaysInTheDirectory(t *testing.T) {
+	assert.Equal(t, "v2.1.0-rc_1", safeFileName("v2.1.0-rc+1"))
+	assert.NotContains(t, safeFileName("../../etc/cron.d/x"), "/")
 }

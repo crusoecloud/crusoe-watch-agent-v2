@@ -531,7 +531,7 @@ func TestJitterStaysInRange(t *testing.T) {
 		assert.Less(t, jitter(time.Second), time.Second)
 	}
 
-	assert.Zero(t, jitter(0), "an unset jitter adds nothing")
+	assert.Zero(t, jitter(0), "a zero delay waits nothing")
 }
 
 // The delivered cap must reach the schedule the registry retries actually use.

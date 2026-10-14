@@ -43,6 +43,13 @@ const (
 // reported failure reason. It logs every step, so what failed is at the end.
 const installLogLines = 20
 
+// Action logs: how many are kept, and root-only.
+const (
+	actionLogsKept   = 20
+	actionLogDirPerm = 0o700
+	actionLogPerm    = 0o600
+)
+
 // killGracePeriod is how long the installer's process group has to unwind after
 // the SIGTERM.
 const killGracePeriod = 10 * time.Second
@@ -138,6 +145,8 @@ type ScriptConfig struct {
 	// VersionFile is where the installer records the version it installed. Empty
 	// uses defaultAgentVersionFile.
 	VersionFile string
+	// LogDir holds the action logs. Empty keeps none.
+	LogDir string
 	// RollbackWindow bounds the whole attempt. Zero uses defaultRollbackWindow;
 	// a configure-updater value takes precedence.
 	RollbackWindow time.Duration
@@ -160,6 +169,7 @@ type ScriptExecutor struct {
 
 	script         string
 	versionFile    string
+	logDir         string
 	rollbackWindow time.Duration
 	settings       *Holder
 }
@@ -184,6 +194,7 @@ func NewScriptExecutor(cfg ScriptConfig) *ScriptExecutor {
 		logger:         cfg.Logger,
 		script:         cfg.Script,
 		versionFile:    cfg.VersionFile,
+		logDir:         cfg.LogDir,
 		rollbackWindow: cfg.RollbackWindow,
 		settings:       cfg.Settings,
 	}
@@ -191,23 +202,23 @@ func NewScriptExecutor(cfg ScriptConfig) *ScriptExecutor {
 
 // Upgrade moves the host to TargetVersion, then waits for the agent to come back
 // and reach the control plane. Both steps share one deadline, the rollback window.
+// The action log is written last, to include the health check.
 func (e *ScriptExecutor) Upgrade(ctx context.Context, state *State) error {
 	ctx, cancel := context.WithTimeout(ctx, e.window())
 	defer cancel()
 
-	if err := e.run(ctx, upgradeSubcommand, state.TargetVersion); err != nil {
-		return err
+	started := time.Now().UTC()
+
+	out, err := e.run(ctx, upgradeSubcommand, state.TargetVersion)
+	if err == nil && e.verifier != nil {
+		if verifyErr := e.verifier.Verify(ctx); verifyErr != nil {
+			err = fmt.Errorf("verifying the agent after the upgrade to %s: %w", state.TargetVersion, verifyErr)
+		}
 	}
 
-	if e.verifier == nil {
-		return nil
-	}
+	e.writeActionLog(started, upgradeSubcommand, state.TargetVersion, out, err)
 
-	if err := e.verifier.Verify(ctx); err != nil {
-		return fmt.Errorf("verifying the agent after the upgrade to %s: %w", state.TargetVersion, err)
-	}
-
-	return nil
+	return err
 }
 
 // Rollback moves the host back to RollbackVersion.
@@ -236,7 +247,13 @@ func (e *ScriptExecutor) Rollback(ctx context.Context, state *State) error {
 		return nil
 	}
 
-	if err := e.run(ctx, rollbackSubcommand, state.RollbackVersion); err != nil {
+	started := time.Now().UTC()
+
+	out, err := e.run(ctx, rollbackSubcommand, state.RollbackVersion)
+
+	e.writeActionLog(started, rollbackSubcommand, state.RollbackVersion, out, err)
+
+	if err != nil {
 		return err
 	}
 
@@ -246,12 +263,24 @@ func (e *ScriptExecutor) Rollback(ctx context.Context, state *State) error {
 	return nil
 }
 
-// run drives the installer to one version and confirms the host recorded it.
-func (e *ScriptExecutor) run(ctx context.Context, subcommand, version string) error {
-	if _, err := e.runner.Run(ctx, e.script, []string{subcommand, version}, e.env()); err != nil {
-		return fmt.Errorf("running %s %s: %w", subcommand, version, err)
+// run drives the installer to one version, confirms it, and returns the installer's output.
+func (e *ScriptExecutor) run(ctx context.Context, subcommand, version string) ([]byte, error) {
+	out, err := e.runner.Run(ctx, e.script, []string{subcommand, version}, e.env())
+	if err != nil {
+		return out, fmt.Errorf("running %s %s: %w", subcommand, version, err)
 	}
 
+	if err := e.confirmInstalled(version); err != nil {
+		return out, err
+	}
+
+	e.logger.Info("installer completed", "subcommand", subcommand, "version", version)
+
+	return out, nil
+}
+
+// confirmInstalled checks that the host records version.
+func (e *ScriptExecutor) confirmInstalled(version string) error {
 	installed, err := e.installedVersion()
 	if err != nil {
 		return err
@@ -262,9 +291,76 @@ func (e *ScriptExecutor) run(ctx context.Context, subcommand, version string) er
 			errWrongVersionInstalled, version, e.versionFile, installed)
 	}
 
-	e.logger.Info("installer completed", "subcommand", subcommand, "version", version)
-
 	return nil
+}
+
+// writeActionLog saves one upgrade or rollback: its result, then the installer's
+// output with every step. A write error never fails the run.
+func (e *ScriptExecutor) writeActionLog(started time.Time, subcommand, version string, out []byte, runErr error) {
+	if e.logDir == "" {
+		return
+	}
+
+	result := "succeeded"
+	if runErr != nil {
+		firstLine, _, _ := strings.Cut(runErr.Error(), "\n")
+		result = "failed: " + firstLine
+	}
+
+	var body strings.Builder
+
+	fmt.Fprintf(&body, "%s %s\nstarted:  %s\nfinished: %s\nresult:   %s\n\n",
+		subcommand, version, started.Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339), result)
+	body.Write(out)
+
+	name := fmt.Sprintf("%s-%s-%s.log", started.Format("20060102T150405Z"), subcommand, safeFileName(version))
+
+	if err := os.MkdirAll(e.logDir, actionLogDirPerm); err != nil {
+		e.logger.Warn("creating the action log directory", "error", err)
+
+		return
+	}
+
+	if err := os.WriteFile(filepath.Join(e.logDir, name), []byte(body.String()), actionLogPerm); err != nil {
+		e.logger.Warn("writing the action log", "error", err)
+
+		return
+	}
+
+	e.pruneActionLogs()
+}
+
+// pruneActionLogs keeps the newest actionLogsKept logs; names sort by time.
+func (e *ScriptExecutor) pruneActionLogs() {
+	entries, err := os.ReadDir(e.logDir)
+	if err != nil {
+		return
+	}
+
+	var logs []string
+
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".log") {
+			logs = append(logs, entry.Name())
+		}
+	}
+
+	for _, name := range logs[:max(0, len(logs)-actionLogsKept)] {
+		if err := os.Remove(filepath.Join(e.logDir, name)); err != nil {
+			e.logger.Warn("removing an old action log", "error", err)
+		}
+	}
+}
+
+// safeFileName keeps a version from the control plane from naming a path.
+func safeFileName(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '.' || r == '-' || r == '_' || ('0' <= r && r <= '9') || ('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') {
+			return r
+		}
+
+		return '_'
+	}, value)
 }
 
 // window is the deadline one attempt gets, preferring a delivered value.

@@ -55,8 +55,7 @@ var errNothingDeployed = errors.New("agent release is not installed")
 const (
 	fetchAttempts = 5
 	fetchDelay    = 2 * time.Second
-	fetchMaxDelay = 30 * time.Second
-	fetchJitter   = time.Second
+	fetchMaxDelay = 300 * time.Second
 )
 
 // Runner runs one CLI invocation and returns its combined output.
@@ -195,7 +194,6 @@ func NewHelmExecutor(cfg HelmConfig) *HelmExecutor {
 			attempts: fetchAttempts,
 			delay:    fetchDelay,
 			maxDelay: fetchMaxDelay,
-			jitter:   fetchJitter,
 		},
 	}
 }
@@ -467,14 +465,11 @@ func remaining(ctx context.Context) time.Duration {
 	return time.Second
 }
 
-// backoff is an exponential retry schedule.
+// backoff is an exponential retry schedule with full jitter, so a fleet does not retry in lockstep.
 type backoff struct {
 	attempts int
 	delay    time.Duration
 	maxDelay time.Duration
-	// jitter is the upper bound on the random amount added to each wait, so a
-	// fleet-wide upgrade does not retry against the registry in lockstep.
-	jitter time.Duration
 }
 
 // retry calls command until it succeeds, ctx ends, or the attempts run out, and
@@ -502,7 +497,7 @@ func (b backoff) retry(
 			break
 		}
 
-		wait := delay + jitter(b.jitter)
+		wait := jitter(delay)
 
 		logger.Warn("retrying "+what,
 			"attempt", attempt, "attempts", b.attempts, "wait", wait, "error", err)

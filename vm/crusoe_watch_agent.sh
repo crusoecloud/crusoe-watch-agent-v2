@@ -38,7 +38,7 @@ fi
 # a transient failure would otherwise fail a whole upgrade round.
 DOWNLOAD_ATTEMPTS=5
 DOWNLOAD_DELAY_SEC=2
-DOWNLOAD_MAX_DELAY_SEC="${CWA_DOWNLOAD_BACKOFF_MAX_SEC:-30}"
+DOWNLOAD_MAX_DELAY_SEC="${CWA_DOWNLOAD_BACKOFF_MAX_SEC:-300}"
 DOWNLOAD_TIMEOUT=30
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/crusoe/crusoe_watch_agent"
@@ -193,17 +193,22 @@ fetch_bundle() {
     SCRIPT_DIR="$DOWNLOAD_DIR"
 }
 
-# Download $1 to $2, retrying with exponential backoff. The wait doubles from
-# DOWNLOAD_DELAY_SEC up to DOWNLOAD_MAX_DELAY_SEC, plus up to 1s of jitter so a
-# fleet-wide upgrade does not retry in lockstep.
+# Download $1 to $2, retrying with exponential backoff (DOWNLOAD_DELAY_SEC up to
+# DOWNLOAD_MAX_DELAY_SEC) and full jitter. A Retry-After, capped the same, sets the shortest wait.
 download_with_retry() {
-    local url="$1" dest="$2" delay="$DOWNLOAD_DELAY_SEC" attempt
+    local url="$1" dest="$2" delay="$DOWNLOAD_DELAY_SEC" attempt headers wait retry_after
     ((delay > DOWNLOAD_MAX_DELAY_SEC)) && delay="$DOWNLOAD_MAX_DELAY_SEC"
     for ((attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt++)); do
-        wget -q --tries=1 --timeout="$DOWNLOAD_TIMEOUT" -O "$dest" "$url" && return 0
+        # -S keeps the headers for Retry-After.
+        headers=$(wget -q -S --tries=1 --timeout="$DOWNLOAD_TIMEOUT" -O "$dest" "$url" 2>&1) && return 0
         ((attempt == DOWNLOAD_ATTEMPTS)) && break
-        status "Retrying ${url} in ${delay}s (attempt ${attempt}/${DOWNLOAD_ATTEMPTS})..."
-        sleep "$(printf '%d.%03d' "$delay" "$((RANDOM % 1000))")"
+        wait=$((RANDOM % (delay + 1)))
+        # Seconds form only; the last response is the one that failed.
+        retry_after=$(sed -n 's/^ *Retry-After: *\([0-9][0-9]*\).*/\1/Ip' <<< "$headers" | tail -n 1)
+        [[ -n "$retry_after" ]] && ((retry_after > DOWNLOAD_MAX_DELAY_SEC)) && retry_after="$DOWNLOAD_MAX_DELAY_SEC"
+        [[ -n "$retry_after" ]] && ((retry_after > wait)) && wait="$retry_after"
+        status "Retrying ${url} in ${wait}s (attempt ${attempt}/${DOWNLOAD_ATTEMPTS})..."
+        sleep "$wait"
         ((delay *= 2))
         ((delay > DOWNLOAD_MAX_DELAY_SEC)) && delay="$DOWNLOAD_MAX_DELAY_SEC"
     done
