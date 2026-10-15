@@ -113,7 +113,16 @@ func (l *Loop) SetDispatcher(d *command.Dispatcher) {
 // SetUpgradeStatus wires the cwa-updater client upgrade results are read from.
 // Without it the heartbeat reports no last_upgrade_result.
 func (l *Loop) SetUpgradeStatus(client UpdaterStatus) {
-	l.upgrades = &upgradeReporter{client: client, logger: l.logger}
+	l.upgrades = &upgradeReporter{client: client, logger: l.logger, agentID: l.agentID}
+}
+
+// agentID is the registered agent ID, empty before registration.
+func (l *Loop) agentID() string {
+	if l.identity == nil {
+		return ""
+	}
+
+	return l.identity.AgentID
 }
 
 // MarkUpgradeHandedOff is the hook upgrade.execute calls on an accepted handoff.

@@ -338,6 +338,7 @@ func buildExecutor(
 	healthService := getEnvOrDefault("AGENT_HEALTH_SERVICE", defaultAgentHealthSvc)
 	healthPort := portFromEnv(logger, "AGENT_HEALTH_PORT", defaultAgentHealthPort)
 	rollbackWindow := minutesFromEnv(logger, "UPGRADE_ROLLBACK_WINDOW_MIN")
+	healthWindow := minutesFromEnv(logger, "UPGRADE_HEALTH_WINDOW_MIN")
 
 	cfg := upgrade.HelmConfig{
 		Runner:         upgrade.NewHelmRunner(logger),
@@ -349,13 +350,14 @@ func buildExecutor(
 		ChartRepo:      getEnvOrDefault("AGENT_CHART_REPO", defaultAgentChartRepo),
 		ChartName:      getEnvOrDefault("AGENT_CHART_NAME", defaultAgentChartName),
 		RollbackWindow: rollbackWindow,
+		HealthWindow:   healthWindow,
 		Settings:       config,
 	}
 
 	logger.Info("upgrade executor wired",
 		"release", cfg.Release, "chart_repo", cfg.ChartRepo, "chart_name", cfg.ChartName,
 		"health_service", healthService, "health_port", healthPort,
-		"rollback_window", rollbackWindow)
+		"rollback_window", rollbackWindow, "health_window", healthWindow)
 
 	return upgrade.NewHelmExecutor(cfg)
 }
@@ -457,7 +459,13 @@ func (s *server) handleStatus(writer http.ResponseWriter, request *http.Request)
 			s.respond(writer, http.StatusOK, status)
 		}
 	case http.MethodDelete:
-		if err := s.upgrade.ClearStatus(request.Context()); err != nil {
+		// Without an agent_id, for an operator clearing it by hand, the result is dropped at once.
+		drop := s.upgrade.ClearStatus
+		if agentID := request.URL.Query().Get(upgrade.AgentIDParam); agentID != "" {
+			drop = func(ctx context.Context) error { return s.upgrade.AcknowledgeResult(ctx, agentID) }
+		}
+
+		if err := drop(request.Context()); err != nil {
 			s.respondError(writer, err)
 
 			return

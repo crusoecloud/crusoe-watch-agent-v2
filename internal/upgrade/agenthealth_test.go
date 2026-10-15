@@ -2,6 +2,8 @@ package upgrade
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -109,6 +111,28 @@ func TestHostVerifierReportsTheAgentFailureNotTheDeadline(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connect", "the connection failure was replaced by the deadline")
+}
+
+// The window is a multiple of the interval, so the last tick lands on the
+// deadline. That pass is cut short, as by client-go's rate limiter, and must not
+// replace the reason the agents gave.
+func TestPollStopsBeforeAPassThatCannotFinish(t *testing.T) {
+	const interval = 20 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*interval)
+	defer cancel()
+
+	calls := 0
+	err := pollUntilHealthy(ctx, discardLogger(), interval, testHealthService, func(context.Context) error {
+		if calls++; calls <= 2 {
+			return fmt.Errorf("%w: 10.0.0.1 reports \"starting\"", errAgentUnhealthy)
+		}
+
+		return errors.New("rate: Wait(n=1) would exceed context deadline")
+	})
+
+	require.ErrorIs(t, err, errAgentUnhealthy)
+	assert.Equal(t, 2, calls, "the pass on the deadline must not run")
 }
 
 // An agent that comes back part way through the window still passes.

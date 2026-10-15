@@ -3,6 +3,7 @@ package upgrade
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -131,6 +132,7 @@ type StatusView struct {
 	AgentExecutions map[string]string `json:"agent_executions,omitempty"`
 	ExpectedCount   int               `json:"expected_count,omitempty"`
 	Result          *Result           `json:"last_upgrade_result,omitempty"`
+	Acknowledged    []string          `json:"acknowledged,omitempty"`
 }
 
 // State is the durable upgrade record: the handoff ConfigMap on Kubernetes, a local file on VM targets.
@@ -149,6 +151,10 @@ type State struct {
 	CollectDeadline time.Time `json:"collect_deadline"`
 	RequestedAt     time.Time `json:"requested_at"`
 	Result          *Result   `json:"result,omitempty"`
+	// Acknowledged lists the agents that have reported Result.
+	Acknowledged []string `json:"acknowledged,omitempty"`
+	// FirstAcknowledgedAt is when the first agent reported Result, which shows the control plane is reachable.
+	FirstAcknowledgedAt time.Time `json:"first_acknowledged_at,omitempty"`
 }
 
 // Result is a terminal upgrade outcome, served until cwa-manager acknowledges it.
@@ -201,5 +207,18 @@ func (s *State) clone() *State {
 		copied.Result = &result
 	}
 
+	copied.Acknowledged = slices.Clone(s.Acknowledged)
+
 	return &copied
+}
+
+// AllAcknowledged reports whether every agent that handed off has reported Result.
+func (s *State) AllAcknowledged() bool {
+	for agentID := range s.AgentExecutions {
+		if !slices.Contains(s.Acknowledged, agentID) {
+			return false
+		}
+	}
+
+	return true
 }

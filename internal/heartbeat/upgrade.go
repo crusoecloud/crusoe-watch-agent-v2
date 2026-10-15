@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -30,7 +31,7 @@ const updaterCallBudget = 2 * updaterCallTimeout
 // *upgrade.Client implements it.
 type UpdaterStatus interface {
 	Status(ctx context.Context) (*upgrade.StatusView, error)
-	Acknowledge(ctx context.Context) error
+	Acknowledge(ctx context.Context, agentID string) error
 }
 
 // upgradeReporter turns the result cwa-updater persisted into the heartbeat's
@@ -38,8 +39,9 @@ type UpdaterStatus interface {
 // result is read back rather than remembered in process: an upgrade replaces the
 // pod that handed it off. A nil *upgradeReporter is a working no-op.
 type upgradeReporter struct {
-	client UpdaterStatus
-	logger *slog.Logger
+	client  UpdaterStatus
+	logger  *slog.Logger
+	agentID func() string // agentID is the agent this manager reports for.
 
 	mu sync.Mutex
 	// pending is the result waiting to be reported, held until acknowledged.
@@ -141,7 +143,7 @@ func (r *upgradeReporter) Sent(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, updaterCallTimeout)
 	defer cancel()
 
-	if err := r.client.Acknowledge(ctx); err != nil {
+	if err := r.client.Acknowledge(ctx, r.agentID()); err != nil {
 		// Not fatal: the result stays pending and rides the next heartbeat.
 		r.logger.Warn("acknowledging the upgrade result with cwa-updater", "error", err)
 
@@ -192,7 +194,8 @@ func (r *upgradeReporter) refresh(ctx context.Context) {
 
 	r.inProgress = !view.Phase.Terminal()
 
-	if view.Result == nil {
+	// Other agents' acknowledgements are still due, so the result stays served.
+	if view.Result == nil || slices.Contains(view.Acknowledged, r.agentID()) {
 		return
 	}
 
@@ -218,10 +221,9 @@ func (r *upgradeReporter) pollDue() bool {
 	return r.inProgress || r.ticks == 1 || r.ticks%statusPollTicks == 0
 }
 
-// upgradeResult maps cwa-updater's result onto the heartbeat field. Whichever
-// manager reads a result reports it, without checking agent_executions first: an
-// unacknowledged result blocks the next round, so declining to claim one would
-// wedge upgrades for the whole cluster.
+// upgradeResult maps cwa-updater's result onto the heartbeat field. Every
+// manager reports it, without checking agent_executions first: on Kubernetes the
+// round replaced every pod, and the control plane tracks each agent.
 func upgradeResult(result *upgrade.Result) *pb.CwaUpgradeResult {
 	status := pb.CwaUpgradeStatus_CWA_UPGRADE_STATUS_FAILED
 

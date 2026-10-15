@@ -15,9 +15,10 @@ import (
 
 // recorded is what the fake cwa-updater saw.
 type recorded struct {
-	method string
-	path   string
-	body   Request
+	method  string
+	path    string
+	agentID string
+	body    Request
 }
 
 // newFakeUpdater serves handler and returns a Client pointed at it, plus a
@@ -28,6 +29,7 @@ func newFakeUpdater(t *testing.T, handler http.HandlerFunc) (*Client, *recorded)
 	last := &recorded{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		last.method, last.path = r.Method, r.URL.Path
+		last.agentID = r.URL.Query().Get(AgentIDParam)
 		_ = json.NewDecoder(r.Body).Decode(&last.body)
 		handler(w, r)
 	}))
@@ -200,9 +202,10 @@ func TestClientAcknowledgeDeletesTheStatus(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	require.NoError(t, client.Acknowledge(context.Background()))
+	require.NoError(t, client.Acknowledge(context.Background(), "agent-1"))
 	assert.Equal(t, http.MethodDelete, last.method)
 	assert.Equal(t, statusRoute, last.path)
+	assert.Equal(t, "agent-1", last.agentID, "each agent acknowledges for itself")
 }
 
 func TestClientAcknowledgeRefusedWhileAnUpgradeRuns(t *testing.T) {
@@ -215,7 +218,7 @@ func TestClientAcknowledgeRefusedWhileAnUpgradeRuns(t *testing.T) {
 		})
 	})
 
-	err := client.Acknowledge(context.Background())
+	err := client.Acknowledge(context.Background(), "agent-1")
 	require.ErrorIs(t, err, ErrConflict)
 }
 

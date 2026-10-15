@@ -9,6 +9,13 @@ spec:
   selector:
     matchLabels:
       {{- include "cwa.selectorLabels" . | nindent 6 }}
+  # A tenth of the nodes per batch keeps cwa-updater's `helm upgrade --wait` and
+  # `helm rollback --wait` inside its window at any cluster size. No maxSurge:
+  # hostNetwork pods cannot share a node's ports.
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 10%
   template:
     metadata:
       labels:

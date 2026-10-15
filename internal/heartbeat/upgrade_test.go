@@ -23,6 +23,8 @@ type fakeUpdater struct {
 	acks    int
 	ackErr  error
 	ackErrs int // fail this many acknowledgements before succeeding
+	// ackedAs is the agent_id of the last acknowledgement.
+	ackedAs string
 }
 
 func (f *fakeUpdater) Status(context.Context) (*upgrade.StatusView, error) {
@@ -35,8 +37,9 @@ func (f *fakeUpdater) Status(context.Context) (*upgrade.StatusView, error) {
 	return f.view, nil
 }
 
-func (f *fakeUpdater) Acknowledge(context.Context) error {
+func (f *fakeUpdater) Acknowledge(_ context.Context, agentID string) error {
 	f.acks++
+	f.ackedAs = agentID
 
 	if f.acks <= f.ackErrs {
 		return f.ackErr
@@ -47,8 +50,9 @@ func (f *fakeUpdater) Acknowledge(context.Context) error {
 
 func reporterFor(client UpdaterStatus) *upgradeReporter {
 	return &upgradeReporter{
-		client: client,
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		client:  client,
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		agentID: func() string { return "agent-1" },
 	}
 }
 
@@ -179,6 +183,32 @@ func TestReporterAcknowledgesOnlyAfterTheCoordinatorResponds(t *testing.T) {
 	client.view = nil
 	client.err = upgrade.ErrNoState
 	assert.Nil(t, reporter.Result(context.Background()))
+}
+
+// On Kubernetes every pod reports the result for its own agent, so one pod's
+// acknowledgement must neither stop the others nor make that pod report again.
+func TestReporterReportsForItsOwnAgent(t *testing.T) {
+	t.Parallel()
+
+	view := rolledBackView()
+	view.AgentExecutions = map[string]string{"agent-1": "exec-1", "agent-2": "exec-2"}
+	view.Acknowledged = []string{"agent-1"}
+
+	client := &fakeUpdater{view: view}
+	reporter := reporterFor(client)
+	reporter.agentID = func() string { return "agent-2" }
+	reporter.StreamOpened()
+
+	require.NotNil(t, reporter.Result(context.Background()), "another agent's acknowledgement must not hide the result")
+	reporter.Sent(context.Background())
+	reporter.Received()
+	reporter.Sent(context.Background())
+	assert.Equal(t, "agent-2", client.ackedAs)
+
+	view.Acknowledged = append(view.Acknowledged, "agent-2")
+	again := reporterFor(&fakeUpdater{view: view})
+	again.agentID = func() string { return "agent-2" }
+	assert.Nil(t, again.Result(context.Background()), "an agent that acknowledged must not report again")
 }
 
 func TestReporterKeepsTheResultWhenTheStreamDiesBeforeAResponse(t *testing.T) {

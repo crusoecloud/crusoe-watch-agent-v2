@@ -107,6 +107,11 @@ func pollUntilHealthy(
 
 		logger.Info("not healthy yet", "waiting_on", what, "error", err)
 
+		// The next tick would land on the deadline, and its cut-short pass replace this reason.
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < interval {
+			return fmt.Errorf("%s did not become healthy: %w", what, lastErr)
+		}
+
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("%s did not become healthy: %w", what, lastErr)

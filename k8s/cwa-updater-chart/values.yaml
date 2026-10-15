@@ -26,8 +26,11 @@ agent:
   healthPort: 8787
 
 upgrade:
-  # Minutes to wait for post-upgrade pod health before rolling back.
+  # Minutes the rollout may take before rolling back; also bounds the rollback.
   rollbackWindowMin: 15
+  # Minutes to wait for post-upgrade pod health before rolling back. Kept short so
+  # collection + rollout + health + rollback stays within the control plane's wait.
+  healthWindowMin: 5
   # Minutes to wait for one execution_id per healthy DaemonSet pod before
   # aborting with status: collection_timeout.
   ackTimeoutMin: 15

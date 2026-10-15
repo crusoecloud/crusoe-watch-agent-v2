@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -34,6 +35,9 @@ const (
 	upgradeRoute = "/upgrade"
 	configRoute  = "/config"
 )
+
+// AgentIDParam names the agent acknowledging a result on DELETE /status.
+const AgentIDParam = "agent_id"
 
 // clientTimeout bounds one call; every route answers from state already in memory.
 const clientTimeout = 10 * time.Second
@@ -165,9 +169,10 @@ func (c *Client) Status(ctx context.Context) (*StatusView, error) {
 	return view, nil
 }
 
-// Acknowledge clears a reported result, which frees cwa-updater to accept the next round. Idempotent.
-func (c *Client) Acknowledge(ctx context.Context) error {
-	resp, err := c.do(ctx, http.MethodDelete, statusRoute, nil)
+// Acknowledge records that agentID reported the result. cwa-updater clears it,
+// which frees it to accept the next round, once every agent that handed off has. Idempotent.
+func (c *Client) Acknowledge(ctx context.Context, agentID string) error {
+	resp, err := c.do(ctx, http.MethodDelete, statusRoute+"?"+url.Values{AgentIDParam: {agentID}}.Encode(), nil)
 	if err != nil {
 		return err
 	}

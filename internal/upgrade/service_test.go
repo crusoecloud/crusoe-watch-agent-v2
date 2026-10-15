@@ -341,6 +341,80 @@ func TestClearStatusRefusesWhileRunning(t *testing.T) {
 	assert.NotNil(t, store.state)
 }
 
+// On Kubernetes each pod reports the result for its own agent, so one
+// acknowledgement must not drop it for the others.
+func TestAcknowledgeResultWaitsForEveryAgent(t *testing.T) {
+	ctx := context.Background()
+	store := &memStore{state: terminalState()}
+	svc := newTestService(store)
+	require.NoError(t, svc.Recover(ctx))
+
+	require.NoError(t, svc.AcknowledgeResult(ctx, "agent-1"))
+	require.NoError(t, svc.AcknowledgeResult(ctx, "agent-1"), "a repeat is a no-op")
+	assert.False(t, store.cleared)
+
+	status, err := svc.Status()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"agent-1"}, status.Acknowledged)
+	assert.Equal(t, []string{"agent-1"}, store.state.Acknowledged, "the acknowledgement must survive a restart")
+
+	require.NoError(t, svc.AcknowledgeResult(ctx, "agent-2"))
+	assert.True(t, store.cleared)
+	assert.Equal(t, StatusIdle, svc.HealthStatus())
+}
+
+func TestAcknowledgeResultRefusesWhileRunning(t *testing.T) {
+	ctx := context.Background()
+	store := &memStore{state: &State{Phase: PhaseInProgress, TargetVersion: "v2.1.0"}}
+	svc := newTestService(store)
+	require.NoError(t, svc.Recover(ctx))
+
+	require.ErrorIs(t, svc.AcknowledgeResult(ctx, "agent-1"), ErrConflict)
+	assert.False(t, store.cleared)
+}
+
+// A node that left the cluster never acknowledges, and the held result would
+// block every later round.
+func TestResultExpiresOnceSomeAgentsAcknowledged(t *testing.T) {
+	ctx := context.Background()
+	state := terminalState()
+	state.Result.CompletedAt = time.Now().Add(-16 * time.Minute)
+	store := &memStore{state: state}
+	svc := newCollectService(store, &fakeCounter{}, &fakeExecutor{})
+	require.NoError(t, svc.Recover(ctx))
+
+	// No agent reported it, so no control plane has seen it yet.
+	svc.expireResult(ctx)
+	assert.False(t, store.cleared)
+
+	require.NoError(t, svc.AcknowledgeResult(ctx, "agent-1"))
+	assert.False(t, store.state.FirstAcknowledgedAt.IsZero(), "the first acknowledgement must be persisted")
+
+	// The result is old, but the first agent only just reported it.
+	svc.expireResult(ctx)
+	assert.False(t, store.cleared)
+
+	svc.state.FirstAcknowledgedAt = time.Now().Add(-16 * time.Minute)
+	svc.expireResult(ctx)
+	assert.True(t, store.cleared)
+}
+
+// A control plane that was unreachable for most of the timeout must not cut
+// short the agents that report after the first one.
+func TestResultIsKeptWithinTheAckTimeout(t *testing.T) {
+	ctx := context.Background()
+	state := terminalState()
+	state.Result.CompletedAt = time.Now().Add(-16 * time.Minute)
+	state.Acknowledged = []string{"agent-1"}
+	state.FirstAcknowledgedAt = time.Now()
+	store := &memStore{state: state}
+	svc := newCollectService(store, &fakeCounter{}, &fakeExecutor{})
+	require.NoError(t, svc.Recover(ctx))
+
+	svc.expireResult(ctx)
+	assert.False(t, store.cleared)
+}
+
 // ---------------------------------------------------------------------------
 // Acceptance
 // ---------------------------------------------------------------------------

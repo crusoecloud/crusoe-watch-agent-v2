@@ -33,6 +33,9 @@ const ociScheme = "oci://"
 // defaultRollbackWindow is upgrade.rollbackWindowMin; the chart overrides it.
 const defaultRollbackWindow = 15 * time.Minute
 
+// defaultHealthWindow is upgrade.healthWindowMin; the chart overrides it.
+const defaultHealthWindow = 5 * time.Minute
+
 // helmNotFound is what helm prints for a release that does not exist.
 const helmNotFound = "release: not found"
 
@@ -145,6 +148,8 @@ type HelmConfig struct {
 	// RollbackWindow bounds the whole attempt. Zero uses defaultRollbackWindow;
 	// a configure-updater value takes precedence.
 	RollbackWindow time.Duration
+	// HealthWindow bounds the health check after the rollout. Zero uses defaultHealthWindow.
+	HealthWindow time.Duration
 	// Settings is the live configure-updater config, read per run. Nil keeps
 	// RollbackWindow.
 	Settings *Holder
@@ -163,6 +168,7 @@ type HelmExecutor struct {
 	chartName      string
 	cosignKey      string
 	rollbackWindow time.Duration
+	healthWindow   time.Duration
 	settings       *Holder
 	// backoff paces the registry calls; tests shorten it.
 	backoff backoff
@@ -172,6 +178,10 @@ type HelmExecutor struct {
 func NewHelmExecutor(cfg HelmConfig) *HelmExecutor {
 	if cfg.RollbackWindow <= 0 {
 		cfg.RollbackWindow = defaultRollbackWindow
+	}
+
+	if cfg.HealthWindow <= 0 {
+		cfg.HealthWindow = defaultHealthWindow
 	}
 
 	if cfg.CosignKey == "" {
@@ -189,6 +199,7 @@ func NewHelmExecutor(cfg HelmConfig) *HelmExecutor {
 		chartName:      cfg.ChartName,
 		cosignKey:      cfg.CosignKey,
 		rollbackWindow: cfg.RollbackWindow,
+		healthWindow:   cfg.HealthWindow,
 		settings:       cfg.Settings,
 		backoff: backoff{
 			attempts: fetchAttempts,
@@ -199,16 +210,19 @@ func NewHelmExecutor(cfg HelmConfig) *HelmExecutor {
 }
 
 // Upgrade installs TargetVersion and confirms the agents that came back are
-// reaching the control plane. The rollout and the health check share one deadline.
+// reaching the control plane. The rollout and the health check each get a
+// window, so a long rollout on a large cluster leaves the check its full time.
 //
 // It runs in three steps so that only the last one can leave the cluster
 // changed: the signature check and the download are pure registry work and are
 // retried, while the apply happens once against an already-verified local chart.
 func (e *HelmExecutor) Upgrade(ctx context.Context, state *State) error {
-	ctx, cancel := context.WithTimeout(ctx, e.window())
-	defer cancel()
+	applyCtx, cancelApply := context.WithTimeout(ctx, e.window())
+	err := e.apply(applyCtx, state.TargetVersion)
 
-	if err := e.apply(ctx, state.TargetVersion); err != nil {
+	cancelApply()
+
+	if err != nil {
 		return err
 	}
 
@@ -216,7 +230,10 @@ func (e *HelmExecutor) Upgrade(ctx context.Context, state *State) error {
 		return nil
 	}
 
-	if err := e.verifier.Verify(ctx); err != nil {
+	verifyCtx, cancel := context.WithTimeout(ctx, e.healthWindow)
+	defer cancel()
+
+	if err := e.verifier.Verify(verifyCtx); err != nil {
 		return fmt.Errorf("verifying agents after upgrade to %s: %w", state.TargetVersion, err)
 	}
 

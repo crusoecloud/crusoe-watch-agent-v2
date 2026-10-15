@@ -87,12 +87,30 @@ func (f *fakeRunner) ran(subcommand string) ([]string, bool) {
 type fakeVerifier struct {
 	calls int
 	err   error
+	// deadline is the deadline of the last Verify call.
+	deadline time.Time
 }
 
-func (f *fakeVerifier) Verify(context.Context) error {
+func (f *fakeVerifier) Verify(ctx context.Context) error {
 	f.calls++
+	f.deadline, _ = ctx.Deadline()
 
 	return f.err
+}
+
+// slowRunner is a fakeRunner whose helm upgrade takes delay, like a rollout.
+type slowRunner struct {
+	*fakeRunner
+
+	delay time.Duration
+}
+
+func (s *slowRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "upgrade" {
+		time.Sleep(s.delay)
+	}
+
+	return s.fakeRunner.Run(ctx, args...)
 }
 
 func discardLogger() *slog.Logger {
@@ -159,6 +177,27 @@ func TestHelmUpgradeArgs(t *testing.T) {
 	// The CMK add-on installs; cwa-updater only upgrades. --install would
 	// half-succeed, since it holds no create permission on cluster-scoped resources.
 	assert.NotContains(t, call, "--install")
+}
+
+// A rollout that takes most of the window on a large cluster must not leave the
+// health check only what is left of it.
+func TestHelmHealthCheckGetsItsOwnWindow(t *testing.T) {
+	const (
+		window  = time.Second
+		rollout = 300 * time.Millisecond
+	)
+
+	runner := &slowRunner{fakeRunner: newFakeRunner(), delay: rollout}
+	verifier := &fakeVerifier{}
+
+	executor := newHelmExecutor(t, runner, verifier)
+	executor.healthWindow = window
+
+	start := time.Now()
+	require.NoError(t, executor.Upgrade(context.Background(), upgradeState()))
+
+	assert.GreaterOrEqual(t, verifier.deadline.Sub(start), window+rollout-50*time.Millisecond,
+		"the health check window must start after the rollout")
 }
 
 // Verification comes first so an unsigned chart is never downloaded, and the
@@ -408,7 +447,7 @@ func TestHelmRollbackFailsOnHelmError(t *testing.T) {
 // Window arithmetic
 // ---------------------------------------------------------------------------
 
-// The rollout and the health check share the rollback window, so helm must be
+// The registry calls and the rollout share the rollback window, so helm must be
 // handed what is left of it rather than the full window each time.
 func TestRemainingTracksDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)

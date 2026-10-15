@@ -290,6 +290,7 @@ func (s *Service) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.collectTick(ctx)
+			s.expireResult(ctx)
 		}
 	}
 }
@@ -640,7 +641,66 @@ func (s *Service) Status() (StatusView, error) {
 		AgentExecutions: snapshot.AgentExecutions,
 		ExpectedCount:   snapshot.ExpectedCount,
 		Result:          snapshot.Result,
+		Acknowledged:    snapshot.Acknowledged,
 	}, nil
+}
+
+// AcknowledgeResult records that agentID reported the terminal result, and drops
+// the result once every agent that handed off has: on Kubernetes each pod reports it for its own agent.
+func (s *Service) AcknowledgeResult(ctx context.Context, agentID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.corrupt != nil || s.state == nil || !s.state.Phase.Terminal() {
+		return s.clearStatusLocked(ctx)
+	}
+
+	staged := s.state.clone()
+	if len(staged.Acknowledged) == 0 {
+		staged.FirstAcknowledgedAt = time.Now().UTC()
+	}
+
+	if !slices.Contains(staged.Acknowledged, agentID) {
+		staged.Acknowledged = append(staged.Acknowledged, agentID)
+	}
+
+	if staged.AllAcknowledged() {
+		return s.clearStatusLocked(ctx)
+	}
+
+	if len(staged.Acknowledged) == len(s.state.Acknowledged) {
+		return nil
+	}
+
+	if err := s.commit(ctx, staged); err != nil {
+		return err
+	}
+
+	s.logger.Info("upgrade result acknowledged by one agent",
+		"agent_id", agentID, "acknowledged", len(staged.Acknowledged), "handed_off", len(staged.AgentExecutions))
+
+	return nil
+}
+
+// expireResult drops a result that some agents reported and the rest never
+// will. Counted from the first acknowledgement.
+func (s *Service) expireResult(ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.state == nil || s.state.Result == nil || len(s.state.Acknowledged) == 0 ||
+		time.Since(s.state.FirstAcknowledgedAt) < s.ackTimeout {
+
+		return
+	}
+
+	s.logger.Warn("dropping an upgrade result that some agents never acknowledged",
+		"target_version", s.state.TargetVersion,
+		"acknowledged", len(s.state.Acknowledged), "handed_off", len(s.state.AgentExecutions))
+
+	if err := s.clearStatusLocked(ctx); err != nil {
+		s.logger.Error("dropping the upgrade result", "error", err)
+	}
 }
 
 // ClearStatus drops an acknowledged terminal result. It refuses while an upgrade
@@ -649,6 +709,11 @@ func (s *Service) ClearStatus(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.clearStatusLocked(ctx)
+}
+
+// clearStatusLocked is ClearStatus for callers that hold s.mu.
+func (s *Service) clearStatusLocked(ctx context.Context) error {
 	// An unreadable record is cleared unconditionally.
 	if s.corrupt != nil {
 		if err := s.store.Clear(ctx); err != nil {
