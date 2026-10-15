@@ -59,8 +59,9 @@ type Watcher struct {
 
 	reconcileCh chan struct{}
 
-	mu       sync.Mutex
-	lastHash [sha256.Size]byte
+	mu          sync.Mutex
+	lastHash    [sha256.Size]byte
+	lastMapHash [sha256.Size]byte // CMKv2 CP uid_map.csv content hash (change detection)
 
 	logger *slog.Logger
 }
@@ -78,6 +79,11 @@ func New(cfg Config, client kubernetes.Interface) *Watcher {
 // Run starts informers and blocks until ctx is cancelled.
 func (w *Watcher) Run(ctx context.Context) error {
 	w.logger.Info("watcher starting", "node", w.cfg.NodeName)
+
+	// CMKv2 CP: seed uid_map.csv before any config is written so Vector never starts against a missing file.
+	if w.snapshotCfg().CMKv2CPEnabled {
+		w.seedUIDMap(ctx)
+	}
 
 	// Preserve existing config on disk as baseline so Vector can start before we reach the K8s API.
 	// If no config exists yet, write a fallback with static components.
@@ -108,12 +114,14 @@ func (w *Watcher) Run(ctx context.Context) error {
 	w.setupInformers()
 
 	go w.podInformer.Run(ctx.Done())
-	go w.cmInformer.Run(ctx.Done())
 
-	synced := cache.WaitForCacheSync(ctx.Done(),
-		w.podInformer.HasSynced,
-		w.cmInformer.HasSynced,
-	)
+	syncFns := []cache.InformerSynced{w.podInformer.HasSynced}
+	if w.cmInformer != nil { // nil in CP cell mode (custom-metrics informer skipped)
+		go w.cmInformer.Run(ctx.Done())
+		syncFns = append(syncFns, w.cmInformer.HasSynced)
+	}
+
+	synced := cache.WaitForCacheSync(ctx.Done(), syncFns...)
 	if !synced {
 		return errCacheSyncFailed
 	}
@@ -121,7 +129,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 	w.logger.Info("informer caches synced")
 
 	// Bootstrap: generate full config from current cluster state.
-	w.reconcile()
+	w.reconcile(ctx)
 
 	// Block on event-driven reconcile loop.
 	w.reconcileLoop(ctx)
@@ -221,7 +229,11 @@ func (w *Watcher) setupInformers() {
 		w.logger.Error("failed to add pod event handler", "error", err)
 	}
 
-	// ConfigMap informer: watches crusoe-custom-metrics-config in crusoe-monitoring.
+	// ConfigMap informer for custom metrics — skipped in CP cell mode (no custom metrics, no RBAC).
+	if w.cfg.K8sCfg.CMKv2CPEnabled {
+		return
+	}
+
 	cmLW := cache.NewListWatchFromClient(
 		w.client.CoreV1().RESTClient(),
 		"configmaps",
@@ -308,12 +320,12 @@ func (w *Watcher) reconcileLoop(ctx context.Context) {
 			debounce = time.After(reconcileDebounce)
 		case <-debounce:
 			debounce = nil
-			w.reconcile()
+			w.reconcile(ctx)
 		}
 	}
 }
 
-func (w *Watcher) reconcile() {
+func (w *Watcher) reconcile(ctx context.Context) {
 	cfg := w.snapshotCfg()
 	pods := w.classifyPods(cfg)
 	cmData := w.readConfigMapData()
@@ -332,7 +344,14 @@ func (w *Watcher) reconcile() {
 	unchanged := hash == w.lastHash
 	w.mu.Unlock()
 
-	if unchanged {
+	// CMKv2 CP: refresh the uid->tenant map; if it changed, rewrite the config to fire --watch-config.
+	mapChanged := false
+	var newMapHash [sha256.Size]byte
+	if cfg.CMKv2CPEnabled {
+		mapChanged, newMapHash = w.reconcileUIDMap(ctx)
+	}
+
+	if unchanged && !mapChanged {
 		return
 	}
 
@@ -342,9 +361,12 @@ func (w *Watcher) reconcile() {
 		return
 	}
 
-	// Only advance the tracked hash after a successful write so failures retry next cycle.
+	// Advance the hashes only after a successful write so a failed write retries next cycle.
 	w.mu.Lock()
 	w.lastHash = hash
+	if mapChanged {
+		w.lastMapHash = newMapHash
+	}
 	w.mu.Unlock()
 
 	w.logger.Info("vector config updated", "pods", len(pods), "path", w.cfg.ConfigPath)
@@ -371,6 +393,10 @@ func (w *Watcher) classifyPods(cfg vector.K8sConfig) []vector.ClassifiedPod {
 }
 
 func (w *Watcher) readConfigMapData() map[string]string {
+	if w.cmInformer == nil { // CP cell mode: no custom-metrics informer
+		return nil
+	}
+
 	for _, obj := range w.cmInformer.GetStore().List() {
 		cm, ok := obj.(*corev1.ConfigMap)
 		if !ok {

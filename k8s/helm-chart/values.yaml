@@ -25,6 +25,9 @@ imagePullSecrets: []
 # CMS monitoring backend URL.
 cmsEndpoint: "https://cms-monitoring.crusoecloud.com"
 
+# CML backend URL for the CMKv2 CP log sink (cell mode). Empty falls back to logsBase().
+cmlEndpoint: ""
+
 # Pre-existing secret containing CRUSOE_CLUSTER_ID, CRUSOE_PROJECT_ID,
 # and Crusoe API credentials (CRUSOE_ACCESS_KEY, CRUSOE_ACCESS_KEY_SECRET).
 # Loaded via envFrom into the Vector and token-creation Job containers.
@@ -114,6 +117,27 @@ customMetrics:
   defaultPort: 9100
   defaultPath: "/metrics"
   defaultScrape: 30
+
+# CMKv2 control-plane log pipeline (cell deployment only); off by default.
+cmkv2Cp:
+  enabled: false
+  # Cell mode: the CML sink authenticates with this per-cell CP log token (synced to a Secret).
+  logTokenSecret: cmkv2-cp-log-token
+  logTokenKey: token
+  # ExternalSecret that syncs the CP log token from Vault. Enable only where cml-vector does NOT
+  # already provide the secret (i.e. every cell except icat-6). Write the token to Vault at
+  # secret/<namespace>/<logTokenSecret> (property: token) before enabling.
+  externalSecret:
+    enabled: false
+    secretStoreName: cmkv2-cp-log-vault
+    refreshInterval: 1h
+    vault:
+      server: https://vault.vault-shared.svc.cluster.local:8200
+      path: secret
+      version: v2
+      mountPath: kubernetes
+      role: namespace-reader
+      caProviderSecret: cluster-ca-bundle
 
 logs:
   enabled: true

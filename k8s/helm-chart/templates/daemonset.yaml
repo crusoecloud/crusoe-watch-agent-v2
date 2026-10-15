@@ -59,20 +59,34 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            {{- if .Values.cmkv2Cp.enabled }}
+            # CP cell mode: the CML sink authenticates with the per-cell CP log token.
+            - name: CMKV2_CP_LOG_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.cmkv2Cp.logTokenSecret | quote }}
+                  key: {{ .Values.cmkv2Cp.logTokenKey | quote }}
+            # Cell identifier stamped on the CML sink header (app-generator injects global.cluster per cell).
+            - name: CRUSOE_CELL
+              value: {{ .Values.global.cluster | default "unknown" | quote }}
+            {{- else }}
             - name: CRUSOE_MONITORING_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "cwa.monitoringSecretName" . }}
                   key: CRUSOE_MONITORING_TOKEN
+            {{- end }}
             - name: AGENT_VERSION
               value: {{ .Chart.AppVersion | quote }}
             - name: VECTOR_VERSION
               value: {{ .Values.vector.tag | quote }}
             - name: INSTALL_TYPE
               value: "kubernetes"
+          {{- if not .Values.cmkv2Cp.enabled }}
           envFrom:
             - secretRef:
                 name: {{ .Values.existingSecret }}
+          {{- end }}
           volumeMounts:
             - name: crusoe-shared
               mountPath: /etc/vector
@@ -92,6 +106,12 @@ spec:
             - name: journal-logs
               mountPath: /var/log/journal
               readOnly: true
+            {{- if .Values.cmkv2Cp.enabled }}
+            # CP cell mode: Vector tails the apiserver audit emptyDir under the kubelet pods dir.
+            - name: kubelet-pods
+              mountPath: /var/lib/kubelet/pods
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources.vector | nindent 12 }}
           # Vector only reads host logs and the journal, so the one privilege it
@@ -131,11 +151,13 @@ spec:
               value: {{ .Values.cwaUpdater.host | default (printf "cwa-updater.%s.svc.cluster.local" .Values.namespace) | quote }}
             - name: CWA_UPDATER_PORT
               value: {{ .Values.cwaUpdater.port | quote }}
+            {{- if not .Values.cmkv2Cp.enabled }}
             - name: CRUSOE_MONITORING_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "cwa.monitoringSecretName" . }}
                   key: CRUSOE_MONITORING_TOKEN
+            {{- end }}
             - name: CMS_ENDPOINT
               value: {{ .Values.cmsEndpoint | quote }}
             - name: VECTOR_CONFIG_PATH
@@ -184,6 +206,11 @@ spec:
               value: {{ .Values.logs.enabled | quote }}
             - name: OPERATOR_LOG_NAMESPACES
               value: {{ join "," (.Values.logs.operatorNamespaces | default list) | quote }}
+            # CMKv2 CP log pipeline; set cmkv2Cp.enabled=true only in the cell values.
+            - name: CMKV2_CP_ENABLED
+              value: {{ .Values.cmkv2Cp.enabled | default false | quote }}
+            - name: CML_ENDPOINT
+              value: {{ .Values.cmlEndpoint | quote }}
             - name: NVIDIA_DRIVER_NAMESPACE
               value: {{ .Values.bugReport.driverNamespace | quote }}
             {{- if .Values.proxy.enabled }}
@@ -194,9 +221,11 @@ spec:
             - name: NO_PROXY
               value: {{ .Values.proxy.noProxy | quote }}
             {{- end }}
+          {{- if not .Values.cmkv2Cp.enabled }}
           envFrom:
             - secretRef:
                 name: {{ .Values.existingSecret }}
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -266,6 +295,12 @@ spec:
           hostPath:
             path: /var/log/journal
             type: DirectoryOrCreate
+        {{- if .Values.cmkv2Cp.enabled }}
+        - name: kubelet-pods
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+        {{- end }}
         # Persistent state for the last-applied control-plane config
         # (survives pod restarts, not node reimage).
         - name: cwa-state

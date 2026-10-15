@@ -189,6 +189,8 @@ func buildK8sConfig() vector.K8sConfig {
 		OperatorLogNamespaces:      operatorLogNamespaces(),
 		SinkEndpoint:               os.Getenv("CMS_ENDPOINT"),
 		Proxy:                      buildProxyConfig(),
+		CMKv2CPEnabled:             getEnvBool("CMKV2_CP_ENABLED", false),
+		CMLEndpoint:                os.Getenv("CML_ENDPOINT"),
 	}
 }
 

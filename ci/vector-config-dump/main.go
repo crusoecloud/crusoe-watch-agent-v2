@@ -37,15 +37,16 @@ func main() {
 	platform := flag.String("platform", "vm", "platform: vm, k8s")
 	gpu := flag.String("gpu", "none", "VM GPU type: none, nvidia, amd")
 	cme := flag.Bool("cme", false, "VM only: enable the Crusoe Metrics Exporter pipeline")
+	cmkv2cp := flag.Bool("cmkv2cp", false, "k8s only: render the control-plane cell-mode config")
 	flag.Parse()
 
-	if err := run(*platform, *gpu, *cme); err != nil {
+	if err := run(*platform, *gpu, *cme, *cmkv2cp); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
-func run(platform, gpu string, cme bool) error {
+func run(platform, gpu string, cme, cmkv2cp bool) error {
 	var (
 		out []byte
 		err error
@@ -55,7 +56,11 @@ func run(platform, gpu string, cme bool) error {
 	case "vm":
 		out, err = renderVM(gpu, cme)
 	case "k8s":
-		out, err = renderK8s()
+		if cmkv2cp {
+			out, err = renderK8sCPCell()
+		} else {
+			out, err = renderK8s()
+		}
 	default:
 		return fmt.Errorf("%w: %q", errUnknownPlatform, platform)
 	}
@@ -130,6 +135,26 @@ func renderK8s() ([]byte, error) {
 	out, err := vector.GenerateK8s(pods, nil, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("generating k8s vector config: %w", err)
+	}
+
+	return out, nil
+}
+
+func renderK8sCPCell() ([]byte, error) {
+	cfg := vector.K8sConfig{
+		CMKv2CPEnabled: true,
+		CMLEndpoint:    "https://cms-monitoring.example.com",
+		NodeLabels: vector.NodeLabels{
+			VMID:         "test-vm-id",
+			NodepoolID:   "test-nodepool-id",
+			InstanceType: "test-instance-type",
+			Hostname:     "test-node",
+		},
+	}
+
+	out, err := vector.GenerateK8s(nil, nil, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("generating control-plane cell vector config: %w", err)
 	}
 
 	return out, nil

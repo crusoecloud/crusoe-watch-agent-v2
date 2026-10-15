@@ -27,6 +27,7 @@ subjects:
     name: {{ include "cwa.serviceAccountName" . }}
     namespace: {{ .Values.namespace }}
 ---
+{{- if not .Values.cmkv2Cp.enabled }}
 # --- Token-creation Job RBAC ---
 apiVersion: v1
 kind: ServiceAccount
@@ -135,6 +136,7 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "cwa.serviceAccountName" . }}
     namespace: {{ .Values.namespace }}
+{{- end }}
 ---
 {{- if lookup "v1" "Namespace" "" .Values.bugReport.driverNamespace }}
 # Exec into the GPU Operator driver pod to run nvidia-bug-report.sh (report.bug).

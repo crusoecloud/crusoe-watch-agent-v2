@@ -18,12 +18,13 @@ import (
 type PodType string
 
 const (
-	PodTypeDCGM   PodType = "dcgm_exporter"
-	PodTypeAMD    PodType = "amd_exporter"
-	PodTypeKSM    PodType = "kube_state_metrics"
-	PodTypeSlurm  PodType = "slurm_metrics"
-	PodTypeCME    PodType = "crusoe_metrics_exporter"
-	PodTypeCustom PodType = "custom_metrics"
+	PodTypeDCGM    PodType = "dcgm_exporter"
+	PodTypeAMD     PodType = "amd_exporter"
+	PodTypeKSM     PodType = "kube_state_metrics"
+	PodTypeSlurm   PodType = "slurm_metrics"
+	PodTypeCME     PodType = "crusoe_metrics_exporter"
+	PodTypeCustom  PodType = "custom_metrics"
+	PodTypeCMKv2CP PodType = "cmkv2_control_plane"
 )
 
 // ClassifiedPod holds a discovered pod's identity and scrape metadata.
@@ -106,6 +107,12 @@ type K8sConfig struct {
 	CustomMetricsDefaultPath   string
 	CustomMetricsDefaultScrape int // default scrape interval for custom metrics
 	LogsEnabled                bool
+
+	// CMKv2CPEnabled turns on the CMKv2 control-plane log pipeline (cell deployment):
+	// audit + operational CP logs with per-record uid->tenant attribution -> CML.
+	CMKv2CPEnabled bool
+	// CMLEndpoint is the CML base URL for the cross-tenant CP sink. Falls back to logsBase().
+	CMLEndpoint string
 
 	// OperatorLogNamespaces are the namespaces whose GPU / network operator
 	// Deployment logs are collected. Empty disables operator log collection.
@@ -201,8 +208,16 @@ func GenerateK8sBase(cfg K8sConfig) map[string]any {
 	transforms := ensureMap(baseCfg, "transforms")
 	sinks := ensureMap(baseCfg, "sinks")
 
+	// CMKv2 CP cell mode: emit ONLY the CP pipeline (the static/log pipelines need a token a cell lacks).
+	if cfg.CMKv2CPEnabled {
+		applyCMKv2CP(baseCfg, cfg)
+
+		return baseCfg
+	}
+
 	buildStaticConfig(sources, transforms, sinks, cfg)
 	applyLogs(sources, transforms, sinks, cfg)
+	applyCMKv2CP(baseCfg, cfg)
 
 	return baseCfg
 }
@@ -211,6 +226,11 @@ func GenerateK8sBase(cfg K8sConfig) map[string]any {
 // Adds DCGM, AMD, KSM, Slurm, CME, and custom metrics pipelines based on
 // discovered pods and ConfigMap rules.
 func ApplyK8s(baseCfg map[string]any, pods []ClassifiedPod, cmData map[string]string, cfg K8sConfig) {
+	// CP cell mode is CP-only: skip the dynamic overlay (its exporter sinks would need the monitoring token).
+	if cfg.CMKv2CPEnabled {
+		return
+	}
+
 	sources := ensureMap(baseCfg, "sources")
 	transforms := ensureMap(baseCfg, "transforms")
 	sinks := ensureMap(baseCfg, "sinks")
@@ -284,6 +304,8 @@ func partitionPods(pods []ClassifiedPod) partitionedPods {
 			result.cmeIP = pod.IP
 		case PodTypeCustom:
 			result.custom = append(result.custom, pod)
+		case PodTypeCMKv2CP:
+			// CP logs are config-driven (applyCMKv2CP), not partitioned by pod IP.
 		}
 	}
 
@@ -592,15 +614,11 @@ type k8sLogSpec struct {
 // transform name, for feeding into enrich_logs. Names are Vector's global component
 // namespace: a reused name overwrites the earlier component.
 func applyK8sLog(sources, transforms map[string]any, spec k8sLogSpec) string {
-	source := map[string]any{
-		"type":                        "kubernetes_logs",
-		"include_paths_glob_patterns": spec.globs,
-		"read_from":                   spec.readFrom,
-	}
-	if spec.labelSelector != "" {
-		source["extra_label_selector"] = spec.labelSelector
-	}
-	sources[spec.sourceName] = source
+	sources[spec.sourceName] = buildLogSource(k8sLogSourceOpts{
+		globs:         spec.globs,
+		readFrom:      spec.readFrom,
+		labelSelector: spec.labelSelector,
+	})
 	transforms[spec.transformName] = remapTransform([]string{spec.sourceName}, spec.transformVRL)
 
 	return spec.transformName
@@ -632,30 +650,21 @@ func applyOperatorLogs(sources, transforms map[string]any, cfg K8sConfig) string
 }
 
 func buildLogsSink(cfg K8sConfig) map[string]any {
-	sinkConfig := map[string]any{
-		"type":        "http",
-		"inputs":      []string{"enrich_logs"},
-		"uri":         cfg.logsEndpoint(),
-		"framing":     map[string]any{"method": "newline_delimited"},
-		"compression": "snappy",
-		"healthcheck": map[string]any{"enabled": false},
-		"request": map[string]any{
-			"headers": map[string]any{
-				"X-Crusoe-Vm-Id": "${VM_ID:-unknown}",
-				"User-Agent":     "CrusoeWatchAgent/CMK-${AGENT_VERSION}",
-			},
-			"timeout_secs": requestTimeoutSecs,
+	opts := httpLogSinkOpts{
+		inputs: []string{"enrich_logs"},
+		uri:    cfg.logsEndpoint(),
+		token:  "${CRUSOE_MONITORING_TOKEN}",
+		headers: map[string]any{
+			"X-Crusoe-Vm-Id": "${VM_ID:-unknown}",
+			"User-Agent":     "CrusoeWatchAgent/CMK-${AGENT_VERSION}",
 		},
-		"auth":     map[string]any{"strategy": "bearer", "token": "${CRUSOE_MONITORING_TOKEN}"},
-		"encoding": map[string]any{"codec": "json"},
-		"batch":    map[string]any{"max_bytes": logBatchMaxBytes},
-		"tls":      tlsConfig(cfg.Proxy.Enabled),
+		tls: tlsConfig(cfg.Proxy.Enabled),
 	}
 	if cfg.Proxy.Enabled {
-		sinkConfig["proxy"] = cfg.Proxy.toMap()
+		opts.proxy = cfg.Proxy.toMap()
 	}
 
-	return sinkConfig
+	return buildHTTPLogSink(opts)
 }
 
 // ---------------------------------------------------------------------------

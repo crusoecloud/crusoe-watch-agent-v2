@@ -252,7 +252,7 @@ func TestWatcher_Reconcile(t *testing.T) {
 	require.NoError(t, w.writeBaseConfig())
 
 	// Reconcile should detect pods and generate full config.
-	w.reconcile()
+	w.reconcile(context.Background())
 
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err)
@@ -290,14 +290,14 @@ func TestWatcher_ReconcileSkipsUnchanged(t *testing.T) {
 	require.NoError(t, w.writeBaseConfig())
 
 	// First reconcile writes the config.
-	w.reconcile()
+	w.reconcile(context.Background())
 	info1, _ := os.Stat(configPath)
 
 	// Wait briefly to ensure mtime would differ if file were rewritten.
 	time.Sleep(50 * time.Millisecond)
 
 	// Second reconcile with same state should skip write.
-	w.reconcile()
+	w.reconcile(context.Background())
 	info2, _ := os.Stat(configPath)
 
 	assert.Equal(t, info1.ModTime(), info2.ModTime(), "file should not be rewritten when config is unchanged")
@@ -334,7 +334,7 @@ func TestWatcher_SetIngestionBlocked(t *testing.T) {
 	// Block: the flag is stored on the watcher, so the reconcile it triggers
 	// (and every later data-plane reconcile) writes a sink-stripped config.
 	w.SetIngestionBlocked(true)
-	w.reconcile()
+	w.reconcile(context.Background())
 
 	sinks := readSinks()
 	assert.Len(t, sinks, 1)
@@ -342,7 +342,7 @@ func TestWatcher_SetIngestionBlocked(t *testing.T) {
 
 	// Unblock restores the sinks.
 	w.SetIngestionBlocked(false)
-	w.reconcile()
+	w.reconcile(context.Background())
 
 	sinks = readSinks()
 	assert.Contains(t, sinks, "cms_gateway_node_metrics")
@@ -380,14 +380,14 @@ func TestWatcher_SetRateLimits(t *testing.T) {
 	// Set: the caps are stored on the watcher, so the reconcile it triggers (and
 	// every later data-plane reconcile) writes a rate-limited config.
 	w.SetRateLimits(map[string]int{vector.RateLimitAll: 100})
-	w.reconcile()
+	w.reconcile(context.Background())
 
 	req := readSinks()["cms_gateway_node_metrics"].(map[string]any)["request"].(map[string]any)
 	assert.Equal(t, 100, req["rate_limit_num"])
 
 	// An empty map clears the caps.
 	w.SetRateLimits(nil)
-	w.reconcile()
+	w.reconcile(context.Background())
 
 	req = readSinks()["cms_gateway_node_metrics"].(map[string]any)["request"].(map[string]any)
 	assert.NotContains(t, req, "rate_limit_num")
@@ -444,7 +444,7 @@ func TestWatcher_ReconcileWithConfigMap(t *testing.T) {
 	w.cmInformer.GetStore().Add(cm)
 
 	require.NoError(t, w.writeBaseConfig())
-	w.reconcile()
+	w.reconcile(context.Background())
 
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err)
@@ -489,7 +489,7 @@ func TestWatcher_LoadExistingConfigHash(t *testing.T) {
 
 		w.podInformer = newFakeInformer()
 		w.cmInformer = newFakeInformer()
-		w.reconcile()
+		w.reconcile(context.Background())
 
 		// Config should have been overwritten with the generated version.
 		data, err := os.ReadFile(configPath)

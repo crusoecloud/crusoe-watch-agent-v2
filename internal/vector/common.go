@@ -224,6 +224,70 @@ func diskBufferConfig() map[string]any {
 	}
 }
 
+// k8sLogSourceOpts are the per-source fields for buildLogSource; the two selectors are optional.
+type k8sLogSourceOpts struct {
+	globs                  []string
+	readFrom               string
+	labelSelector          string // extra_label_selector (pod-level)
+	namespaceLabelSelector string // extra_namespace_label_selector
+}
+
+// buildLogSource builds a kubernetes_logs source with the given globs/read_from and optional selectors.
+func buildLogSource(opts k8sLogSourceOpts) map[string]any {
+	source := map[string]any{
+		"type":                        "kubernetes_logs",
+		"include_paths_glob_patterns": opts.globs,
+		"read_from":                   opts.readFrom,
+	}
+	if opts.labelSelector != "" {
+		source["extra_label_selector"] = opts.labelSelector
+	}
+	if opts.namespaceLabelSelector != "" {
+		source["extra_namespace_label_selector"] = opts.namespaceLabelSelector
+	}
+
+	return source
+}
+
+// httpLogSinkOpts are the per-sink fields for buildHTTPLogSink; buffer/proxy are optional (nil = off).
+type httpLogSinkOpts struct {
+	inputs  []string
+	uri     string
+	token   string
+	headers map[string]any
+	tls     map[string]any
+	buffer  map[string]any
+	proxy   map[string]any
+}
+
+// buildHTTPLogSink builds an HTTP log sink with shared defaults, parameterized by the varying fields.
+func buildHTTPLogSink(opts httpLogSinkOpts) map[string]any {
+	sink := map[string]any{
+		"type":        "http",
+		"inputs":      opts.inputs,
+		"uri":         opts.uri,
+		"framing":     map[string]any{"method": "newline_delimited"},
+		"compression": "snappy",
+		"healthcheck": map[string]any{"enabled": false},
+		"request": map[string]any{
+			"headers":      opts.headers,
+			"timeout_secs": requestTimeoutSecs,
+		},
+		"auth":     map[string]any{"strategy": "bearer", "token": opts.token},
+		"encoding": map[string]any{"codec": "json"},
+		"batch":    map[string]any{"max_bytes": logBatchMaxBytes},
+		"tls":      opts.tls,
+	}
+	if opts.buffer != nil {
+		sink["buffer"] = opts.buffer
+	}
+	if opts.proxy != nil {
+		sink["proxy"] = opts.proxy
+	}
+
+	return sink
+}
+
 // tlsConfig returns the TLS settings for a sink. When the sink routes through a
 // proxy, h2 is stripped from the ALPN list: the proxy terminates HTTP/1.1 and
 // re-establishing h2 through it breaks the connection.

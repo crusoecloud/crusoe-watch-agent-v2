@@ -74,6 +74,7 @@ vector-validate:
 	@AGENT_VERSION=dev \
 	 CRUSOE_CLUSTER_ID=test-cluster \
 	 CRUSOE_MONITORING_TOKEN=test-token \
+	 CMKV2_CP_LOG_TOKEN=test-token \
 	 CRUSOE_PROJECT_ID=test-project \
 	 LOGS_INGRESS_ENDPOINT=https://example.com \
 	 TELEMETRY_INGRESS_ENDPOINT=https://example.com \
@@ -90,7 +91,10 @@ vector-validate:
 	 done; \
 	 go run ./ci/vector-config-dump --platform=k8s > ${BUILDDIR}/vector-configs/k8s.yaml; \
 	 echo "Validating k8s"; \
-	 vector validate --no-environment ${BUILDDIR}/vector-configs/k8s.yaml || exit 1'
+	 vector validate --no-environment ${BUILDDIR}/vector-configs/k8s.yaml || exit 1; \
+	 go run ./ci/vector-config-dump --platform=k8s --cmkv2cp > ${BUILDDIR}/vector-configs/k8s-cmkv2cp.yaml; \
+	 echo "Validating k8s-cmkv2cp"; \
+	 vector validate --no-environment ${BUILDDIR}/vector-configs/k8s-cmkv2cp.yaml || exit 1'
 
 .PHONY: clean
 clean:

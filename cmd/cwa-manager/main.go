@@ -127,6 +127,22 @@ func runAgent(coordAddr string, vmCfg vector.VMConfig) error {
 		deps.Watcher = configWatcher
 	}
 
+	// CMKv2 CP cell mode runs the data plane only (no coordinator, token, or heartbeat).
+	if getEnvBool("CMKV2_CP_ENABLED", false) {
+		runControlPlaneCell(ctx, ident.InstallType, logger)
+
+		return nil
+	}
+
+	return runCoordinatorAgent(ctx, coordAddr, vmCfg, ident, resolver, deps, k8sRT, logger)
+}
+
+// runCoordinatorAgent runs the normal (non-CP) agent: coordinator auth, command loop, heartbeat.
+func runCoordinatorAgent(
+	ctx context.Context, coordAddr string, vmCfg vector.VMConfig,
+	ident *identity.Identity, resolver *identity.Resolver,
+	deps command.Deps, k8sRT *k8sRuntime, logger *slog.Logger,
+) error {
 	token := os.Getenv(monitoringTokenEnv)
 	if token == "" {
 		return errMissingMonitoringToken
@@ -183,8 +199,26 @@ func wireCommands(
 	loop.SetDispatcher(buildDispatcher(loop, deps, k8sRT, uploader, updater, ident, logger))
 }
 
+// noHeartbeatReporter is the health Reporter for CP cell mode (no heartbeat loop); reports "never heartbeated".
+type noHeartbeatReporter struct{}
+
+func (noHeartbeatReporter) LastHeartbeat() time.Time { return time.Time{} }
+
+// runControlPlaneCell runs cwa-manager in CP cell mode: serve health and block until shutdown.
+func runControlPlaneCell(ctx context.Context, installType pb.CwaInstallType, logger *slog.Logger) {
+	logger.Info("cmkv2 CP cell mode: data-plane only; no token/coordinator/heartbeat")
+	startHealthServer(ctx, installType, noHeartbeatReporter{}, logger)
+	<-ctx.Done()
+	logger.Info("cwa-manager shutdown complete")
+}
+
 // startHealthServer serves cwa-manager's own /health in the background.
-func startHealthServer(ctx context.Context, installType pb.CwaInstallType, loop *heartbeat.Loop, logger *slog.Logger) {
+func startHealthServer(
+	ctx context.Context,
+	installType pb.CwaInstallType,
+	reporter health.Reporter,
+	logger *slog.Logger,
+) {
 	// On K8s, bind all interfaces so kubelet and cwa-updater can reach the pod.
 	host := "127.0.0.1"
 	if installType == pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES {
@@ -192,7 +226,7 @@ func startHealthServer(ctx context.Context, installType pb.CwaInstallType, loop 
 	}
 
 	addr := host + ":" + getEnvOrDefault(health.PortEnv, health.DefaultPort)
-	srv := health.NewServer(addr, loop, logger)
+	srv := health.NewServer(addr, reporter, logger)
 
 	go func() {
 		if err := srv.Run(ctx); err != nil && ctx.Err() == nil {
