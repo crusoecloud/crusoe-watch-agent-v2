@@ -10,7 +10,7 @@
 
 # cwa-manager: VM agent + K8s sidecar. Built from root Dockerfile.
 # Tag format: YYYY.MM.DD-<short-sha>.
-cwa-manager: "2026.10.15-043612ff"
+cwa-manager: "2026.10.15-be6797f2"
 
 # cwa-updater: upgrade executor. K8s: single-replica Deployment (cwa-updater chart).
 # Tag format: YYYY.MM.DD-<short-sha>.
@@ -18,7 +18,7 @@ cwa-updater: "2026.10.15-043612ff"
 
 # report-runner: docker-mode bug-report sidecar (NVIDIA + AMD images share this pin).
 # Tag format: YYYY.MM.DD-<short-sha>.
-report-runner: "2026.10.06-c1f22f60"
+report-runner: "2026.10.15-be6797f2"
 
 ###############################################################################
 # External components — upstream/vendored versions.
