@@ -107,6 +107,9 @@ metadata:
   name: crusoe-monitoring
   labels:
     {{- include "cwa.bootstrapLabels" . | nindent 4 }}
+  annotations:
+    # Uninstall should not cascade-delete the customer's custom-metrics ConfigMap.
+    helm.sh/resource-policy: keep
 ---
 # Role for reading custom-metrics ConfigMap in crusoe-monitoring namespace.
 apiVersion: rbac.authorization.k8s.io/v1
