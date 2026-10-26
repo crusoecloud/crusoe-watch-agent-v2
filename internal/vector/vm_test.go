@@ -57,6 +57,7 @@ func TestGenerateVM_CPUOnly(t *testing.T) {
 	assert.Contains(t, src, "vector_internal_logs")
 	assert.Contains(t, src, "cwa_manager_logs")
 	assert.Contains(t, src, "report_runner_logs")
+	assert.Contains(t, src, "cwa_updater_logs")
 	assert.NotContains(t, src, "dcgm_metrics")
 	assert.NotContains(t, src, "amd_metrics")
 	assert.NotContains(t, src, "crusoe_infra_metrics")
@@ -256,6 +257,7 @@ func TestGenerateVM_CommonTransformsPresent(t *testing.T) {
 		"parse_internal_logs",
 		"parse_cwa_manager_logs",
 		"parse_report_runner_logs",
+		"parse_cwa_updater_logs",
 		"enrich_logs",
 		"add_update_labels",
 		"filter_internal_metrics",
@@ -333,6 +335,7 @@ func TestGenerateVM_JournaldExcludesAgentUnits(t *testing.T) {
 	assert.Contains(t, units, "crusoe-watch-agent-native.service")
 	assert.Contains(t, units, "cwa-manager.service")
 	assert.Contains(t, units, "cwa-report-runner.service")
+	assert.Contains(t, units, "cwa-updater.service")
 	assert.Contains(t, units, "cwa-vector.service")
 }
 
@@ -376,6 +379,30 @@ func TestGenerateVM_ReportRunnerLogs(t *testing.T) {
 	// Shares cwa-manager's logfmt body, differing only in log_source.
 	source := parseRunner["source"].(string)
 	assert.Contains(t, source, `.log_source = "cwa-report-runner"`)
+	assert.Contains(t, source, ".level = downcase(string!(parsed.level))")
+}
+
+func TestGenerateVM_CwaUpdaterLogs(t *testing.T) {
+	cfg := parsedVM(t, VMConfig{GPUType: GPUNone})
+	src := sources(cfg)
+
+	// Dedicated cwa-updater journald source exists.
+	updaterLogs := src["cwa_updater_logs"].(map[string]any)
+	assert.Equal(t, "journald", updaterLogs["type"])
+	includeUnits := updaterLogs["include_units"].([]any)
+	assert.Contains(t, includeUnits, "cwa-updater.service")
+
+	// Transform is wired into enrich_logs.
+	xf := transforms(cfg)
+	parseUpdater := xf["parse_cwa_updater_logs"].(map[string]any)
+	assert.Equal(t, []any{"cwa_updater_logs"}, parseUpdater["inputs"].([]any))
+
+	enrichInputs := xf["enrich_logs"].(map[string]any)["inputs"].([]any)
+	assert.Contains(t, enrichInputs, "parse_cwa_updater_logs")
+
+	// Shares cwa-manager's logfmt body, differing only in log_source.
+	source := parseUpdater["source"].(string)
+	assert.Contains(t, source, `.log_source = "cwa-updater"`)
 	assert.Contains(t, source, ".level = downcase(string!(parsed.level))")
 }
 

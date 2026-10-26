@@ -83,14 +83,19 @@ func GenerateVMBase() map[string]any {
 	sources["vector_internal_logs"] = map[string]any{"type": "internal_logs"}
 	sources["cwa_manager_logs"] = journaldUnitSource("cwa-manager.service")
 	sources["report_runner_logs"] = journaldUnitSource("cwa-report-runner.service")
+	sources["cwa_updater_logs"] = journaldUnitSource("cwa-updater.service")
 
 	// Log transforms
 	transforms["parse_journald_logs"] = remapTransform([]string{"journald_logs"}, vrlParseJournaldLogs)
 	transforms["parse_internal_logs"] = remapTransform([]string{"vector_internal_logs"}, vrlParseInternalLogs)
 	transforms["parse_cwa_manager_logs"] = remapTransform([]string{"cwa_manager_logs"}, vrlParseCwaManagerLogs)
 	transforms["parse_report_runner_logs"] = remapTransform([]string{"report_runner_logs"}, vrlParseReportRunnerLogs)
+	transforms["parse_cwa_updater_logs"] = remapTransform([]string{"cwa_updater_logs"}, vrlParseCwaUpdaterLogs)
 	transforms["enrich_logs"] = remapTransform(
-		[]string{"parse_journald_logs", "parse_internal_logs", "parse_cwa_manager_logs", "parse_report_runner_logs"},
+		[]string{
+			"parse_journald_logs", "parse_internal_logs", "parse_cwa_manager_logs",
+			"parse_report_runner_logs", "parse_cwa_updater_logs",
+		},
 		vrlEnrichLogs)
 
 	// Metrics transforms (add_update_labels starts with host_metrics only; ApplyVM wires GPU)
@@ -191,6 +196,7 @@ func journaldSource() map[string]any {
 			"crusoe-watch-agent-native.service",
 			"cwa-manager.service",
 			"cwa-report-runner.service",
+			"cwa-updater.service",
 			"cwa-vector.service",
 		},
 	}

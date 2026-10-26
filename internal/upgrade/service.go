@@ -567,7 +567,8 @@ func (s *Service) finish(ctx context.Context, result *Result) {
 	}
 
 	s.logger.Info("upgrade finished",
-		"result", result.Status, "target_version", staged.TargetVersion, "reason", result.Reason)
+		"result", result.Status, "from_version", result.FromVersion,
+		"target_version", staged.TargetVersion, "reason", result.Reason)
 }
 
 // terminalPhase is the phase that holds a result until it is acknowledged.
