@@ -46,7 +46,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: cwa-updater
-          image: "{{ .Values.cwaUpdater.image }}:{{ .Values.cwaUpdater.tag }}"
+          image: "{{ include "cwaUpdater.repository" (dict "ctx" . "repository" .Values.cwaUpdater.image) }}:{{ .Values.cwaUpdater.tag }}"
           ports:
             - name: http
               containerPort: {{ .Values.cwaUpdater.port }}
@@ -67,7 +67,7 @@ spec:
             - name: AGENT_DAEMONSET
               value: {{ .Values.agent.daemonSet | quote }}
             - name: AGENT_CHART_REPO
-              value: {{ .Values.agent.chartRepo | quote }}
+              value: {{ printf "oci://%s" (include "cwaUpdater.repository" (dict "ctx" . "repository" (trimPrefix "oci://" .Values.agent.chartRepo))) | quote }}
             - name: AGENT_CHART_NAME
               value: {{ .Values.agent.chartName | quote }}
             - name: AGENT_HEALTH_SERVICE

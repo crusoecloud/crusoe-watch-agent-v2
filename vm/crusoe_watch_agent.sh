@@ -79,23 +79,15 @@ done
 # Unrendered dev script: build the default branch rather than a bogus tag.
 case "$DCGM_EXPORTER_RELEASE" in @@*@@) DCGM_EXPORTER_RELEASE="" ;; esac
 
-# A CCR pull-through cache project maps to exactly one upstream registry, so
-# each region has a separate project mirroring ghcr.io and docker.io.
-CCR_ENDPOINT_FORMAT="registry.%s.ccr.crusoecloudcompute.com"
-declare -A -r CCR_GHCR_PROJECT_MAP=(
-  ["eu-iceland2-a"]="cwa-ghcr.33d1748b"
-)
-declare -A -r CCR_DOCKERHUB_PROJECT_MAP=(
-  ["eu-iceland2-a"]="cwa-docker.33d1748b"
-)
-
 ###############################################################################
 # Configurable via flags
 ###############################################################################
 INSTALL_MODE="docker"   # "docker" or "native"
 MONITORING_TOKEN=""
 INGRESS_URL=""
-IMAGE_REGISTRY="ghcr"   # registry to pull container images from: "ghcr" or "ccr"
+# Image registry prefixes for the docker-compose files.
+IMAGE_REGISTRY_GHCR="ghcr.io"
+IMAGE_REGISTRY_DOCKERHUB="docker.io"
 DCGM_EXPORTER_SKIP="false"   # set in dcgm_setup; leaves an existing Docker exporter untouched
 DCGM_REINSTALLED="false"     # set in dcgm_apt_install; the hostengine restarted, so exporters must too
 
@@ -765,43 +757,6 @@ handle_token() {
     write_token
 }
 
-# --registry ccr falls back to the upstream registries rather than aborting the
-# install. Warn loudly, since a VM without public egress will fail to pull.
-registry_fallback_warning() {
-    echo -e "\n\033[1mWarning: --registry ccr requested, but $1.\033[0m" >&2
-    echo "Falling back to ghcr.io / docker.io, which requires egress to the public internet." >&2
-}
-
-# Resolve IMAGE_REGISTRY_GHCR and IMAGE_REGISTRY_DOCKERHUB, the registry
-# prefixes the docker-compose files prepend to their (host-less) image paths.
-resolve_image_registries() {
-    IMAGE_REGISTRY_GHCR="ghcr.io"
-    IMAGE_REGISTRY_DOCKERHUB="docker.io"
-    if [[ "$IMAGE_REGISTRY" == "ghcr" ]]; then
-        return
-    fi
-
-    local region ghcr_project dockerhub_project endpoint
-    region=$(detect_region)
-    if [[ -z "$region" ]]; then
-        registry_fallback_warning "the region could not be derived from the hostname domain (hostname -d returned nothing)"
-        return
-    fi
-
-    ghcr_project="${CCR_GHCR_PROJECT_MAP[$region]:-}"
-    dockerhub_project="${CCR_DOCKERHUB_PROJECT_MAP[$region]:-}"
-    if [[ -z "$ghcr_project" || -z "$dockerhub_project" ]]; then
-        registry_fallback_warning "no CCR pull-through cache project is configured for region '${region}' (configured regions: ${!CCR_GHCR_PROJECT_MAP[*]})"
-        return
-    fi
-
-    # shellcheck disable=SC2059 # CCR_ENDPOINT_FORMAT is an intentional format string
-    endpoint=$(printf "$CCR_ENDPOINT_FORMAT" "$region")
-    IMAGE_REGISTRY_GHCR="${endpoint}/${ghcr_project}"
-    IMAGE_REGISTRY_DOCKERHUB="${endpoint}/${dockerhub_project}"
-    status "Pulling container images through CCR in region ${region}."
-}
-
 write_env_file() {
     local vm_id="$1"
     local cms_url="${INGRESS_URL:-$CMS_BASE_URL}"
@@ -826,7 +781,6 @@ INSTALL_TYPE='${install_type}'
 EOF
 
     # Registry prefixes consumed by the docker-compose files.
-    resolve_image_registries
     cat <<EOF >> "$ENV_FILE"
 IMAGE_REGISTRY_GHCR='${IMAGE_REGISTRY_GHCR}'
 IMAGE_REGISTRY_DOCKERHUB='${IMAGE_REGISTRY_DOCKERHUB}'
@@ -1421,9 +1375,8 @@ Install Options:
   --ingress-url URL          Override CMS base URL
   --dcgm-exporter-port PORT  DCGM exporter port (default: 9400)
   --amd-exporter-port PORT   AMD exporter port (default: 5000)
-  --registry NAME            Registry to pull container images from: ghcr (default) or ccr.
-                             ccr uses Crusoe Container Registry's in-region pull-through
-                             cache, which needs no public internet egress or credentials.
+  --ghcr-registry URL        ghcr.io pull-through cache or mirror for agent images (default: ghcr.io)
+  --dockerhub-registry URL   docker.io pull-through cache or mirror for GPU exporter images (default: docker.io)
 
 GPU type is auto-detected. NVIDIA and AMD GPUs are supported.
 AMD GPUs require Docker mode (--no-docker is not supported with AMD).
@@ -1485,12 +1438,14 @@ while [[ $# -gt 0 ]]; do
             AMD_EXPORTER_PORT="${2:?Missing value for --amd-exporter-port}"
             shift 2
             ;;
-        --registry)
-            IMAGE_REGISTRY="${2:?Missing value for --registry}"
-            case "$IMAGE_REGISTRY" in
-                ghcr|ccr) ;;
-                *) error_exit "Unsupported --registry '${IMAGE_REGISTRY}'. Valid values are: ghcr, ccr." ;;
-            esac
+        --ghcr-registry)
+            IMAGE_REGISTRY_GHCR="${2:?Missing value for --ghcr-registry}"
+            IMAGE_REGISTRY_GHCR="${IMAGE_REGISTRY_GHCR%/}"
+            shift 2
+            ;;
+        --dockerhub-registry)
+            IMAGE_REGISTRY_DOCKERHUB="${2:?Missing value for --dockerhub-registry}"
+            IMAGE_REGISTRY_DOCKERHUB="${IMAGE_REGISTRY_DOCKERHUB%/}"
             shift 2
             ;;
         *)

@@ -2,21 +2,8 @@ namespace: crusoe-system
 
 # Settings shared across the chart's images.
 global:
-  # global.registry -- Where container images are pulled from: ghcr (default) or ccr.
-  registry: ghcr
-
-  # global.region -- Crusoe region, e.g. "eu-iceland2-a". Auto-detected from the
-  # topology.kubernetes.io/region node label; only set it for `helm template`
-  # or --dry-run, which render without cluster access.
-  region: ""
-
-  # global.ccr -- Preconfigured CCR pull-through cache projects, keyed by region.
-  ccr:
-    endpointFormat: "registry.%s.ccr.crusoecloudcompute.com"
-    projects:
-      eu-iceland2-a:
-        ghcr: "cwa-ghcr.33d1748b"
-        dockerhub: "cwa-docker.33d1748b"
+  # global.registry -- Image registry URL, e.g. a ghcr.io pull-through cache. Empty uses ghcr.io.
+  registry: ""
 
 # Image pull secrets for private registries.
 imagePullSecrets: []

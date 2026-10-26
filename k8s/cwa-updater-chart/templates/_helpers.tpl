@@ -46,3 +46,18 @@ entity. Empty under `helm template`, which has no cluster to ask.
 {{- define "cwaUpdater.cilium" -}}
 {{- if .Capabilities.APIVersions.Has "cilium.io/v2/CiliumNetworkPolicy" }}true{{- end }}
 {{- end }}
+
+{{/*
+Prepend global.registry (default ghcr.io) to a host-less repository. A
+repository whose first segment has "." or ":" already has a host and is kept.
+Args: ctx, repository.
+*/}}
+{{- define "cwaUpdater.repository" -}}
+{{- $first := splitList "/" .repository | first -}}
+{{- if or (contains "." $first) (contains ":" $first) -}}
+  {{- .repository -}}
+{{- else -}}
+  {{- $registry := (.ctx.Values.global | default dict).registry | default "ghcr.io" | trimSuffix "/" -}}
+  {{- printf "%s/%s" $registry .repository -}}
+{{- end -}}
+{{- end -}}
