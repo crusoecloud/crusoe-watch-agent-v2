@@ -652,6 +652,12 @@ install_dcgm_exporter_native() {
         export PATH="/usr/local/go/bin:$PATH"
     fi
 
+    # The boot-time systemd environment has no HOME, so go build fails with
+    # "module cache not found" unless these are set.
+    export HOME="${HOME:-/root}"
+    export GOPATH="${GOPATH:-/root/go}"
+    export GOMODCACHE="${GOMODCACHE:-$GOPATH/pkg/mod}"
+
     local clone_opts=(--depth 1)
     if [[ -n "$DCGM_EXPORTER_RELEASE" ]]; then
         clone_opts+=(--branch "$DCGM_EXPORTER_RELEASE")
