@@ -168,6 +168,17 @@ func TestClassifyPod_Terminating(t *testing.T) {
 	assert.False(t, ok, "terminating pods should be excluded")
 }
 
+func TestClassifyPod_TerminatingCustomKept(t *testing.T) {
+	pod := runningPod("app-7fb96c846b-abc12", "10.0.0.1", nil,
+		map[string]string{AnnotationScrape: "true"})
+	now := metav1.NewTime(time.Now())
+	pod.DeletionTimestamp = &now
+
+	cp, ok := ClassifyPod(pod, testDefaultPort, testDefaultPath)
+	require.True(t, ok, "draining custom metrics pods should still be scraped")
+	assert.Equal(t, vector.PodTypeCustom, cp.Type)
+}
+
 func TestClassifyPod_Irrelevant(t *testing.T) {
 	pod := runningPod("nginx-abc-123", "10.0.0.10",
 		map[string]string{"app": "nginx"}, nil)

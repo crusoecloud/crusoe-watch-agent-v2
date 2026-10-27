@@ -35,24 +35,28 @@ const (
 	AnnotationAppID  = "crusoe.ai/app_id"
 )
 
-// isPodActive returns true if the pod is running, has an IP, and is not being deleted.
-func isPodActive(pod *corev1.Pod) bool {
-	return pod.Status.PodIP != "" && pod.Status.Phase == corev1.PodRunning && pod.DeletionTimestamp == nil
+// isPodRunning returns true if the pod is running and has an IP.
+func isPodRunning(pod *corev1.Pod) bool {
+	return pod.Status.PodIP != "" && pod.Status.Phase == corev1.PodRunning
 }
 
 // ClassifyPod determines whether a K8s pod is a relevant exporter and returns
 // a ClassifiedPod. Returns false if the pod is not relevant.
 func ClassifyPod(pod *corev1.Pod, defaultPort int, defaultPath string) (vector.ClassifiedPod, bool) {
-	if !isPodActive(pod) {
+	if !isPodRunning(pod) {
 		return vector.ClassifiedPod{}, false
 	}
 
 	labels := pod.Labels
 	annotations := pod.Annotations
 
-	// Custom metrics (annotation-based, checked first).
+	// Custom metrics (annotation-based, checked first). Scraped while terminating.
 	if annotations[AnnotationScrape] == "true" {
 		return classifyCustomPod(pod, annotations, defaultPort, defaultPath), true
+	}
+
+	if pod.DeletionTimestamp != nil {
+		return vector.ClassifiedPod{}, false
 	}
 
 	// DCGM exporter (legacy label).

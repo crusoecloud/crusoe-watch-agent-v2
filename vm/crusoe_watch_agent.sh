@@ -63,21 +63,18 @@ DCGM_EXPORTER_PORT=9400
 AMD_EXPORTER_PORT=5000
 CME_PORT=9500
 
-# dcgm-exporter upstream release tag, cloned by native mode. The Docker image tags
-# below are this same release plus a base-OS suffix, so both modes ship one exporter.
+# dcgm-exporter release, as <DCGM version>-<exporter version>.
 DCGM_EXPORTER_RELEASE="@@DCGM_EXPORTER_RELEASE@@"
-
-# dcgm-exporter Docker image by Ubuntu version.
-declare -A DCGM_EXPORTER_VERSION_MAP=(
-  ["20.04"]="@@DCGM_EXPORTER_UBUNTU2004_VERSION@@"
-  ["22.04"]="@@DCGM_EXPORTER_UBUNTU2204_VERSION@@"
-  ["24.04"]="@@DCGM_EXPORTER_UBUNTU2404_VERSION@@"
-)
-for k in "${!DCGM_EXPORTER_VERSION_MAP[@]}"; do
-    case "${DCGM_EXPORTER_VERSION_MAP[$k]}" in @@*@@) DCGM_EXPORTER_VERSION_MAP[$k]="dev" ;; esac
-done
-# Unrendered dev script: build the default branch rather than a bogus tag.
+# Unrendered dev script: use the latest versions.
 case "$DCGM_EXPORTER_RELEASE" in @@*@@) DCGM_EXPORTER_RELEASE="" ;; esac
+DCGM_EXPORTER_GIT_TAG="${DCGM_EXPORTER_RELEASE#*-}"
+DCGM_VERSION="${DCGM_EXPORTER_RELEASE%%-*}"
+
+# dcgm-exporter Docker image by supported Ubuntu version.
+declare -A DCGM_EXPORTER_VERSION_MAP=(
+  ["22.04"]="${DCGM_EXPORTER_RELEASE:-dev}"
+  ["24.04"]="${DCGM_EXPORTER_RELEASE:-dev}"
+)
 
 ###############################################################################
 # Configurable via flags
@@ -547,8 +544,19 @@ dcgm_apt_install() {
     status "CUDA version: ${cuda_version}"
 
     setup_nvidia_cuda_repo
-    apt-get install --yes --install-recommends "datacenter-gpu-manager-4-cuda${cuda_version}" \
-        || error_exit "Failed to install datacenter-gpu-manager-4-cuda${cuda_version}."
+
+    # Pin all DCGM packages to the same version.
+    local -a pkgs=(
+        "datacenter-gpu-manager-4-cuda${cuda_version}"
+        "datacenter-gpu-manager-4-core"
+        "datacenter-gpu-manager-4-proprietary"
+        "datacenter-gpu-manager-4-proprietary-cuda${cuda_version}"
+    )
+    if [[ -n "$DCGM_VERSION" ]]; then
+        pkgs=("${pkgs[@]/%/=1:${DCGM_VERSION}-1}")
+    fi
+    apt-get install --yes --install-recommends "${pkgs[@]}" \
+        || error_exit "Failed to install DCGM ${DCGM_VERSION:-latest} (datacenter-gpu-manager-4-cuda${cuda_version})."
     systemctl --now enable nvidia-dcgm || error_exit "Failed to start nvidia-dcgm service."
     DCGM_REINSTALLED="true"
 }
@@ -556,18 +564,17 @@ dcgm_apt_install() {
 dcgm_install() {
     if command_exists dcgmi; then
         status "DCGM already installed."
-        # Check if upgrade needed.
-        local major
-        major=$(dcgmi --version 2>/dev/null | grep -i 'version:' | awk '{print $3}' | cut -d. -f1)
-        major="${major:-0}"
-        if (( major >= 4 )); then
+        # Upgrade if older than the pinned version.
+        local installed
+        installed=$(dcgmi --version 2>/dev/null | awk '/version:/{print $3; exit}')
+        if [[ -n "$installed" ]] && ! version_lt "$installed" "${DCGM_VERSION:-4}"; then
             if dcgm_profiling_available; then
-                status "DCGM version ${major}.x — no upgrade needed."
+                status "DCGM ${installed} — no upgrade needed."
                 return
             fi
-            status "DCGM ${major}.x has no profiling module — reinstalling for DCGM_FI_PROF_* metrics."
+            status "DCGM ${installed} has no profiling module — reinstalling for DCGM_FI_PROF_* metrics."
         else
-            status "DCGM version ${major}.x < 4.x — upgrading..."
+            status "DCGM ${installed:-unknown} < ${DCGM_VERSION:-4} — upgrading..."
         fi
     else
         status "Installing DCGM (Data Center GPU Manager)..."
@@ -609,8 +616,10 @@ dcgm_setup() {
 }
 
 install_dcgm_exporter_native() {
-    if command_exists dcgm-exporter; then
-        echo "dcgm-exporter is already installed."
+    # Rebuild if not the pinned version.
+    if command_exists dcgm-exporter && { [[ -z "$DCGM_EXPORTER_GIT_TAG" ]] \
+        || [[ "$(dcgm-exporter --version 2>/dev/null | awk '{print $NF; exit}')" == "$DCGM_EXPORTER_GIT_TAG" ]]; }; then
+        echo "dcgm-exporter ${DCGM_EXPORTER_GIT_TAG} is already installed."
         return
     fi
 
@@ -628,23 +637,23 @@ install_dcgm_exporter_native() {
         { apt-get update && apt-get install -y build-essential; } || error_exit "Failed to install build-essential."
     fi
 
-    # Ensure Go >= 1.26 is installed (Ubuntu apt packages are too old)
+    # Ensure Go >= 1.27 is installed (Ubuntu apt packages are too old)
     local NEED_GO=false
     if ! command_exists go; then
         NEED_GO=true
     else
         local GO_VER
         GO_VER=$(go version | sed -E 's/.*go([0-9]+\.[0-9]+).*/\1/')
-        if awk "BEGIN{exit !($GO_VER < 1.26)}"; then
+        if awk "BEGIN{exit !($GO_VER < 1.27)}"; then
             echo "Installed Go version ($GO_VER) is too old. Upgrading."
             NEED_GO=true
         fi
     fi
     if $NEED_GO; then
-        status "Installing Go 1.26 from official tarball."
+        status "Installing Go 1.27 from official tarball."
         local go_arch
         go_arch=$(dpkg --print-architecture)
-        local GO_TAR="go1.26.0.linux-${go_arch}.tar.gz"
+        local GO_TAR="go1.27.1.linux-${go_arch}.tar.gz"
         wget -q -O "/tmp/$GO_TAR" "https://go.dev/dl/$GO_TAR" || error_exit "Failed to download Go."
         rm -rf /usr/local/go
         tar -C /usr/local -xzf "/tmp/$GO_TAR" || error_exit "Failed to extract Go."
@@ -659,11 +668,11 @@ install_dcgm_exporter_native() {
     export GOMODCACHE="${GOMODCACHE:-$GOPATH/pkg/mod}"
 
     local clone_opts=(--depth 1)
-    if [[ -n "$DCGM_EXPORTER_RELEASE" ]]; then
-        clone_opts+=(--branch "$DCGM_EXPORTER_RELEASE")
+    if [[ -n "$DCGM_EXPORTER_GIT_TAG" ]]; then
+        clone_opts+=(--branch "$DCGM_EXPORTER_GIT_TAG")
     fi
     git clone "${clone_opts[@]}" https://github.com/NVIDIA/dcgm-exporter.git "$BUILD_DIR" \
-        || error_exit "Failed to clone dcgm-exporter ${DCGM_EXPORTER_RELEASE:-default branch}."
+        || error_exit "Failed to clone dcgm-exporter ${DCGM_EXPORTER_GIT_TAG:-default branch}."
     make -C "$BUILD_DIR" binary || error_exit "Failed to build dcgm-exporter."
     make -C "$BUILD_DIR" install || error_exit "Failed to install dcgm-exporter."
     rm -rf "$BUILD_DIR"

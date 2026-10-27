@@ -61,21 +61,10 @@ load_deps() {
     CRUSOE_METRICS_EXPORTER=$(deps_get crusoe-metrics-exporter)
     AMD_EXPORTER=$(deps_get amd-exporter)
     DCGM_RELEASE=$(deps_get dcgm-exporter-release)
-    DCGM_2004=$(deps_get dcgm-exporter-ubuntu2004)
-    DCGM_2204=$(deps_get dcgm-exporter-ubuntu2204)
-    DCGM_2404=$(deps_get dcgm-exporter-ubuntu2404)
     TOKEN_JOB=$(deps_get token-job)
     for var in CWA_MANAGER CWA_UPDATER REPORT_RUNNER VECTOR CRUSOE_METRICS_EXPORTER AMD_EXPORTER \
-               DCGM_RELEASE DCGM_2004 DCGM_2204 DCGM_2404 TOKEN_JOB; do
+               DCGM_RELEASE TOKEN_JOB; do
         [[ -n "${!var}" ]] || die "missing pin in dependencies.yaml for ${var}"
-    done
-
-    # Native mode clones dcgm-exporter-release while docker mode pulls the per-OS image
-    # tags, so the tags must be that release plus a base-OS suffix or the two install
-    # modes ship different exporters.
-    for var in DCGM_2004 DCGM_2204 DCGM_2404; do
-        [[ "${!var}" == "${DCGM_RELEASE}"* ]] \
-            || die "${var}=${!var} is not built on dcgm-exporter-release=${DCGM_RELEASE}"
     done
 }
 
@@ -144,10 +133,7 @@ render_vm() {
         VECTOR_VERSION                      "$VECTOR" \
         CRUSOE_METRICS_EXPORTER_VERSION     "$CRUSOE_METRICS_EXPORTER" \
         AMD_EXPORTER_VERSION                "$AMD_EXPORTER" \
-        DCGM_EXPORTER_RELEASE               "$DCGM_RELEASE" \
-        DCGM_EXPORTER_UBUNTU2004_VERSION    "$DCGM_2004" \
-        DCGM_EXPORTER_UBUNTU2204_VERSION    "$DCGM_2204" \
-        DCGM_EXPORTER_UBUNTU2404_VERSION    "$DCGM_2404"
+        DCGM_EXPORTER_RELEASE               "$DCGM_RELEASE"
 
     # The installer verifies its release bundle against this key. Splicing it
     # from ci/cosign.pub keeps the installer and the signing job on one key.
