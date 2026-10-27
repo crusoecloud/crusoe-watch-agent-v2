@@ -55,6 +55,13 @@ RELEASES_KEEP=2
 VECTOR_CONFIG="/etc/crusoe/shared/vector.yaml"
 SYSTEMCTL_DIR="/etc/systemd/system"
 
+# CA roots removed from the host trust store (CVE-2026-113470).
+DISTRUSTED_CA_CERT_FILES=(
+  "mozilla/emSign_ECC_Root_CA_-_G3.crt"
+  "mozilla/Comodo_AAA_Services_root.crt"
+)
+CA_CERTIFICATES_CONF="/etc/ca-certificates.conf"
+
 # Docker's apt signing key, pinned so a substituted key fails the install instead
 # of being trusted. Published at docs.docker.com/engine/install/ubuntu.
 DOCKER_APT_KEY_FPR="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
@@ -374,6 +381,41 @@ validate_amd_deps() {
 ###############################################################################
 # Dependency management
 ###############################################################################
+# Remove DISTRUSTED_CA_CERT_FILES from the host trust store.
+harden_ca_trust() {
+    status "Hardening the host CA trust store."
+
+    { apt-get update -qq && apt-get install -y -qq --only-upgrade ca-certificates; } \
+        || echo "Warning: could not upgrade ca-certificates; relying on manual distrust."
+
+    if [[ ! -f "$CA_CERTIFICATES_CONF" ]]; then
+        echo "Warning: ${CA_CERTIFICATES_CONF} not found; skipping manual distrust."
+        return
+    fi
+
+    local changed=false cert
+    for cert in "${DISTRUSTED_CA_CERT_FILES[@]}"; do
+        if grep -qxF "$cert" "$CA_CERTIFICATES_CONF"; then
+            sed -i "s|^${cert//./\\.}\$|!${cert}|" "$CA_CERTIFICATES_CONF" \
+                || error_exit "Failed to update ${CA_CERTIFICATES_CONF}."
+            echo "Distrusted ${cert}."
+            changed=true
+        fi
+    done
+
+    if $changed; then
+        update-ca-certificates --fresh || error_exit "Failed to rebuild the CA trust store."
+    fi
+
+    local base
+    for cert in "${DISTRUSTED_CA_CERT_FILES[@]}"; do
+        base=$(basename "$cert" .crt)
+        if [[ -e "/etc/ssl/certs/${base}.pem" ]]; then
+            echo "Warning: /etc/ssl/certs/${base}.pem is still present; the host still trusts ${base}."
+        fi
+    done
+}
+
 ensure_wget() {
     if ! command_exists wget; then
         status "Installing wget..."
@@ -1078,6 +1120,8 @@ do_install() {
         nvidia) validate_nvidia_deps ;;
         amd)    validate_amd_deps ;;
     esac
+
+    harden_ca_trust
 
     # Install base dependencies.
     ensure_wget

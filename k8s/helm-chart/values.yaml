@@ -31,6 +31,10 @@ tokenJob:
 vector:
   image: vectordotdev/vector
   tag: "@@VECTOR_VERSION@@-debian"
+  # CA roots removed from Vector's trust store (CVE-2026-113470), as named in /etc/ssl/certs.
+  distrustedRootFiles:
+    - emSign_ECC_Root_CA_-_G3.pem
+    - Comodo_AAA_Services_root.pem
 
 cwaManager:
   image: crusoecloud/crusoe-watch-agent-v2/cwa-manager

@@ -48,6 +48,12 @@ spec:
             - /bin/sh
             - -c
             - |
+              # CA bundle without vector.distrustedRootFiles.
+              mkdir -p /etc/crusoe-ca-trust/certs.d
+              find /etc/ssl/certs -maxdepth 1 -name '*.pem'{{ range .Values.vector.distrustedRootFiles }} ! -name {{ . | quote }}{{ end }} \
+                -exec cat {} + > /etc/crusoe-ca-trust/ca-certificates.crt
+              grep -q 'BEGIN CERTIFICATE' /etc/crusoe-ca-trust/ca-certificates.crt \
+                || { echo "Rebuilt CA bundle has no trust anchors." >&2; exit 1; }
               export VM_ID=$(cat /host/sys/class/dmi/id/product_uuid 2>/dev/null || echo "unknown")
               # Wait for cwa-manager to write the initial config.
               echo "Waiting for Vector config..."
@@ -82,6 +88,10 @@ spec:
               value: {{ .Values.vector.tag | quote }}
             - name: INSTALL_TYPE
               value: "kubernetes"
+            - name: SSL_CERT_FILE
+              value: /etc/crusoe-ca-trust/ca-certificates.crt
+            - name: SSL_CERT_DIR
+              value: /etc/crusoe-ca-trust/certs.d
           {{- if not .Values.cmkv2Cp.enabled }}
           envFrom:
             - secretRef:
@@ -90,6 +100,8 @@ spec:
           volumeMounts:
             - name: crusoe-shared
               mountPath: /etc/vector
+            - name: ca-trust
+              mountPath: /etc/crusoe-ca-trust
             - name: vector-data
               mountPath: /vector-data-dir
             # Only the agent's own container logs; the kubernetes_logs sources glob
@@ -270,6 +282,8 @@ spec:
 
       volumes:
         - name: crusoe-shared
+          emptyDir: {}
+        - name: ca-trust
           emptyDir: {}
         - name: vector-data
           hostPath:

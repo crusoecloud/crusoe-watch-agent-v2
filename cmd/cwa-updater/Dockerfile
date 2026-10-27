@@ -29,7 +29,7 @@ RUN apk add --no-cache curl && \
 
 FROM public.ecr.aws/docker/library/alpine:3.21
 # Helm 3.14+ (--reset-then-reuse-values), not Helm 4, which changes how upgrade and rollback apply.
-RUN apk add --no-cache 'ca-certificates>=20250106' 'helm~3' && \
+RUN apk add --no-cache 'ca-certificates>=20261020' 'helm~3' && \
     helm version --short | grep -Eq '^v3\.(1[4-9]|[2-9][0-9])\.'
 COPY --from=builder /cwa-updater /usr/local/bin/cwa-updater
 COPY --from=builder /cosign /usr/local/bin/cosign

@@ -25,7 +25,7 @@ report-runner: "2026.10.15-be6797f2"
 ###############################################################################
 
 # token-job: K8s Job that mints a monitoring token via the Crusoe CLI.
-token-job: "v0.2.12"
+token-job: "v0.2.35"
 
 # Vector: log/metric forwarder. Used by both VM (docker + native) and K8s.
 # Docker tag suffix `-debian` is appended at render time only where needed.

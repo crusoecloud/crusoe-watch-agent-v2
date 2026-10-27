@@ -9,6 +9,8 @@ services:
       - /sys:/host/sys:ro
       - /var/log/journal:/var/log/journal:ro
       - /var/lib/vector:/var/lib/vector
+      # Host CA trust store.
+      - /etc/ssl/certs:/etc/ssl/certs:ro
     env_file:
       - /etc/crusoe/crusoe_watch_agent/.env
       - /etc/crusoe/secrets/.monitoring-token

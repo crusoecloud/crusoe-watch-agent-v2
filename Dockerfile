@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w
     -o /cwa-manager ./cmd/cwa-manager
 
 FROM public.ecr.aws/docker/library/alpine:3.21
-RUN apk add --no-cache 'ca-certificates>=20250106'
+RUN apk add --no-cache 'ca-certificates>=20261020'
 COPY --from=builder /cwa-manager /usr/local/bin/cwa-manager
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s \
     CMD wget -q -O /dev/null "http://127.0.0.1:${CWA_HEALTH_PORT:-8787}/health" || exit 1
