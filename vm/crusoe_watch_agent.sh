@@ -48,6 +48,8 @@ ENV_FILE="${CONFIG_DIR}/.env"
 CME_VERSION_FILE="${CONFIG_DIR}/CME_VERSION"
 # Exists while a move may have left VERSION stale. Read by cwa-updater.
 UPGRADE_PENDING_FILE="${CONFIG_DIR}/.upgrade-pending"
+# Written as the last step of a successful install.
+INSTALL_COMPLETE_MARKER="${CONFIG_DIR}/.install-complete"
 # Verified release assets per version, so a rollback needs no network.
 RELEASES_DIR="${CONFIG_DIR}/releases"
 # The installed version and the one a rollback would restore.
@@ -1105,6 +1107,16 @@ migrate_from_v1() {
 ###############################################################################
 do_install() {
     require_root
+
+    # A repeat install is a no-op: after the first install, only the coordinator moves the version (with CWA_UPGRADE=1).
+    # Checks a v2-only unit and VERSION. The marker is written last, so an install that failed partway is retried.
+    if [[ "${CWA_UPGRADE:-}" != "1" && -f "$INSTALL_COMPLETE_MARKER" ]]; then
+        status "Crusoe Watch Agent $(cat "${CONFIG_DIR}/VERSION") is already installed. Nothing to do."
+        echo "To change the version, run 'upgrade'. To reinstall, run 'uninstall' first."
+        # Exit, not return: the caller would otherwise overwrite the saved install args.
+        exit 0
+    fi
+
     migrate_from_v1
     UBUNTU_VERSION=$(get_ubuntu_version)
 
@@ -1223,6 +1235,8 @@ do_install() {
     if [[ "$INSTALL_MODE" == "docker" ]]; then
         wait_for_containers "${services[@]%.service}"
     fi
+
+    touch "$INSTALL_COMPLETE_MARKER"
 
     echo ""
     status "Install complete. Check status:"
