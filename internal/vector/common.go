@@ -206,13 +206,17 @@ func applyRateLimit(sinks map[string]any, limits map[string]int) {
 	}
 }
 
-// internalMetricsExporterSink exposes Vector's internal metrics on port 9598
-// so cwa-manager can scrape component_errors_total for health assessment.
-func internalMetricsExporterSink() map[string]any {
+const (
+	internalMetricsLocalBind  = "127.0.0.1:9598"
+	internalMetricsScrapeBind = "0.0.0.0:9598"
+)
+
+// internalMetricsExporterSink exposes Vector's internal metrics on port 9598 at address.
+func internalMetricsExporterSink(address string) map[string]any {
 	return map[string]any{
 		"type":    "prometheus_exporter",
 		"inputs":  []string{"internal_metrics"},
-		"address": "127.0.0.1:9598",
+		"address": address,
 	}
 }
 

@@ -269,7 +269,7 @@ func buildStaticConfig(sources, transforms, sinks map[string]any, cfg K8sConfig)
 	sources["internal_metrics"] = internalMetricsSource()
 	transforms["filter_internal_metrics"] = filterTransform([]string{"internal_metrics"}, vrlFilterInternalMetrics)
 	transforms["add_internal_labels"] = remapTransform([]string{"filter_internal_metrics"}, vrlAddInternalLabelsK8s)
-	sinks[internalMetricsExporterSinkName] = internalMetricsExporterSink()
+	sinks[internalMetricsExporterSinkName] = internalMetricsExporterSink(internalMetricsLocalBind)
 
 	// Node metrics sink
 	nodeMetricsSink := buildPromRemoteWriteSink(

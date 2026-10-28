@@ -141,6 +141,10 @@ func TestCMKv2CP_PipelineWiredEndToEnd(t *testing.T) {
 	assert.Contains(t, getSources(cfg), "internal_metrics")
 	assert.Contains(t, getSinks(cfg), "internal_metrics_exporter")
 
+	cpExporter, ok := getSinks(cfg)["internal_metrics_exporter"].(map[string]any)
+	require.True(t, ok, "internal_metrics_exporter sink must be present")
+	assert.Equal(t, "0.0.0.0:9598", cpExporter["address"])
+
 	tables, ok := cfg["enrichment_tables"].(map[string]any)
 	require.True(t, ok, "enrichment_tables must be present")
 	assert.Contains(t, tables, "uid_map")

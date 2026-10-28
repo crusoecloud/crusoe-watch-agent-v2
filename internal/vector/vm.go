@@ -107,7 +107,7 @@ func GenerateVMBase() map[string]any {
 	sinks["crusoe_ingest"] = logsSink()
 	sinks["cms_gateway"] = metricsRemoteWriteSink(
 		[]string{"add_update_labels", "add_internal_labels"})
-	sinks[internalMetricsExporterSinkName] = internalMetricsExporterSink()
+	sinks[internalMetricsExporterSinkName] = internalMetricsExporterSink(internalMetricsLocalBind)
 
 	return baseCfg
 }

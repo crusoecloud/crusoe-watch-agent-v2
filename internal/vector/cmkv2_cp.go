@@ -92,7 +92,7 @@ func applyCMKv2CP(baseCfg map[string]any, cfg K8sConfig) {
 
 	// Expose internal metrics so drops are visible (component_discarded_events_total per transform).
 	sources["internal_metrics"] = internalMetricsSource()
-	sinks[internalMetricsExporterSinkName] = internalMetricsExporterSink()
+	sinks[internalMetricsExporterSinkName] = internalMetricsExporterSink(internalMetricsScrapeBind)
 }
 
 // buildCMLSink is the cross-tenant CP log sink to CML internal-ingest (dedicated CP writer token).
