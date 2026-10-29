@@ -45,11 +45,12 @@ runs. Rotate it any time with `refresh-token`.
 The chosen mode persists, so later operations use the same script:
 
 ```bash
-sudo ./crusoe_watch_agent.sh upgrade         # upgrade in place, to the latest release
-sudo ./crusoe_watch_agent.sh rollback v2.0.0 # move back to an earlier release
-sudo ./crusoe_watch_agent.sh refresh-token   # rotate the monitoring token
-sudo ./crusoe_watch_agent.sh uninstall       # remove (secrets preserved)
-sudo ./crusoe_watch_agent.sh help            # all commands and options
+sudo ./crusoe_watch_agent.sh upgrade [VERSION] # upgrade in place, to VERSION or the latest release
+sudo ./crusoe_watch_agent.sh rollback v2.0.0   # move back to an earlier release
+sudo ./crusoe_watch_agent.sh refresh-token     # rotate the monitoring token
+sudo ./crusoe_watch_agent.sh update-updater    # move cwa-updater to the installed release
+sudo ./crusoe_watch_agent.sh uninstall         # remove (secrets preserved)
+sudo ./crusoe_watch_agent.sh help              # all commands and options
 ```
 
 ## Kubernetes (CMK)
@@ -68,7 +69,8 @@ Omitting `--version` installs the latest release. Pin a specific one with
 `--version <X.Y.Z>`.
 
 This installs a DaemonSet with one pod per node, running cwa-manager and Vector
-side by side. 
+side by side. The chart also installs crusoe-metrics-exporter, and a
+report-runner DaemonSet for bug reports on GB200/GB300 and AMD nodes.
 
 ### cwa-updater
 
@@ -83,4 +85,21 @@ helm install cwa-updater \
 ```
 
 Both charts pull from ghcr.io by default. In clusters without outbound access,
-point `agent.chartRepo` at a pull-through OCI mirror.
+set `global.registry` in both charts to a pull-through OCI mirror; it applies to
+the images and to the agent chart that cwa-updater upgrades to.
+
+## Upgrading from v1
+
+**VM:** run the install above in the same mode as v1 (`--no-docker` if v1 was
+native). The installer removes v1 first. The v1 token is not kept, so enter it
+again or pass `--token`.
+
+**CMK:** install cwa-updater (above) first; it runs alongside v1. Then replace
+the agent chart. Metrics stop between these two commands:
+
+```bash
+helm uninstall crusoe-watch-agent --namespace crusoe-system --cascade=foreground --wait
+helm install crusoe-watch-agent \
+  oci://ghcr.io/crusoecloud/crusoe-watch-agent-v2/charts/crusoe-watch-agent \
+  --namespace crusoe-system
+```
