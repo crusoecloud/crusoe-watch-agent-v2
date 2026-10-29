@@ -163,7 +163,8 @@ func runCoordinatorAgent(
 		}
 	}()
 
-	loop := heartbeat.NewLoop(ident, newHealthCollector(ident, vmCfg.GPUType, logger), conn, logger)
+	runnerExpected := reportRunnerExpected(ctx, ident.InstallType, vmCfg.GPUType, k8sRT, logger)
+	loop := heartbeat.NewLoop(ident, newHealthCollector(ident, runnerExpected, logger), conn, logger)
 	wireCommands(loop, deps, k8sRT, coordAddr, token, ident, logger)
 
 	// Layer 2: recover commands a hard stop interrupted, before the loop starts.
@@ -237,8 +238,8 @@ func startHealthServer(
 
 // newHealthCollector builds the heartbeat health collector, polling the report-runner
 // only on hosts where it's deployed and passing nil to omit it elsewhere.
-func newHealthCollector(ident *identity.Identity, gpu vector.GPUType, logger *slog.Logger) *health.Collector {
-	if !reportRunnerExpected(ident.InstallType, gpu) {
+func newHealthCollector(ident *identity.Identity, runnerExpected bool, logger *slog.Logger) *health.Collector {
+	if !runnerExpected {
 		return health.NewCollector(logger, ident.InstallType, nil)
 	}
 
@@ -249,13 +250,17 @@ func newHealthCollector(ident *identity.Identity, gpu vector.GPUType, logger *sl
 }
 
 // reportRunnerExpected reports whether the report-runner bug-report collector is deployed on this host.
-func reportRunnerExpected(installType pb.CwaInstallType, gpu vector.GPUType) bool {
+func reportRunnerExpected(
+	ctx context.Context, installType pb.CwaInstallType, gpu vector.GPUType, k8sRT *k8sRuntime, logger *slog.Logger,
+) bool {
 	switch installType {
 	case pb.CwaInstallType_CWA_INSTALL_TYPE_SYSTEMD:
 		return gpu == vector.GPUNvidia
 	case pb.CwaInstallType_CWA_INSTALL_TYPE_DOCKER:
 		return gpu == vector.GPUNvidia || gpu == vector.GPUAMD
-	case pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES, pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED:
+	case pb.CwaInstallType_CWA_INSTALL_TYPE_KUBERNETES:
+		return k8sRT != nil && k8sRT.bundledDriver(ctx, logger)
+	case pb.CwaInstallType_CWA_INSTALL_TYPE_UNSPECIFIED:
 		return false
 	default:
 		return false

@@ -16,6 +16,8 @@ services:
       - /etc/crusoe/bug-reports:/etc/crusoe/bug-reports
       # dmidecode reads the DMI tables from sysfs.
       - /sys/firmware/dmi:/sys/firmware/dmi:ro
+      # kern.log, dmesg and fabricmanager.log, read by nvidia-bug-report.sh.
+      - /var/log:/var/log:ro
     deploy:
       resources:
         reservations:

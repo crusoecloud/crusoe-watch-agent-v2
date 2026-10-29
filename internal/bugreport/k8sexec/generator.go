@@ -102,26 +102,24 @@ func (g *K8sGenerator) Health(ctx context.Context) (string, error) {
 
 // bundled reports whether this node collects via the host runner rather than a driver pod.
 func (g *K8sGenerator) bundled(ctx context.Context, gpu vector.GPUType) (bool, error) {
+	return NodeBundledDriver(ctx, g.client, g.nodeName, gpu)
+}
+
+// NodeBundledDriver reports whether nodeName collects via the host runner rather than a
+// driver pod, reading the node's instance-type label when the GPU type alone does not decide.
+func NodeBundledDriver(
+	ctx context.Context, client kubernetes.Interface, nodeName string, gpu vector.GPUType,
+) (bool, error) {
 	if gpu == vector.GPUAMD {
 		return true, nil
 	}
 
-	instanceType, err := g.instanceType(ctx)
+	node, err := client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 	if err != nil {
-		return false, err
+		return false, bugreport.CodeScriptUnavailable.Errorf("reading node %s: %w", nodeName, err)
 	}
 
-	return K8sBundledDriver(gpu, instanceType), nil
-}
-
-// instanceType reads the node's instance-type label.
-func (g *K8sGenerator) instanceType(ctx context.Context) (string, error) {
-	node, err := g.client.CoreV1().Nodes().Get(ctx, g.nodeName, metav1.GetOptions{})
-	if err != nil {
-		return "", bugreport.CodeScriptUnavailable.Errorf("reading node %s: %w", g.nodeName, err)
-	}
-
-	return node.Labels[nodeLabelInstanceType], nil
+	return K8sBundledDriver(gpu, node.Labels[nodeLabelInstanceType]), nil
 }
 
 // nodeLabelInstanceType is the GA Kubernetes instance-type label.

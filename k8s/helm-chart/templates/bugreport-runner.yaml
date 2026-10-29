@@ -74,6 +74,15 @@ spec:
             - name: host-sys
               mountPath: /sys
               readOnly: true
+            {{- if eq $vendor "amd" }}
+            # Host install state read by rocm_techsupport.sh.
+            - name: host-dpkg
+              mountPath: /var/lib/dpkg
+              readOnly: true
+            - name: host-modules
+              mountPath: /lib/modules
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml $.Values.reportRunner.resources | nindent 12 }}
       volumes:
@@ -91,5 +100,15 @@ spec:
           hostPath:
             path: /sys
             type: Directory
+        {{- if eq $vendor "amd" }}
+        - name: host-dpkg
+          hostPath:
+            path: /var/lib/dpkg
+            type: Directory
+        - name: host-modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
+        {{- end }}
 {{- end }}
 {{- end }}

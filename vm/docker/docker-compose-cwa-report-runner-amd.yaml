@@ -25,8 +25,10 @@ services:
       - /var/lib/dpkg:/var/lib/dpkg:ro        # dpkg -l: amdgpu-dkms / ROCm packages
       - /lib/modules:/lib/modules:ro          # modinfo amdgpu
       - /var/lib/dkms:/var/lib/dkms:ro        # dkms status
+      - /usr/src:/usr/src:ro                  # dkms status: dkms.conf behind /var/lib/dkms/*/source
       - /boot:/boot:ro                        # lsinitramfs
       - /var/log/journal:/var/log/journal:ro  # journalctl -b -1/-2/-3 (needs host persistent journald)
+      - /etc/machine-id:/etc/machine-id:ro    # journalctl reads /var/log/journal/<machine-id>
     environment:
       # Pin the script to the host-mounted ROCm instead of auto-detecting the bundled copy.
       - ROCM_VERSION=/opt/rocm

@@ -1245,6 +1245,7 @@ do_install() {
     echo "  systemctl status cwa-vector"
     [[ "$GPU_TYPE" == "nvidia" ]] && echo "  systemctl status crusoe-dcgm-exporter"
     [[ "$GPU_TYPE" == "amd" ]]    && echo "  systemctl status crusoe-amd-exporter"
+    [[ "$GPU_TYPE" != "none" ]]   && echo "  systemctl status cwa-report-runner"
     echo "  systemctl status crusoe-metrics-exporter"
 }
 

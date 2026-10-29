@@ -144,6 +144,42 @@ func TestK8sBundledDriver(t *testing.T) {
 	}
 }
 
+func TestNodeBundledDriver(t *testing.T) {
+	tests := []struct {
+		name         string
+		gpu          vector.GPUType
+		instanceType string
+		want         bool
+	}{
+		{"gb200 nvidia", vector.GPUNvidia, "gb200-186gb-nvl-ib.4x", true},
+		{"operator nvidia", vector.GPUNvidia, "h100-80gb-sxm-ib.8x", false},
+		{"cpu", vector.GPUNone, "c1a.16x", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(testNode("test-node", tt.instanceType))
+
+			got, err := NodeBundledDriver(context.Background(), client, "test-node", tt.gpu)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// AMD decides without reading the node, so a missing node is not an error.
+func TestNodeBundledDriver_AMDSkipsNodeRead(t *testing.T) {
+	got, err := NodeBundledDriver(context.Background(), fake.NewSimpleClientset(), "missing-node", vector.GPUAMD)
+	require.NoError(t, err)
+	assert.True(t, got)
+}
+
+func TestNodeBundledDriver_NodeReadError(t *testing.T) {
+	_, err := NodeBundledDriver(context.Background(), fake.NewSimpleClientset(), "missing-node", vector.GPUNvidia)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), string(bugreport.CodeScriptUnavailable))
+}
+
 // Ensure the router surfaces a node-read failure during routing (not just Health).
 func TestK8sGenerator_RoutingNodeReadError(t *testing.T) {
 	exec := &recordingGen{}

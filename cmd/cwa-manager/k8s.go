@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -78,6 +79,25 @@ func newK8sRuntime(logger *slog.Logger) *k8sRuntime {
 	}
 
 	return &k8sRuntime{client: client, restCfg: restCfg, nodeName: nodeName}
+}
+
+// nodeLookupTimeout bounds the one node read at startup.
+const nodeLookupTimeout = 10 * time.Second
+
+// bundledDriver reports whether this node runs the host report-runner (AMD, GB200/GB300),
+// by the same rule the bug-report router uses.
+func (r *k8sRuntime) bundledDriver(ctx context.Context, logger *slog.Logger) bool {
+	ctx, cancel := context.WithTimeout(ctx, nodeLookupTimeout)
+	defer cancel()
+
+	bundled, err := k8sexec.NodeBundledDriver(ctx, r.client, r.nodeName, vector.DetectGPUAt(hostSysModuleDir))
+	if err != nil {
+		logger.Warn("report-runner health not polled", "node", r.nodeName, "error", err)
+
+		return false
+	}
+
+	return bundled
 }
 
 // DeleteSecret implements command.SecretDeleter for credentials.cleanup.
