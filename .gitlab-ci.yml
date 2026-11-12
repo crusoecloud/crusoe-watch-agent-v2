@@ -29,9 +29,11 @@ lint:mr:
   script:
     - |
       echo "MR title: $CI_MERGE_REQUEST_TITLE"
-      if ! echo "$CI_MERGE_REQUEST_TITLE" | grep -qE '^(feat|fix|chore|docs|refactor|test|ci|perf): .+'; then
-        echo "ERROR: MR title must match '<type>: <description>'"
-        echo "Valid types: feat, fix, chore, docs, refactor, test, ci, perf"
+      # The title must follow the Conventional Commits format.
+      # See https://gist.github.com/marcojahn/482410b728c31b221b70ea6d2c433f0c
+      if ! echo "$CI_MERGE_REQUEST_TITLE" | grep -qE '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([A-Za-z0-9_.-]+\))?(!)?: [[:alnum:]_ ]+'; then
+        echo "ERROR: MR title must match '<type>(<scope>)!: <description>'. The scope and the ! are optional."
+        echo "Valid types: build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test"
         exit 1
       fi
   rules:
@@ -57,7 +59,9 @@ shellcheck:
 variables:
   TAG_PREFIX: ""
   CI_IMAGE: "registry.gitlab.com/crusoeenergy/tools/go-ci-1.26"
-  CI_IMAGE_TAG: "master"
+  # The master tag of this image has go 1.25. The go.mod file needs go 1.26.3.
+  # This tag has go 1.26.10.
+  CI_IMAGE_TAG: "v0.8.327"
   # Pinned cosign for the release and image-build jobs — see .install-cosign.
   COSIGN_VERSION: "v2.6.5"
 
