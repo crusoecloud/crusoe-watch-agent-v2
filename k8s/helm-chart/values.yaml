@@ -12,6 +12,9 @@ imagePullSecrets: []
 # CMS monitoring backend URL.
 cmsEndpoint: "https://cms-monitoring.crusoecloud.com"
 
+# cwa-coordinator gRPC address (host:port).
+coordinatorAddress: "cwa-coordinator.crusoecloud.com:443"
+
 # CML backend URL for the CMKv2 CP log sink (cell mode). Empty falls back to logsBase().
 cmlEndpoint: ""
 

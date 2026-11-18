@@ -139,6 +139,9 @@ spec:
         # --- cwa-manager ---
         - name: cwa-manager
           image: {{ include "cwa.image" (dict "ctx" $ "repository" .Values.cwaManager.image "tag" .Values.cwaManager.tag) | quote }}
+          args:
+            - -coordinator
+            - {{ .Values.coordinatorAddress | quote }}
           ports:
             - name: health
               containerPort: {{ .Values.cwaManager.healthPort }}
