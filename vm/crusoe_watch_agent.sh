@@ -333,8 +333,10 @@ require_root() {
 }
 
 validate_flags() {
+    # Native mode is NVIDIA-only. Fall back so the VM bootstrap can pass --no-docker on any GPU.
     if [[ "$GPU_TYPE" == "amd" && "$INSTALL_MODE" == "native" ]]; then
-        error_exit "AMD GPU is not supported in native mode. Remove --no-docker."
+        status "AMD GPU is not supported in native mode. Installing with Docker."
+        INSTALL_MODE="docker"
     fi
 }
 
@@ -806,7 +808,8 @@ handle_token() {
         MONITORING_TOKEN="$CRUSOE_MONITORING_TOKEN"
         status "Using token from CRUSOE_MONITORING_TOKEN environment variable."
     elif [[ -s "${SECRETS_DIR}/.monitoring-token" ]]; then
-        MONITORING_TOKEN=$(sed "s/^CRUSOE_MONITORING_TOKEN=//; s/^'//; s/'$//" "${SECRETS_DIR}/.monitoring-token")
+        # CRUSOE_AUTH_TOKEN is the v1 name, also written by the hypervisor at VM create.
+        MONITORING_TOKEN=$(sed -E "s/^(CRUSOE_MONITORING_TOKEN|CRUSOE_AUTH_TOKEN)=//; s/^'//; s/'$//" "${SECRETS_DIR}/.monitoring-token")
         status "Using existing token from ${SECRETS_DIR}/.monitoring-token"
     else
         echo "Enter monitoring token:"
