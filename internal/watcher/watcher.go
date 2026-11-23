@@ -63,16 +63,19 @@ type Watcher struct {
 	lastHash    [sha256.Size]byte
 	lastMapHash [sha256.Size]byte // CMKv2 CP uid_map.csv content hash (change detection)
 
+	slurmctldActive slurmctldCheck
+
 	logger *slog.Logger
 }
 
 // New creates a Watcher. The caller must provide a Kubernetes client.
 func New(cfg Config, client kubernetes.Interface) *Watcher {
 	return &Watcher{
-		cfg:         cfg,
-		client:      client,
-		reconcileCh: make(chan struct{}, 1),
-		logger:      cfg.Logger,
+		cfg:             cfg,
+		client:          client,
+		reconcileCh:     make(chan struct{}, 1),
+		slurmctldActive: newSlurmctldCheck(),
+		logger:          cfg.Logger,
 	}
 }
 
@@ -322,7 +325,14 @@ func (w *Watcher) snapshotCfg() vector.K8sConfig {
 // ---------------------------------------------------------------------------
 
 func (w *Watcher) reconcileLoop(ctx context.Context) {
-	var debounce <-chan time.Time
+	var debounce, recheck <-chan time.Time
+
+	if w.snapshotCfg().Slurm.Enabled {
+		ticker := time.NewTicker(slurmctldRecheckInterval)
+		defer ticker.Stop()
+
+		recheck = ticker.C
+	}
 
 	for {
 		select {
@@ -333,13 +343,15 @@ func (w *Watcher) reconcileLoop(ctx context.Context) {
 		case <-debounce:
 			debounce = nil
 			w.reconcile(ctx)
+		case <-recheck:
+			w.reconcile(ctx)
 		}
 	}
 }
 
 func (w *Watcher) reconcile(ctx context.Context) {
 	cfg := w.snapshotCfg()
-	pods := w.classifyPods(cfg)
+	pods := w.classifyPods(ctx, cfg)
 	cmData := w.readConfigMapData()
 
 	out, err := vector.GenerateK8s(pods, cmData, cfg)
@@ -384,7 +396,7 @@ func (w *Watcher) reconcile(ctx context.Context) {
 	w.logger.Info("vector config updated", "pods", len(pods), "path", w.cfg.ConfigPath)
 }
 
-func (w *Watcher) classifyPods(cfg vector.K8sConfig) []vector.ClassifiedPod {
+func (w *Watcher) classifyPods(ctx context.Context, cfg vector.K8sConfig) []vector.ClassifiedPod {
 	var classified []vector.ClassifiedPod
 
 	defaultPort := cfg.CustomMetricsDefaultPort
@@ -396,12 +408,34 @@ func (w *Watcher) classifyPods(cfg vector.K8sConfig) []vector.ClassifiedPod {
 			continue
 		}
 
-		if cp, relevant := ClassifyPod(pod, defaultPort, defaultPath); relevant {
+		if cp, relevant := ClassifyPod(pod, defaultPort, defaultPath); relevant && w.shouldScrape(ctx, cp, cfg) {
 			classified = append(classified, cp)
 		}
 	}
 
 	return classified
+}
+
+// shouldScrape reports whether a classified pod is scraped. Only a slurmctld pod is checked: a
+// standby, or a pod that does not answer, is not scraped this cycle.
+func (w *Watcher) shouldScrape(ctx context.Context, pod vector.ClassifiedPod, cfg vector.K8sConfig) bool {
+	if pod.Type != vector.PodTypeSlurm || !cfg.Slurm.Enabled {
+		return true
+	}
+
+	active, err := w.slurmctldActive(ctx, pod.IP, cfg.Slurm.Port)
+	if err != nil {
+		w.logger.Warn("slurmctld readiness check failed; not scraping it this cycle",
+			"pod", pod.Name, "ip", pod.IP, "error", err)
+
+		return false
+	}
+
+	if !active {
+		w.logger.Debug("skipping standby slurmctld", "pod", pod.Name, "ip", pod.IP)
+	}
+
+	return active
 }
 
 func (w *Watcher) readConfigMapData() map[string]string {

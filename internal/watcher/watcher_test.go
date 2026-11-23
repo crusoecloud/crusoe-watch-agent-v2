@@ -521,6 +521,107 @@ func TestWatcher_LoadExistingConfigHash(t *testing.T) {
 	})
 }
 
+func slurmWatcher(t *testing.T, enabled bool) (*Watcher, string) {
+	t.Helper()
+
+	configPath := filepath.Join(t.TempDir(), "vector.yaml")
+
+	k8sCfg := testK8sCfg()
+	k8sCfg.Slurm.Enabled = enabled
+	k8sCfg.NodeLabels = vector.NodeLabels{VMID: "vm-1", Hostname: "test-node"}
+
+	w := New(Config{
+		NodeName:   "test-node",
+		ConfigPath: configPath,
+		K8sCfg:     k8sCfg,
+		Logger:     testLogger(),
+	}, fake.NewSimpleClientset(testNode()))
+
+	w.podInformer = newFakeInformer()
+	w.cmInformer = newFakeInformer()
+
+	for _, p := range []struct{ name, ip string }{
+		{"slurm-controller-0", "10.0.0.10"},
+		{"slurm-controller-1", "10.0.0.11"},
+	} {
+		pod := runningPod(p.name, p.ip, map[string]string{"app.kubernetes.io/name": "slurmctld"}, nil)
+		require.NoError(t, w.podInformer.GetStore().Add(pod))
+	}
+
+	require.NoError(t, w.writeBaseConfig())
+
+	return w, configPath
+}
+
+func slurmEndpoints(t *testing.T, configPath string) []any {
+	t.Helper()
+
+	data, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &parsed))
+
+	src, ok := parsed["sources"].(map[string]any)["slurm_metrics_scrape"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	return src["endpoints"].([]any)
+}
+
+func TestWatcher_StandbySlurmctldIsNotScraped(t *testing.T) {
+	w, configPath := slurmWatcher(t, true)
+
+	activeIP := "10.0.0.10"
+	w.slurmctldActive = func(_ context.Context, ip string, port int) (bool, error) {
+		assert.Equal(t, w.cfg.K8sCfg.Slurm.Port, port)
+		return ip == activeIP, nil
+	}
+
+	w.reconcile(context.Background())
+
+	endpoints := slurmEndpoints(t, configPath)
+	require.NotEmpty(t, endpoints)
+	for _, e := range endpoints {
+		assert.Contains(t, e, "10.0.0.10:6817")
+	}
+
+	// Failover: the backup takes control.
+	activeIP = "10.0.0.11"
+	w.reconcile(context.Background())
+
+	endpoints = slurmEndpoints(t, configPath)
+	require.NotEmpty(t, endpoints)
+	for _, e := range endpoints {
+		assert.Contains(t, e, "10.0.0.11:6817")
+	}
+}
+
+func TestWatcher_UnreachableSlurmctldIsNotScraped(t *testing.T) {
+	w, configPath := slurmWatcher(t, true)
+
+	w.slurmctldActive = func(_ context.Context, _ string, port int) (bool, error) {
+		assert.Equal(t, w.cfg.K8sCfg.Slurm.Port, port)
+		return false, errors.New("connection refused")
+	}
+
+	w.reconcile(context.Background())
+
+	assert.Empty(t, slurmEndpoints(t, configPath))
+}
+
+func TestWatcher_SlurmctldNotCheckedWhenSlurmDisabled(t *testing.T) {
+	w, _ := slurmWatcher(t, false)
+
+	w.slurmctldActive = func(context.Context, string, int) (bool, error) {
+		t.Fatal("readiness check ran with Slurm metrics disabled")
+		return false, nil
+	}
+
+	w.reconcile(context.Background())
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
