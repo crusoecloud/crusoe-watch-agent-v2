@@ -3,6 +3,7 @@ package vector
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -193,9 +194,11 @@ const vrlEnrichLogsK8s = vrlEnrichLogsPrefix +
 const (
 	serviceLabelCMK = "CMK"
 
-	jobDCGM       = "nvidia-dcgm-exporter"
-	jobAMD        = "amd-device-metrics-exporter"
-	jobScrapedPod = "kubernetes-pods"
+	jobDCGM           = "nvidia-dcgm-exporter"
+	jobAMD            = "amd-device-metrics-exporter"
+	jobScrapedPod     = "kubernetes-pods"
+	jobKubeletMetrics = "kubernetes-nodes"
+	jobCadvisor       = "kubernetes-nodes-cadvisor"
 )
 
 // vrlSetScrapeTag sets a scrape-owned tag, moving any value the target already
@@ -243,6 +246,34 @@ const vrlEnrichKSMTelemetry = `
 .tags.service = "CMK"
 .tags.job = "kube-state-metrics-telemetry"
 `
+
+// buildScrapeTargetVRL tags a cluster scrape pipeline: the cluster identity, then
+// the job's target labels, which win over scraped ones. The series are marked
+// internal only, so they are not published to the customer's metrics.
+func buildScrapeTargetVRL(job string, scrapeLabels map[string]string) string {
+	lines := []string{
+		`.tags.cluster_id = "${CRUSOE_CLUSTER_ID}"`,
+		`.tags.project_id = "${CRUSOE_PROJECT_ID}"`,
+		`.tags.crusoe_resource = "cmk"`,
+		`.tags.internal_only = "true"`,
+		fmt.Sprintf(".tags.metrics_source = %q", job),
+	}
+
+	keys := make([]string, 0, len(scrapeLabels))
+	for key := range scrapeLabels {
+		if validLabelIdent.MatchString(key) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		lines = append(lines, vrlSetScrapeTag(key, scrapeLabels[key]))
+	}
+
+	lines = append(lines, vrlSetScrapeTag("job", job), vrlSetScrapeTag("service", serviceLabelCMK))
+
+	return strings.Join(lines, "\n")
+}
 
 // vrlEnrichSlurm tags slurm metrics with cluster identity.
 const vrlEnrichSlurm = `

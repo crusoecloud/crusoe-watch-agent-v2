@@ -76,6 +76,8 @@ vector-validate:
 	 CRUSOE_MONITORING_TOKEN=test-token \
 	 CMKV2_CP_LOG_TOKEN=test-token \
 	 CRUSOE_PROJECT_ID=test-project \
+	 HOST_IP=127.0.0.1 \
+	 KUBELET_TOKEN=test-token \
 	 LOGS_INGRESS_ENDPOINT=https://example.com \
 	 TELEMETRY_INGRESS_ENDPOINT=https://example.com \
 	 VECTOR_VERSION=${VECTOR_VERSION} \

@@ -106,6 +106,10 @@ cme:
   image: crusoecloud/crusoe-metrics-exporter/crusoe-metrics-exporter
   tag: "@@CRUSOE_METRICS_EXPORTER_VERSION@@"
 
+# Each node's kubelet /metrics and /metrics/cadvisor.
+kubelet:
+  enabled: true
+
 customMetrics:
   enabled: true
   defaultPort: 9100

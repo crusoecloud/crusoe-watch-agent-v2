@@ -168,7 +168,19 @@ func ReadNodeLabels(ctx context.Context, client kubernetes.Interface, nodeName s
 		PodID:        labels[nodeLabelPodID],
 		ProjectID:    labels[nodeLabelProjectID],
 		Hostname:     labels[nodeLabelHostname],
+		ScrapeLabels: nodeScrapeLabels(labels),
 	}, nil
+}
+
+// nodeScrapeLabels returns the node labels with the names sanitized the way
+// Prometheus labelmap does, for the kubelet scrapes.
+func nodeScrapeLabels(labels map[string]string) map[string]string {
+	scrapeLabels := make(map[string]string, len(labels))
+	for key, val := range labels {
+		scrapeLabels[vector.SanitizeName(key)] = val
+	}
+
+	return scrapeLabels
 }
 
 const (

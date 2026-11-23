@@ -96,6 +96,25 @@ func TestReadNodeLabels(t *testing.T) {
 	assert.Equal(t, "test-node", labels.Hostname)
 }
 
+// Every node label is copied, sanitized the way Prometheus labelmap does.
+func TestReadNodeLabels_ScrapeLabels(t *testing.T) {
+	node := testNode()
+	node.Labels["cell-display-name"] = "example-cell"
+	client := fake.NewSimpleClientset(node)
+
+	labels, err := ReadNodeLabels(context.Background(), client, "test-node")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"crusoe_ai_instance_id":            "vm-abc-123",
+		"crusoe_ai_nodepool_id":            "nodepool-1",
+		"crusoe_ai_pod_id":                 "pod-xyz",
+		"crusoe_ai_project_id":             "project-1",
+		"kubernetes_io_hostname":           "test-node",
+		"node_kubernetes_io_instance_type": "gpu-a100",
+		"cell_display_name":                "example-cell",
+	}, labels.ScrapeLabels)
+}
+
 func TestReadNodeLabels_NodeNotFound(t *testing.T) {
 	client := fake.NewSimpleClientset()
 

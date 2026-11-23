@@ -11,6 +11,10 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces", "nodes", "pods"]
     verbs: ["get", "list", "watch"]
+  # Vector: kubelet /metrics and /metrics/cadvisor on its own node.
+  - apiGroups: [""]
+    resources: ["nodes/metrics"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

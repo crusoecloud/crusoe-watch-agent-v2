@@ -42,6 +42,9 @@ const (
 	defaultSlurmScrape         = 60
 	defaultCMEPort             = 9500
 	defaultCMEScrape           = 60
+	defaultKubeletPort         = 10250
+	defaultKubeletScrape       = 150
+	defaultCadvisorScrape      = 300
 	defaultCustomMetricsPort   = 9100
 	defaultCustomMetricsScrape = 30
 )
@@ -174,6 +177,17 @@ func buildK8sConfig() vector.K8sConfig {
 	ksmTelemetry := ksm
 	ksmTelemetry.Port = getEnvInt("KSM_TELEMETRY_PORT", defaultKSMTelemetryPort)
 
+	// The kubelet's two endpoints. cAdvisor is larger, so it is scraped less often.
+	kubelet := vector.ExporterConfig{
+		Enabled:        getEnvBool("KUBELET_ENABLED", true),
+		Port:           defaultKubeletPort,
+		Paths:          []string{"/metrics"},
+		ScrapeInterval: defaultKubeletScrape,
+	}
+	cadvisor := kubelet
+	cadvisor.Paths = []string{"/metrics/cadvisor"}
+	cadvisor.ScrapeInterval = defaultCadvisorScrape
+
 	return vector.K8sConfig{
 		DCGM: vector.ExporterConfig{
 			Enabled:        getEnvBool("DCGM_ENABLED", true),
@@ -201,6 +215,8 @@ func buildK8sConfig() vector.K8sConfig {
 			Paths:          []string{"/metrics"},
 			ScrapeInterval: getEnvInt("CME_SCRAPE_INTERVAL", defaultCMEScrape),
 		},
+		KubeletMetrics:             kubelet,
+		Cadvisor:                   cadvisor,
 		CustomMetricsEnabled:       getEnvBool("CUSTOM_METRICS_ENABLED", true),
 		CustomMetricsDefaultPort:   getEnvInt("CUSTOM_METRICS_DEFAULT_PORT", defaultCustomMetricsPort),
 		CustomMetricsDefaultPath:   getEnvOrDefault("CUSTOM_METRICS_DEFAULT_PATH", "/metrics"),

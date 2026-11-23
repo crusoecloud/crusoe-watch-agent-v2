@@ -6,6 +6,7 @@ import (
 	"net"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -18,13 +19,14 @@ import (
 type PodType string
 
 const (
-	PodTypeDCGM    PodType = "dcgm_exporter"
-	PodTypeAMD     PodType = "amd_exporter"
-	PodTypeKSM     PodType = "kube_state_metrics"
-	PodTypeSlurm   PodType = "slurm_metrics"
-	PodTypeCME     PodType = "crusoe_metrics_exporter"
-	PodTypeCustom  PodType = "custom_metrics"
-	PodTypeCMKv2CP PodType = "cmkv2_control_plane"
+	PodTypeDCGM      PodType = "dcgm_exporter"
+	PodTypeAMD       PodType = "amd_exporter"
+	PodTypeKSM       PodType = "kube_state_metrics"
+	PodTypeSlurm     PodType = "slurm_metrics"
+	PodTypeCME       PodType = "crusoe_metrics_exporter"
+	PodTypeCustom    PodType = "custom_metrics"
+	PodTypeCMKv2CP   PodType = "cmkv2_control_plane"
+	PodTypeComponent PodType = "cluster_component"
 )
 
 // ClassifiedPod holds a discovered pod's identity and scrape metadata.
@@ -37,6 +39,10 @@ type ClassifiedPod struct {
 	Path           string // annotation crusoe.ai/path or default
 	AppID          string // annotation crusoe.ai/app_id
 	DeploymentName string // inferred from pod name
+	// Cluster component fields: the scrape job name, its interval, and the target labels.
+	Job            string
+	ScrapeInterval int
+	ScrapeLabels   map[string]string
 }
 
 // NodeLabels holds Crusoe-specific labels read from the K8s node at startup.
@@ -47,6 +53,7 @@ type NodeLabels struct {
 	PodID        string
 	ProjectID    string
 	Hostname     string
+	ScrapeLabels map[string]string // ScrapeLabels are the sanitized node labels put on the kubelet series.
 }
 
 // ExporterConfig holds runtime parameters for a single exporter type.
@@ -101,6 +108,10 @@ type K8sConfig struct {
 	// KSMTelemetry scrapes kube-state-metrics' self-telemetry port. It is the
 	// same pod as KSM and mirrors its settings apart from the port.
 	KSMTelemetry ExporterConfig
+
+	// KubeletMetrics and Cadvisor scrape this node's kubelet /metrics and /metrics/cadvisor over HTTPS.
+	KubeletMetrics ExporterConfig
+	Cadvisor       ExporterConfig
 
 	CustomMetricsEnabled       bool
 	CustomMetricsDefaultPort   int
@@ -186,6 +197,8 @@ const (
 	// metrics, so each stamps its own scrape job in a transform of its own first.
 	dcgmJobTransformName = "tag_dcgm_job"
 	amdJobTransformName  = "tag_amd_job"
+
+	componentsSinkName = "cluster_components_sink"
 )
 
 var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9_]`)
@@ -277,15 +290,29 @@ func buildStaticConfig(sources, transforms, sinks map[string]any, cfg K8sConfig)
 	)
 	nodeMetricsSink["inputs"] = []string{nodeMetricsTransformName, "add_internal_labels"}
 	sinks["cms_gateway_node_metrics"] = nodeMetricsSink
+
+	applyKubeletScrape(sources, transforms, sinks, cfg, kubeletScrapeSpec{
+		runtime:      cfg.KubeletMetrics,
+		name:         "kubelet_metrics",
+		job:          jobKubeletMetrics,
+		scrapeLabels: cfg.NodeLabels.ScrapeLabels,
+	})
+	applyKubeletScrape(sources, transforms, sinks, cfg, kubeletScrapeSpec{
+		runtime:      cfg.Cadvisor,
+		name:         "kubelet_cadvisor",
+		job:          jobCadvisor,
+		scrapeLabels: cadvisorNodeLabels(cfg.NodeLabels.ScrapeLabels),
+	})
 }
 
 type partitionedPods struct {
-	dcgmIP  string
-	amdIP   string
-	ksmIP   string
-	slurmIP string
-	cmeIP   string
-	custom  []ClassifiedPod
+	dcgmIP     string
+	amdIP      string
+	ksmIP      string
+	slurmIP    string
+	cmeIP      string
+	custom     []ClassifiedPod
+	components []ClassifiedPod
 }
 
 func partitionPods(pods []ClassifiedPod) partitionedPods {
@@ -304,6 +331,8 @@ func partitionPods(pods []ClassifiedPod) partitionedPods {
 			result.cmeIP = pod.IP
 		case PodTypeCustom:
 			result.custom = append(result.custom, pod)
+		case PodTypeComponent:
+			result.components = append(result.components, pod)
 		case PodTypeCMKv2CP:
 			// CP logs are config-driven (applyCMKv2CP), not partitioned by pod IP.
 		}
@@ -364,6 +393,7 @@ func buildDynamicConfig(
 		),
 	})
 
+	applyComponents(sources, transforms, sinks, podsByType.components, cfg)
 	applyCustomMetrics(sources, transforms, sinks, podsByType.custom, cmData, cfg)
 }
 
@@ -437,6 +467,98 @@ func applyClusterExporter(sources, transforms, sinks map[string]any, podIP strin
 	sink := copyMap(spec.sinkConfig)
 	sink["inputs"] = []string{spec.transformName}
 	sinks[spec.sinkName] = sink
+}
+
+// ---------------------------------------------------------------------------
+// Cluster components (cilium, coredns, cert-manager, ...)
+// ---------------------------------------------------------------------------
+
+// applyComponents gives each component pod its own scrape and transform, since
+// the target labels differ per pod, and sends them all to one cluster sink.
+func applyComponents(sources, transforms, sinks map[string]any, pods []ClassifiedPod, cfg K8sConfig) {
+	if len(pods) == 0 {
+		return
+	}
+
+	inputs := make([]string, 0, len(pods))
+	for _, pod := range pods {
+		sanitized := SanitizeName(pod.Name)
+		sourceName := "component_" + sanitized + "_scrape"
+		transformName := "component_" + sanitized + "_transform"
+
+		sources[sourceName] = map[string]any{
+			"type":                 "prometheus_scrape",
+			"endpoints":            []string{"http://" + net.JoinHostPort(pod.IP, strconv.Itoa(pod.Port)) + pod.Path},
+			"scrape_interval_secs": pod.ScrapeInterval,
+			"scrape_timeout_secs":  int(float64(pod.ScrapeInterval) * scrapeTimeoutPct),
+			"instance_tag":         "instance",
+		}
+		transforms[transformName] = remapTransform(
+			[]string{sourceName}, buildScrapeTargetVRL(pod.Job, pod.ScrapeLabels),
+		)
+		inputs = append(inputs, transformName)
+	}
+
+	sink := buildPromRemoteWriteSink(cfg.clusterEndpoint(), "cri:cmk/${CRUSOE_CLUSTER_ID}", cfg.Proxy)
+	sink["inputs"] = inputs
+	sinks[componentsSinkName] = sink
+}
+
+// ---------------------------------------------------------------------------
+// Kubelet (/metrics and /metrics/cadvisor)
+// ---------------------------------------------------------------------------
+
+type kubeletScrapeSpec struct {
+	runtime ExporterConfig
+	// name prefixes the source, transform and sink names.
+	name         string
+	job          string
+	scrapeLabels map[string]string
+}
+
+// applyKubeletScrape scrapes this node's kubelet, so each node is scraped once.
+// HOST_IP and KUBELET_TOKEN are set on the Vector container. It waits for the node
+// labels, so no series is sent without its instance.
+func applyKubeletScrape(sources, transforms, sinks map[string]any, cfg K8sConfig, spec kubeletScrapeSpec) {
+	if !spec.runtime.Enabled || cfg.NodeLabels.Hostname == "" {
+		return
+	}
+
+	sourceName := spec.name + "_scrape"
+	transformName := "enrich_" + spec.name
+	endpoint := "https://" + net.JoinHostPort("${HOST_IP}", strconv.Itoa(spec.runtime.Port)) + spec.runtime.Paths[0]
+	sources[sourceName] = map[string]any{
+		"type":                 "prometheus_scrape",
+		"endpoints":            []string{endpoint},
+		"scrape_interval_secs": spec.runtime.ScrapeInterval,
+		"scrape_timeout_secs":  int(float64(spec.runtime.ScrapeInterval) * scrapeTimeoutPct),
+		"auth":                 map[string]any{"strategy": "bearer", "token": "${KUBELET_TOKEN}"},
+		// The kubelet serving cert is often self-signed, and the connection stays on the node.
+		"tls": map[string]any{"verify_certificate": false, "verify_hostname": false},
+	}
+
+	// instance is the node name, as in Prometheus node discovery.
+	scrapeLabels := copyStringMap(spec.scrapeLabels)
+	scrapeLabels["instance"] = cfg.NodeLabels.Hostname
+	transforms[transformName] = remapTransform([]string{sourceName}, buildScrapeTargetVRL(spec.job, scrapeLabels))
+
+	sink := buildPromRemoteWriteSink(cfg.clusterEndpoint(), "cri:cmk/${CRUSOE_CLUSTER_ID}", cfg.Proxy)
+	sink["inputs"] = []string{transformName}
+	sinks[spec.name+"_sink"] = sink
+}
+
+// cadvisorNodeLabels keeps a subset of the node labels, since cAdvisor series are numerous.
+func cadvisorNodeLabels(nodeLabels map[string]string) map[string]string {
+	kept := make(map[string]string)
+	for key, val := range nodeLabels {
+		if strings.HasPrefix(key, "crusoe_ai_") || strings.HasPrefix(key, "kubernetes_io_") ||
+			key == "node_kubernetes_io_instance_type" {
+
+			kept[key] = val
+		}
+	}
+
+	return kept
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +826,15 @@ func buildPromRemoteWriteSink(endpoint, tenantID string, proxy ProxyConfig) map[
 
 func copyMap(src map[string]any) map[string]any {
 	dst := make(map[string]any, len(src))
+	for key, val := range src {
+		dst[key] = val
+	}
+
+	return dst
+}
+
+func copyStringMap(src map[string]string) map[string]string {
+	dst := make(map[string]string, len(src)+1)
 	for key, val := range src {
 		dst[key] = val
 	}

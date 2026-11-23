@@ -204,6 +204,8 @@ func TestApplyKSM(t *testing.T) {
 
 	assert.Contains(t, xform["source"], `.tags.service = "CMK"`)
 	assert.Contains(t, xform["source"], `.tags.job = "kube-state-metrics"`)
+	// KSM stays customer-visible.
+	assert.NotContains(t, xform["source"], "internal_only")
 
 	sinks := getSinks(cfg)
 	assert.Contains(t, sinks, "kube_state_metrics_sink")
@@ -578,6 +580,119 @@ func TestCMKServiceLabelOnEveryPipeline(t *testing.T) {
 	for _, name := range []string{"enrich_node_metrics", "enrich_slurm_metrics", "enrich_crusoe_metrics_exporter"} {
 		assert.NotContains(t, transforms[name].(map[string]any)["source"], ".tags.job", name)
 	}
+}
+
+func componentPods() []ClassifiedPod {
+	return []ClassifiedPod{
+		{
+			Name: "cilium-66v7b", IP: "10.0.0.6", Type: PodTypeComponent, Port: 9962, Path: "/metrics",
+			Job: "kubernetes-pods", ScrapeInterval: 150,
+			ScrapeLabels: map[string]string{"pod": "cilium-66v7b", "namespace": "kube-system", "k8s_app": "cilium"},
+		},
+		{
+			Name: "platform-connectors-4dzzd", IP: "10.0.0.7", Type: PodTypeComponent, Port: 2112, Path: "/metrics",
+			Job: "nvsentinel-platform-connector", ScrapeInterval: 30,
+			ScrapeLabels: map[string]string{"pod": "platform-connectors-4dzzd", "node": "test-node"},
+		},
+	}
+}
+
+func TestApplyComponents(t *testing.T) {
+	cfg := buildAndParse(t, componentPods(), nil, testK8sConfig())
+
+	src := getSources(cfg)["component_cilium_66v7b_scrape"].(map[string]any)
+	assert.Equal(t, []any{"http://10.0.0.6:9962/metrics"}, src["endpoints"])
+	assert.Equal(t, 150, src["scrape_interval_secs"])
+	assert.Equal(t, "instance", src["instance_tag"])
+
+	source := getTransforms(cfg)["component_cilium_66v7b_transform"].(map[string]any)["source"].(string)
+	assert.Contains(t, source, `.tags.crusoe_resource = "cmk"`)
+	assert.Contains(t, source, `.tags.internal_only = "true"`)
+	assert.Contains(t, source, `.tags.project_id = "${CRUSOE_PROJECT_ID}"`)
+	assert.Contains(t, source, `.tags.k8s_app = "cilium"`)
+	// Target labels win over scraped ones, as in a Prometheus scrape.
+	assert.Contains(t, source, `if exists(.tags.namespace) { .tags.exported_namespace = del(.tags.namespace) }`)
+	assert.Contains(t, source, `.tags.job = "kubernetes-pods"`)
+	assert.Contains(t, source, `.tags.service = "CMK"`)
+
+	platform := getTransforms(cfg)["component_platform_connectors_4dzzd_transform"].(map[string]any)["source"]
+	assert.Contains(t, platform, `.tags.job = "nvsentinel-platform-connector"`)
+	assert.NotContains(t, platform, ".tags.namespace")
+
+	sink := getSinks(cfg)["cluster_components_sink"].(map[string]any)
+	assert.ElementsMatch(t,
+		[]any{"component_cilium_66v7b_transform", "component_platform_connectors_4dzzd_transform"}, sink["inputs"])
+	assert.Contains(t, sink["endpoint"].(string), "/cluster")
+	assert.Equal(t, "cri:cmk/${CRUSOE_CLUSTER_ID}", sink["tenant_id"])
+}
+
+func kubeletTestConfig() K8sConfig {
+	k := testK8sConfig()
+	k.KubeletMetrics = ExporterConfig{Enabled: true, Port: 10250, Paths: []string{"/metrics"}, ScrapeInterval: 150}
+	k.Cadvisor = ExporterConfig{Enabled: true, Port: 10250, Paths: []string{"/metrics/cadvisor"}, ScrapeInterval: 300}
+	k.NodeLabels.ScrapeLabels = map[string]string{
+		"kubernetes_io_hostname":                 "test-node",
+		"cell_display_name":                      "example-cell",
+		"feature_node_kubernetes_io_memory_numa": "true",
+	}
+
+	return k
+}
+
+// kubelet /metrics carries every node label.
+func TestApplyKubeletMetrics(t *testing.T) {
+	cfg := buildAndParse(t, nil, nil, kubeletTestConfig())
+
+	src := getSources(cfg)["kubelet_metrics_scrape"].(map[string]any)
+	assert.Equal(t, []any{"https://${HOST_IP}:10250/metrics"}, src["endpoints"])
+	assert.Equal(t, 150, src["scrape_interval_secs"])
+	assert.Equal(t, map[string]any{"strategy": "bearer", "token": "${KUBELET_TOKEN}"}, src["auth"])
+
+	source := getTransforms(cfg)["enrich_kubelet_metrics"].(map[string]any)["source"]
+	assert.Contains(t, source, `.tags.cell_display_name = "example-cell"`)
+	assert.Contains(t, source, `.tags.feature_node_kubernetes_io_memory_numa = "true"`)
+	assert.Contains(t, source, `.tags.instance = "test-node"`)
+	assert.Contains(t, source, `.tags.job = "kubernetes-nodes"`)
+	assert.Contains(t, source, `.tags.internal_only = "true"`)
+
+	sink := getSinks(cfg)["kubelet_metrics_sink"].(map[string]any)
+	assert.Equal(t, []any{"enrich_kubelet_metrics"}, sink["inputs"])
+	assert.Contains(t, sink["endpoint"].(string), "/cluster")
+}
+
+// cAdvisor keeps only a subset of the node labels.
+func TestApplyCadvisor(t *testing.T) {
+	cfg := buildAndParse(t, nil, nil, kubeletTestConfig())
+
+	src := getSources(cfg)["kubelet_cadvisor_scrape"].(map[string]any)
+	assert.Equal(t, []any{"https://${HOST_IP}:10250/metrics/cadvisor"}, src["endpoints"])
+	assert.Equal(t, 300, src["scrape_interval_secs"])
+
+	source := getTransforms(cfg)["enrich_kubelet_cadvisor"].(map[string]any)["source"]
+	assert.Contains(t, source, `.tags.kubernetes_io_hostname = "test-node"`)
+	assert.NotContains(t, source, "cell_display_name")
+	assert.NotContains(t, source, "feature_node_kubernetes_io")
+	assert.Contains(t, source, `.tags.job = "kubernetes-nodes-cadvisor"`)
+
+	sink := getSinks(cfg)["kubelet_cadvisor_sink"].(map[string]any)
+	assert.Equal(t, []any{"enrich_kubelet_cadvisor"}, sink["inputs"])
+}
+
+// The fallback config is written before the node labels are read.
+func TestApplyKubeletWaitsForNodeLabels(t *testing.T) {
+	k := kubeletTestConfig()
+	k.NodeLabels = NodeLabels{}
+	cfg := buildAndParse(t, nil, nil, k)
+
+	assert.NotContains(t, getSources(cfg), "kubelet_metrics_scrape")
+	assert.NotContains(t, getSources(cfg), "kubelet_cadvisor_scrape")
+}
+
+func TestApplyKubeletDisabled(t *testing.T) {
+	cfg := buildAndParse(t, nil, nil, testK8sConfig())
+
+	assert.NotContains(t, getSources(cfg), "kubelet_metrics_scrape")
+	assert.NotContains(t, getSources(cfg), "kubelet_cadvisor_scrape")
 }
 
 // Custom metrics come from user pods, which may already carry job/service, so

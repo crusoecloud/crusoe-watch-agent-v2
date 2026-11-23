@@ -28,9 +28,13 @@ const (
 	cmePort     = 9500
 	slurmPort   = 6817
 	customPort  = 9100
+	ciliumPort  = 9962
+	kubeletPort = 10250
 
-	fastScrapeSecs = 30
-	slowScrapeSecs = 60
+	fastScrapeSecs     = 30
+	slowScrapeSecs     = 60
+	kubeletScrapeSecs  = 150
+	cadvisorScrapeSecs = 300
 )
 
 func main() {
@@ -91,7 +95,7 @@ func renderVM(gpu string, cme bool) ([]byte, error) {
 }
 
 // renderK8s renders a representative full-pipeline K8s config: one pod of each
-// discovered type plus a custom-metrics pod, with every exporter enabled.
+// discovered type plus a custom-metrics and a cluster-component pod, with every exporter enabled.
 func renderK8s() ([]byte, error) {
 	pods := []vector.ClassifiedPod{
 		{Name: "dcgm-1", IP: "10.0.0.1", Type: vector.PodTypeDCGM},
@@ -101,6 +105,11 @@ func renderK8s() ([]byte, error) {
 		{
 			Name: "svc-x-1", IP: "10.2.0.1", Type: vector.PodTypeCustom,
 			Port: customPort, Path: "/metrics", DeploymentName: "svc",
+		},
+		{
+			Name: "cilium-abc12", IP: "10.0.0.6", Type: vector.PodTypeComponent,
+			Port: ciliumPort, Path: "/metrics", Job: "kubernetes-pods", ScrapeInterval: slowScrapeSecs,
+			ScrapeLabels: map[string]string{"pod": "cilium-abc12", "namespace": "kube-system", "k8s_app": "cilium"},
 		},
 	}
 
@@ -115,6 +124,12 @@ func renderK8s() ([]byte, error) {
 		},
 		CME:   vector.ExporterConfig{Enabled: true, Port: cmePort, Paths: metrics, ScrapeInterval: slowScrapeSecs},
 		Slurm: vector.ExporterConfig{Enabled: true, Port: slurmPort, Paths: slurmPaths, ScrapeInterval: slowScrapeSecs},
+		KubeletMetrics: vector.ExporterConfig{
+			Enabled: true, Port: kubeletPort, Paths: metrics, ScrapeInterval: kubeletScrapeSecs,
+		},
+		Cadvisor: vector.ExporterConfig{
+			Enabled: true, Port: kubeletPort, Paths: []string{"/metrics/cadvisor"}, ScrapeInterval: cadvisorScrapeSecs,
+		},
 
 		CustomMetricsEnabled:       true,
 		CustomMetricsDefaultPort:   customPort,
@@ -129,6 +144,7 @@ func renderK8s() ([]byte, error) {
 			NodepoolID:   "test-nodepool-id",
 			InstanceType: "test-instance-type",
 			Hostname:     "test-node",
+			ScrapeLabels: map[string]string{"kubernetes_io_hostname": "test-node"},
 		},
 	}
 

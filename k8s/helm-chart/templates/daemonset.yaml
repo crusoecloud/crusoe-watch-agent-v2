@@ -55,6 +55,8 @@ spec:
               grep -q 'BEGIN CERTIFICATE' /etc/crusoe-ca-trust/ca-certificates.crt \
                 || { echo "Rebuilt CA bundle has no trust anchors." >&2; exit 1; }
               export VM_ID=$(cat /host/sys/class/dmi/id/product_uuid 2>/dev/null || echo "unknown")
+              # Bearer token for the kubelet scrapes.
+              export KUBELET_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
               # Wait for cwa-manager to write the initial config.
               echo "Waiting for Vector config..."
               while [ ! -f /etc/vector/vector.yaml ]; do sleep 1; done
@@ -65,6 +67,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
             {{- if .Values.cmkv2Cp.enabled }}
             # CP cell mode: the CML sink authenticates with the per-cell CP log token.
             - name: CMKV2_CP_LOG_TOKEN
@@ -209,6 +215,8 @@ spec:
               value: {{ .Values.cme.port | quote }}
             - name: CME_SCRAPE_INTERVAL
               value: {{ .Values.cme.scrapeInterval | quote }}
+            - name: KUBELET_ENABLED
+              value: {{ .Values.kubelet.enabled | quote }}
             - name: CUSTOM_METRICS_ENABLED
               value: {{ .Values.customMetrics.enabled | quote }}
             - name: CUSTOM_METRICS_DEFAULT_PORT
