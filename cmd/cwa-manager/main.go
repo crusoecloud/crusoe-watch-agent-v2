@@ -36,6 +36,7 @@ var errMissingMonitoringToken = errors.New("CRUSOE_MONITORING_TOKEN is not set")
 
 const (
 	defaultCoordinatorAddr = "cwa-coordinator.crusoecloud.com:443"
+	coordinatorAddrEnv     = "CWA_COORDINATOR_ADDR" // set by the VM installer outside prod
 	monitoringTokenEnv     = "CRUSOE_MONITORING_TOKEN"
 	nodeNameEnv            = "NODE_NAME"
 	retryDelay             = 30 * time.Second
@@ -68,7 +69,8 @@ func main() {
 }
 
 func run() error {
-	coordAddr := flag.String("coordinator", defaultCoordinatorAddr, "cwa-coordinator gRPC address")
+	coordAddr := flag.String("coordinator", getEnvOrDefault(coordinatorAddrEnv, defaultCoordinatorAddr),
+		"cwa-coordinator gRPC address")
 	dumpVectorCfg := flag.Bool("dump-vector-config", false, "print generated Vector config to stdout and exit")
 	flag.Parse()
 

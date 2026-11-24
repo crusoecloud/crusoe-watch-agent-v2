@@ -819,6 +819,15 @@ handle_token() {
     write_token
 }
 
+# coordinator_addr_for prints the cwa-coordinator address for a CMS ingress URL.
+coordinator_addr_for() {
+    local host="${1#*://}"
+    host="${host%%/*}"
+    host="${host%%:*}"
+    [[ "$host" == cms-monitoring.* && "$1" != "$CMS_BASE_URL" ]] || return 0
+    echo "cwa-coordinator.${host#cms-monitoring.}:443"
+}
+
 write_env_file() {
     local vm_id="$1"
     local cms_url="${INGRESS_URL:-$CMS_BASE_URL}"
@@ -841,6 +850,13 @@ REPORT_RUNNER_VERSION='${REPORT_RUNNER_VERSION}'
 VECTOR_VERSION='${VECTOR_VERSION}'
 INSTALL_TYPE='${install_type}'
 EOF
+
+    # cwa-manager uses the coordinator in the same environment as the ingress.
+    local coordinator_addr
+    coordinator_addr=$(coordinator_addr_for "$cms_url")
+    if [[ -n "$coordinator_addr" ]]; then
+        echo "CWA_COORDINATOR_ADDR='${coordinator_addr}'" >> "$ENV_FILE"
+    fi
 
     # Registry prefixes consumed by the docker-compose files.
     cat <<EOF >> "$ENV_FILE"
@@ -1099,8 +1115,11 @@ migrate_from_v1() {
     rm -f "${CONFIG_DIR}/vector.yaml"
     rm -rf /opt/crusoe-log-collector /opt/crusoe-amd-log-collector
 
-    # v1 token files may use $$-escaped values that v2 can't decode.
-    rm -f "${SECRETS_DIR}/.monitoring-token"
+    # Keep a token that reads back as exactly 82 characters, otherwise discard.
+    local token
+    token=$(sed -E "s/^(CRUSOE_MONITORING_TOKEN|CRUSOE_AUTH_TOKEN)=//; s/^'//; s/'$//" \
+        "${SECRETS_DIR}/.monitoring-token" 2>/dev/null || true)
+    [[ ${#token} -eq 82 ]] || rm -f "${SECRETS_DIR}/.monitoring-token"
 
     systemctl daemon-reload
 }
