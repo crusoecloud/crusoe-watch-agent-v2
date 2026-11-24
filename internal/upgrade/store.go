@@ -40,3 +40,10 @@ type Executor interface {
 	// and an agent still unhealthy surfaces through its heartbeats.
 	Rollback(ctx context.Context, state *State) error
 }
+
+// Observer is an Executor that watches an upgrade something else performs. It
+// cannot restore a version, so Service reports its failed upgrade as failed
+// without calling Rollback, and resumes one a restart interrupted.
+type Observer interface {
+	Observes() bool
+}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"gitlab.com/crusoeenergy/island/managed-platform-services/crusoe-watch-agent-v2/internal/upgrade"
 )
@@ -100,6 +101,28 @@ func TestBuildVMExecutorByMode(t *testing.T) {
 
 	assert.IsType(t, &upgrade.ScriptExecutor{}, buildVMExecutor(logger, modeNative, config))
 	assert.IsType(t, &upgrade.ScriptExecutor{}, buildVMExecutor(logger, modeDocker, config))
+}
+
+// The Kubernetes executor is chosen by name, and an unknown name is refused
+// rather than falling back to helm.
+func TestBuildExecutorByName(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	client := fake.NewSimpleClientset()
+
+	for name, want := range map[string]upgrade.Executor{
+		executorHelm:  &upgrade.HelmExecutor{},
+		executorAddon: &upgrade.AddonExecutor{},
+	} {
+		fields, err := executorFields(name)
+		require.NoError(t, err, name)
+
+		config := upgrade.NewHolder(upgrade.NewConfigMapConfigStore(client, "crusoe-system", "cwa-upgrade-handoff"), fields)
+
+		assert.IsType(t, want, buildExecutor(logger, client, "crusoe-system", "crusoe-watch-agent", name, config), name)
+	}
+
+	_, err := executorFields("sveltos")
+	require.ErrorIs(t, err, errUnknownExecutor)
 }
 
 // Root-only modes, and a stale socket does not block a restart.

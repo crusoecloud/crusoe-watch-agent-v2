@@ -29,6 +29,9 @@ agent:
   healthPort: 8787
 
 upgrade:
+  # helm: cwa-updater applies the agent chart. addon: the CMK add-on manager
+  # applies it and cwa-updater only verifies the rollout.
+  executor: helm
   # Minutes the rollout may take before rolling back; also bounds the rollback.
   rollbackWindowMin: 15
   # Minutes to wait for post-upgrade pod health before rolling back. Kept short so

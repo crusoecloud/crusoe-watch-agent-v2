@@ -398,10 +398,29 @@ func (s *Service) execute(ctx context.Context) {
 	s.logger.Info("collection complete; executing upgrade",
 		"target_version", state.TargetVersion, "collected", len(state.AgentExecutions))
 
+	s.runUpgrade(ctx, state)
+}
+
+// runUpgrade runs the executor against an in_progress record and records the outcome.
+func (s *Service) runUpgrade(ctx context.Context, state *State) {
 	if err := s.executor.Upgrade(ctx, state); err != nil {
 		if stopping(ctx) {
-			s.logger.Warn("shutdown interrupted the upgrade; the next start rolls it back",
+			s.logger.Warn("shutdown interrupted the upgrade; the next start picks it up",
 				"error", err, "target_version", state.TargetVersion)
+
+			return
+		}
+
+		if observes(s.executor) {
+			s.logger.Error("upgrade failed; rollback is left to the control plane",
+				"error", err, "target_version", state.TargetVersion)
+			s.finish(ctx, &Result{
+				Status:      ResultFailed,
+				FromVersion: state.RollbackVersion,
+				ToVersion:   state.TargetVersion,
+				Reason:      err.Error(),
+				CompletedAt: time.Now().UTC(),
+			})
 
 			return
 		}
@@ -428,20 +447,41 @@ func stopping(ctx context.Context) bool {
 	return errors.Is(ctx.Err(), context.Canceled)
 }
 
+// observes reports whether executor only watches the upgrade.
+func observes(executor Executor) bool {
+	observer, ok := executor.(Observer)
+
+	return ok && observer.Observes()
+}
+
 // resumeInterrupted rolls back an upgrade the previous process did not finish.
 // An in_progress record means execution was interrupted, so restoring rollback_version
 // is the only safe move. A rolling_back record is resumed the same way.
+// An Observer changed nothing, so its in_progress record is watched again instead.
 func (s *Service) resumeInterrupted(ctx context.Context) {
 	s.mu.Lock()
 
-	var phase Phase
+	var (
+		phase Phase
+		state *State
+	)
+
 	if s.state != nil {
 		phase = s.state.Phase
+		state = s.state.clone()
 	}
 
 	s.mu.Unlock()
 
 	if phase != PhaseInProgress && phase != PhaseRollingBack {
+		return
+	}
+
+	if phase == PhaseInProgress && observes(s.executor) {
+		s.logger.Info("upgrade was interrupted mid-watch; resuming",
+			"target_version", state.TargetVersion)
+		s.runUpgrade(ctx, state)
+
 		return
 	}
 

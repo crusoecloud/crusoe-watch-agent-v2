@@ -66,6 +66,12 @@ const (
 	defaultAgentHealthSvc   = "crusoe-watch-agent"
 	defaultAgentHealthPort  = 8787
 
+	// Kubernetes upgrade executors. helm applies the agent chart itself; addon
+	// leaves that to the CMK add-on manager and only verifies the rollout.
+	executorEnv   = "UPGRADE_EXECUTOR"
+	executorHelm  = "helm"
+	executorAddon = "addon"
+
 	// Where cwa-manager answers on a VM host: in native mode it and cwa-updater
 	// are both plain processes sharing the host network.
 	agentHealthHost = "localhost"
@@ -81,6 +87,10 @@ const (
 // errMissingNamespace is fatal: without a namespace there is no handoff ConfigMap
 // to read, and an updater that cannot recover its state must not report idle.
 var errMissingNamespace = errors.New("POD_NAMESPACE is not set")
+
+// errUnknownExecutor is fatal: falling back would run helm against a release
+// the add-on manager owns.
+var errUnknownExecutor = errors.New("unknown upgrade executor")
 
 // errUnknownInstallMode is fatal for the same reason: an updater that cannot
 // tell where its state lives would report idle over an upgrade left in flight.
@@ -315,9 +325,15 @@ func buildKubernetesService(logger *slog.Logger) (*upgrade.Service, *upgrade.Hol
 	daemonSet := getEnvOrDefault("AGENT_DAEMONSET", defaultAgentDaemonSet)
 	ackTimeout := minutesFromEnv(logger, "UPGRADE_ACK_TIMEOUT_MIN")
 
+	executor := getEnvOrDefault(executorEnv, executorHelm)
+
+	fields, err := executorFields(executor)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	// Sharing the handoff ConfigMap keeps a delivery across a pod restart.
-	config := upgrade.NewHolder(upgrade.NewConfigMapConfigStore(client, namespace, configMap),
-		upgrade.HelmExecutorFields())
+	config := upgrade.NewHolder(upgrade.NewConfigMapConfigStore(client, namespace, configMap), fields)
 
 	logger.Info("upgrade state wired", "namespace", namespace,
 		"handoff_configmap", configMap, "agent_daemonset", daemonSet, "ack_timeout", ackTimeout)
@@ -325,25 +341,56 @@ func buildKubernetesService(logger *slog.Logger) (*upgrade.Service, *upgrade.Hol
 	return upgrade.New(upgrade.Config{
 		Store:      upgrade.NewConfigMapStore(client, namespace, configMap),
 		Counter:    upgrade.NewDaemonSetCounter(client, namespace, daemonSet),
-		Executor:   buildExecutor(logger, client, namespace, config),
+		Executor:   buildExecutor(logger, client, namespace, daemonSet, executor, config),
 		Logger:     logger,
 		AckTimeout: ackTimeout,
 	}), config, nil
 }
 
-// buildExecutor wires the helm-backed executor and its post-upgrade health check.
+// executorFields is the configure-updater fields the named executor reads.
+func executorFields(executor string) ([]string, error) {
+	switch executor {
+	case executorHelm:
+		return upgrade.HelmExecutorFields(), nil
+	case executorAddon:
+		return upgrade.AddonExecutorFields(), nil
+	default:
+		return nil, fmt.Errorf("%w: %s=%q", errUnknownExecutor, executorEnv, executor)
+	}
+}
+
+// buildExecutor wires the named Kubernetes executor and its post-upgrade health check.
 func buildExecutor(
-	logger *slog.Logger, client kubernetes.Interface, namespace string, config *upgrade.Holder,
+	logger *slog.Logger, client kubernetes.Interface, namespace, daemonSet, executor string,
+	config *upgrade.Holder,
 ) upgrade.Executor {
 	healthService := getEnvOrDefault("AGENT_HEALTH_SERVICE", defaultAgentHealthSvc)
 	healthPort := portFromEnv(logger, "AGENT_HEALTH_PORT", defaultAgentHealthPort)
 	rollbackWindow := minutesFromEnv(logger, "UPGRADE_ROLLBACK_WINDOW_MIN")
 	healthWindow := minutesFromEnv(logger, "UPGRADE_HEALTH_WINDOW_MIN")
+	verifier := upgrade.NewEndpointVerifier(client, logger, namespace, healthService, healthPort)
+
+	if executor == executorAddon {
+		logger.Info("upgrade executor wired", "executor", executorAddon, "agent_daemonset", daemonSet,
+			"health_service", healthService, "health_port", healthPort,
+			"rollout_window", rollbackWindow, "health_window", healthWindow)
+
+		return upgrade.NewAddonExecutor(upgrade.AddonConfig{
+			Client:        client,
+			Verifier:      verifier,
+			Logger:        logger,
+			Namespace:     namespace,
+			DaemonSet:     daemonSet,
+			RolloutWindow: rollbackWindow,
+			HealthWindow:  healthWindow,
+			Settings:      config,
+		})
+	}
 
 	cfg := upgrade.HelmConfig{
 		Runner:         upgrade.NewHelmRunner(logger),
 		Cosign:         upgrade.NewCosignRunner(logger),
-		Verifier:       upgrade.NewEndpointVerifier(client, logger, namespace, healthService, healthPort),
+		Verifier:       verifier,
 		Logger:         logger,
 		Namespace:      namespace,
 		Release:        getEnvOrDefault("AGENT_RELEASE_NAME", defaultAgentRelease),

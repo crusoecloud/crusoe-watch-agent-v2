@@ -822,6 +822,59 @@ func TestRunLeavesUninterruptedStateAlone(t *testing.T) {
 	}
 }
 
+// observingExecutor is a fakeExecutor that only watches the upgrade.
+type observingExecutor struct{ fakeExecutor }
+
+func (*observingExecutor) Observes() bool { return true }
+
+// An Observer cannot restore a version, so its failed upgrade is reported as
+// failed with the upgrade's own reason and Rollback is never called.
+func TestObserverFailureIsReportedWithoutRollback(t *testing.T) {
+	ctx := context.Background()
+	store := &memStore{}
+	executor := &observingExecutor{fakeExecutor{upgradeErr: errStore}}
+	svc := newCollectService(store, &fakeCounter{ready: 1}, executor)
+
+	_, err := svc.Accept(ctx, handoff("agent-1", "cmd-1"))
+	require.NoError(t, err)
+
+	svc.collectTick(ctx)
+
+	assert.Equal(t, 1, executor.calls)
+	assert.Equal(t, 0, executor.rollbacks)
+	assert.Equal(t, PhaseFailed, store.state.Phase)
+	require.NotNil(t, store.state.Result)
+	assert.Equal(t, ResultFailed, store.state.Result.Status)
+	assert.Equal(t, errStore.Error(), store.state.Result.Reason)
+	assert.Equal(t, "v2.0.3", store.state.Result.FromVersion)
+	assert.Equal(t, "v2.1.0", store.state.Result.ToVersion)
+}
+
+// An Observer changed nothing on the cluster, so a restart mid-watch watches
+// again instead of reporting an upgrade that may be healthy as failed.
+func TestRunResumesAnObserversInterruptedUpgrade(t *testing.T) {
+	ctx := context.Background()
+	store := &memStore{state: &State{
+		Phase:           PhaseInProgress,
+		TargetVersion:   "v2.1.0",
+		RollbackVersion: "v2.0.3",
+		AgentExecutions: map[string]string{"agent-1": "cmd-1"},
+		ExpectedCount:   1,
+	}}
+	executor := &observingExecutor{}
+	svc := newCollectService(store, &fakeCounter{ready: 1}, executor)
+
+	require.NoError(t, svc.Recover(ctx))
+	svc.resumeInterrupted(ctx)
+
+	assert.Equal(t, 1, executor.calls)
+	assert.Equal(t, "v2.1.0", executor.sawTarget)
+	assert.Equal(t, 0, executor.rollbacks)
+	assert.Equal(t, PhaseComplete, store.state.Phase)
+	require.NotNil(t, store.state.Result)
+	assert.Equal(t, ResultSucceeded, store.state.Result.Status)
+}
+
 // An idle updater must not poll the API server.
 func TestCollectTickIdleDoesNotQuery(t *testing.T) {
 	counter := &fakeCounter{err: errStore}

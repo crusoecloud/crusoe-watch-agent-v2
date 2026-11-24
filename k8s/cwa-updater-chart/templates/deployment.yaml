@@ -74,6 +74,8 @@ spec:
               value: {{ .Values.agent.healthService | quote }}
             - name: AGENT_HEALTH_PORT
               value: {{ .Values.agent.healthPort | quote }}
+            - name: UPGRADE_EXECUTOR
+              value: {{ .Values.upgrade.executor | quote }}
             - name: UPGRADE_ROLLBACK_WINDOW_MIN
               value: {{ .Values.upgrade.rollbackWindowMin | quote }}
             - name: UPGRADE_HEALTH_WINDOW_MIN
